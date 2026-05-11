@@ -123,6 +123,14 @@ st.analysisEndSec = inf;
 st.epochs = struct('name', {'Whole'}, 'start', {0}, 'end', {inf});
 st.currentEpoch = 1;
 
+% FC_LR_EPOCH_PATCH_20260505_STATE
+% Injection/window settings are in minutes for user readability.
+st.fcEpochMode = 'whole';      % whole | pre | during | post
+st.fcInjStartMin = 14;          % edit in GUI
+st.fcInjEndMin   = 15;          % edit in GUI
+st.fcEpochWinMin = 3;           % first N minutes for pre/during/post
+% FC_LR_EPOCH_PATCH_20260505_STATE_END
+
 st.underlayMode = fc_initial_underlay_mode(st.subjects(1), opts);
 st.underlayViewMode = opts.defaultUnderlayViewMode;
 st.underlayBrightness = opts.underlayBrightness;
@@ -467,6 +475,40 @@ txtROI = uicontrol('Parent',pROI,'Style','text','Units','normalized', ...
     'BackgroundColor',C.bgPane,'ForegroundColor',C.dim, ...
     'HorizontalAlignment','left','FontName',C.font,'FontSize',C.fsTiny);
 
+% FC_LR_EPOCH_PATCH_20260505_UI
+fc_label(pROI,[0.02 0.205 0.105 0.085],'Window',C);
+ddEpochMode = uicontrol('Parent',pROI,'Style','popupmenu','Units','normalized', ...
+    'Position',[0.125 0.185 0.205 0.115], ...
+    'String',{'Whole','Pre-inj','During-inj','Post-inj'}, ...
+    'Value',1, ...
+    'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg, ...
+    'FontName',C.font,'FontSize',C.fsTiny,'FontWeight','bold', ...
+    'Callback',@onEpochMode);
+
+fc_label(pROI,[0.350 0.205 0.090 0.085],'Inj start',C);
+edInjStart = uicontrol('Parent',pROI,'Style','edit','Units','normalized', ...
+    'Position',[0.445 0.185 0.075 0.115], 'String',sprintf('%.2f',st.fcInjStartMin), ...
+    'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg, ...
+    'FontName',C.font,'FontSize',C.fsTiny,'FontWeight','bold','Callback',@onEpochEdit);
+
+fc_label(pROI,[0.535 0.205 0.075 0.085],'Inj end',C);
+edInjEnd = uicontrol('Parent',pROI,'Style','edit','Units','normalized', ...
+    'Position',[0.610 0.185 0.075 0.115], 'String',sprintf('%.2f',st.fcInjEndMin), ...
+    'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg, ...
+    'FontName',C.font,'FontSize',C.fsTiny,'FontWeight','bold','Callback',@onEpochEdit);
+
+fc_label(pROI,[0.700 0.205 0.060 0.085],'Win',C);
+edEpochWin = uicontrol('Parent',pROI,'Style','edit','Units','normalized', ...
+    'Position',[0.755 0.185 0.065 0.115], 'String',sprintf('%.2f',st.fcEpochWinMin), ...
+    'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg, ...
+    'FontName',C.font,'FontSize',C.fsTiny,'FontWeight','bold','Callback',@onEpochEdit);
+
+uicontrol('Parent',pROI,'Style','pushbutton','Units','normalized', ...
+    'Position',[0.835 0.185 0.125 0.115], 'String','Apply win', ...
+    'BackgroundColor',C.blue,'ForegroundColor','w', ...
+    'FontName',C.font,'FontWeight','bold','FontSize',C.fsTiny,'Callback',@onEpochApply);
+% FC_LR_EPOCH_PATCH_20260505_UI_END
+
 % -------------------------------------------------------------------------
 % DISPLAY / SAVE PANEL
 % -------------------------------------------------------------------------
@@ -551,7 +593,7 @@ cbShowLR = uicontrol('Parent',pSave,'Style','checkbox','Units','normalized', ...
 fc_label(pSave,[0.02 0.205 0.14 0.10],'Regions',C);
 ddRegionMode = uicontrol('Parent',pSave,'Style','popupmenu','Units','normalized', ...
     'Position',[0.16 0.19 0.34 0.12], ...
-    'String',{'Both L/R separate','Left only','Right only','All merged no L/R'}, ...
+    'String',{'Both L/R separate','Left only','Right only','Left vs Right','All merged no L/R'}, ...
     'Value',1, ...
     'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg, ...
     'FontName',C.font,'FontSize',C.fsTiny,'FontWeight','bold', ...
@@ -989,6 +1031,7 @@ refreshAll();
         s.graphCmapName = 'bwr';
         s.showHemisphere = true; % FC_LR_LABEL_DISPLAY_PATCH_V2_RESET_STATE
         s.roiHemiMode = 'both'; % FC_REGION_MODE_PATCH_RESET
+        s.fcEpochMode = 'whole'; % FC_LR_EPOCH_PATCH_RESET_MODE
         try, set(ddOverlay,'Value',1); catch, end
         try, set(ddUnderlayStyle,'Value',1); catch, end
         try, set(ddCmapGlobal,'Value',1); catch, end
@@ -1000,6 +1043,7 @@ refreshAll();
         try, set(cbMaskLine,'Value',0); catch, end
         try, set(cbShowLR,'Value',1); catch, end % FC_LR_LABEL_DISPLAY_PATCH_V2_RESET_CHECKBOX
         try, set(ddRegionMode,'Value',1); catch, end % FC_REGION_MODE_PATCH_RESET_POPUP
+        try, set(ddEpochMode,'Value',1); catch, end % FC_LR_EPOCH_PATCH_RESET_EPOCH_POPUP
         try, set(edSeedThr,'String','0.20'); catch, end
         try, set(edROIThr,'String','0.20'); catch, end
         try, set(edSeedCLim,'String','2.5'); catch, end
@@ -1391,7 +1435,9 @@ refreshAll();
             if ischar(items), items = cellstr(items); end
             val = fc_clip(round(val),1,numel(items));
             choice = lower(strtrim(items{val}));
-            if ~isempty(strfind(choice,'left'))
+            if ~isempty(strfind(choice,'left')) && ~isempty(strfind(choice,'right'))
+                s.roiHemiMode = 'lvr';
+            elseif ~isempty(strfind(choice,'left'))
                 s.roiHemiMode = 'left';
             elseif ~isempty(strfind(choice,'right'))
                 s.roiHemiMode = 'right';
@@ -1417,6 +1463,73 @@ refreshAll();
         setStatus(['Region mode: ' s.roiHemiMode],C.good);
     end
 
+    function onEpochMode(~,~)
+        s = guidata(fig);
+        vals = {'whole','pre','during','post'};
+        v = fc_clip(round(get(ddEpochMode,'Value')),1,numel(vals));
+        s.fcEpochMode = vals{v};
+        s = readEpochGuiToState(s);
+        guidata(fig,s);
+        setStatus(['FC window selected: ' fc_epoch_label(s)],C.good);
+    end
+
+    function onEpochEdit(~,~)
+        s = guidata(fig);
+        s = readEpochGuiToState(s);
+        guidata(fig,s);
+        setStatus(['FC window updated: ' fc_epoch_label(s)],C.good);
+    end
+
+    function onEpochApply(~,~)
+        s = guidata(fig);
+        s = readEpochGuiToState(s);
+        try
+            resNow = s.roiResults{s.currentSubject,s.currentEpoch};
+            if ~isempty(resNow) && isfield(resNow,'meanTSFull') && ~isempty(resNow.meanTSFull)
+                resNow = fc_apply_epoch_to_roi_result(resNow,s);
+                s.roiResults{s.currentSubject,s.currentEpoch} = resNow;
+                guidata(fig,s);
+                setStatus(['Applied FC window to loaded segmentation: ' resNow.epochName],C.good);
+            elseif ~isempty(s.subjects(s.currentSubject).roiAtlas)
+                s = computeROI(s,s.currentSubject,s.currentEpoch);
+                guidata(fig,s);
+                resNow = s.roiResults{s.currentSubject,s.currentEpoch};
+                setStatus(['ROI FC recalculated using window: ' resNow.epochName],C.good);
+            else
+                guidata(fig,s);
+                setStatus('Window saved. Load Seg MAT or ROI labels, then compute ROI current.',C.warn);
+            end
+            refreshAll();
+            switchTab('heatmap');
+        catch ME
+            guidata(fig,s);
+            setStatus(['Apply window error: ' ME.message],C.warn);
+            errordlg(ME.message,'Apply FC window');
+        end
+    end
+
+    function s = readEpochGuiToState(s)
+        vals = {'whole','pre','during','post'};
+        try
+            v = fc_clip(round(get(ddEpochMode,'Value')),1,numel(vals));
+            s.fcEpochMode = vals{v};
+        catch
+            if ~isfield(s,'fcEpochMode') || isempty(s.fcEpochMode), s.fcEpochMode = 'whole'; end
+        end
+        a = str2double(get(edInjStart,'String'));
+        b = str2double(get(edInjEnd,'String'));
+        w = str2double(get(edEpochWin,'String'));
+        if ~isfinite(a), a = 14; end
+        if ~isfinite(b), b = max(a,15); end
+        if ~isfinite(w) || w <= 0, w = 3; end
+        if b < a, b = a; end
+        s.fcInjStartMin = max(0,a);
+        s.fcInjEndMin = max(s.fcInjStartMin,b);
+        s.fcEpochWinMin = max(0.01,w);
+        set(edInjStart,'String',sprintf('%.2f',s.fcInjStartMin));
+        set(edInjEnd,'String',sprintf('%.2f',s.fcInjEndMin));
+        set(edEpochWin,'String',sprintf('%.2f',s.fcEpochWinMin));
+    end
     function onMapClick(~,~)
         s = guidata(fig);
         cp = get(axMap,'CurrentPoint');
@@ -1638,6 +1751,7 @@ refreshAll();
                 error('Selected MAT does not contain a usable Segmentation result.');
             end
 
+            res = fc_apply_epoch_to_roi_result(res,s);
             s.roiResults{s.currentSubject,s.currentEpoch} = res;
             s.loadedSegmentationFile = fullFile;
 
@@ -1758,11 +1872,13 @@ refreshAll();
 
     function s = computeSeed(s,subIdx,epIdx)
         subj = s.subjects(subIdx);
-        idxT = fc_time_idx(subj.TR,size(subj.I4,4),s.analysisStartSec,s.analysisEndSec);
+        [t0,t1,epName] = fc_epoch_window_sec(s,subj.TR,size(subj.I4,4));
+        idxT = fc_time_idx(subj.TR,size(subj.I4,4),t0,t1);
         res = fc_seed_fc(subj.I4(:,:,:,idxT),subj.TR,subj.mask, ...
             s.seedX,s.seedY,s.slice,s.seedBoxSize,s.useSliceOnly,s.opts.chunkVox);
         res.timeIdx = idxT;
-        res.epochName = s.epochs(epIdx).name;
+        res.epochName = epName;
+        res.epochWindowSec = [t0 t1];
         s.seedResults{subIdx,epIdx} = res;
     end
 
@@ -1805,10 +1921,12 @@ refreshAll();
         if isempty(subj.roiAtlas)
             error('No ROI atlas/label map loaded for subject %s.',subj.name);
         end
-        idxT = fc_time_idx(subj.TR,size(subj.I4,4),s.analysisStartSec,s.analysisEndSec);
+        [t0,t1,epName] = fc_epoch_window_sec(s,subj.TR,size(subj.I4,4));
+        idxT = fc_time_idx(subj.TR,size(subj.I4,4),t0,t1);
         res = fc_roi_fc(subj.I4(:,:,:,idxT),subj.TR,subj.mask,subj.roiAtlas,s.opts);
         res.timeIdx = idxT;
-        res.epochName = s.epochs(epIdx).name;
+        res.epochName = epName;
+        res.epochWindowSec = [t0 t1];
         s.roiResults{subIdx,epIdx} = res;
     end
 
@@ -1820,7 +1938,7 @@ refreshAll();
             return;
         end
         try
-            [M,names] = fc_current_matrix(s,res);
+            [M,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
             outFile = fullfile(s.qcDir,['ROI_heatmap_' s.tag '.csv']);
             fc_write_matrix_csv(outFile,M,names);
             setStatus(['Saved heatmap CSV: ' outFile],C.good);
@@ -1869,7 +1987,7 @@ end
             fc_save_axis(axAdj,fig,fullfile(s.qcDir,['FC_graph_' s.tag '.png']));
             res = s.roiResults{s.currentSubject,s.currentEpoch};
             if ~isempty(res)
-                [M,names] = fc_current_matrix(s,res);
+                [M,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
                 fc_write_matrix_csv(fullfile(s.qcDir,['ROI_heatmap_' s.tag '.csv']),M,names);
                 T = fc_compare_export_table(s,res);
                 if ~isempty(T)
@@ -1921,6 +2039,10 @@ end
         set(cbMaskLine,'Value',double(s.showMaskLine));
         try, set(cbShowLR,'Value',double(s.showHemisphere)); catch, end % FC_LR_LABEL_DISPLAY_PATCH_V2_REFRESH_CHECKBOX
         try, set(ddRegionMode,'Value',fc_region_mode_to_popup_value(s.roiHemiMode)); catch, end % FC_REGION_MODE_PATCH_REFRESH_POPUP
+        try, set(ddEpochMode,'Value',fc_epoch_mode_to_popup_value(s.fcEpochMode)); catch, end % FC_LR_EPOCH_PATCH_REFRESH_EPOCH_POPUP
+        try, set(edInjStart,'String',sprintf('%.2f',s.fcInjStartMin)); catch, end % FC_LR_EPOCH_PATCH_REFRESH_INJ_START
+        try, set(edInjEnd,'String',sprintf('%.2f',s.fcInjEndMin)); catch, end % FC_LR_EPOCH_PATCH_REFRESH_INJ_END
+        try, set(edEpochWin,'String',sprintf('%.2f',s.fcEpochWinMin)); catch, end % FC_LR_EPOCH_PATCH_REFRESH_WIN
         set(edSeedThr,'String',sprintf('%.2f',s.seedAbsThr));
         set(edROIThr,'String',sprintf('%.2f',s.roiAbsThr));
         set(edTopN,'String',num2str(s.compareTopN));
@@ -2098,7 +2220,11 @@ end
         end
 
         imagesc(axHeat,Mdisp,clim);
-        axis(axHeat,'image');
+        if exist('meta','var') && isfield(meta,'isRectangular') && meta.isRectangular
+            axis(axHeat,'tight');
+        else
+            axis(axHeat,'image');
+        end
         fc_ax(axHeat,C);
         colormap(axHeat,cmap);
 
@@ -2109,45 +2235,25 @@ end
         xlabel(axHeat,'Atlas region','Color',C.dim,'FontWeight','bold','FontSize',16);
         ylabel(axHeat,'Atlas region','Color',C.dim,'FontWeight','bold','FontSize',16);
 
-        nR = size(Mdisp,1);
-        if nR <= 90
-            tickIdx = 1:nR;
-            labelLen = 9;
-            tickFont = 11;
-        elseif nR <= 140
-            tickIdx = 1:2:nR;
-            labelLen = 9;
-            tickFont = 10;
-        elseif nR <= 220
-            tickIdx = 1:3:nR;
-            labelLen = 9;
-            tickFont = 10;
-        else
-            tickIdx = 1:max(4,ceil(nR/60)):nR;
-            labelLen = 9;
-            tickFont = 9;
-        end
-
-        set(axHeat, ...
-            'XTick',tickIdx, ...
-            'YTick',tickIdx, ...
-            'XTickLabel',fc_abbrev_list(names(tickIdx),labelLen,s.showHemisphere), ...
-            'YTickLabel',fc_abbrev_list(names(tickIdx),labelLen,s.showHemisphere), ...
-            'TickLength',[0 0], ...
-            'FontName',C.font, ...
-            'FontSize',tickFont, ...
-            'FontWeight','bold');
-
-        try, xtickangle(axHeat,90); catch, end
+        fc_set_matrix_ticks(axHeat,Mdisp,names,meta,s.showHemisphere,C);
         xlabel(axHeat,'Atlas region','Color',C.fg,'FontWeight','bold','FontSize',15);
         ylabel(axHeat,'Atlas region','Color',C.fg,'FontWeight','bold','FontSize',15);
-        title(axHeat,'Region-by-region FC heatmap', ...
-            'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',15);
-
+        if isfield(meta,'isRectangular') && meta.isRectangular
+            title(axHeat,'Left regions vs Right regions FC heatmap', ...
+                'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',15);
+        else
+            title(axHeat,'Region-by-region FC heatmap', ...
+                'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',15);
+        end
         fc_colorbar_legend(axHeatCB,cmap,clim,cbLabel,C);
         updateROIDropdowns(names);
 
-        set(txtHeat,'String',sprintf('Regions: %d\nValue: %s\nThreshold: %.2f', numel(names), cbLabel, s.roiAbsThr));
+        if isfield(meta,'isRectangular') && meta.isRectangular
+            regionTxt = sprintf('%d left x %d right',size(Mdisp,1),size(Mdisp,2));
+        else
+            regionTxt = sprintf('%d',numel(names));
+        end
+        set(txtHeat,'String',sprintf('Regions: %s\nValue: %s\nThreshold: %.2f', regionTxt, cbLabel, s.roiAbsThr));
     end
 
     function refreshCompareView()
@@ -2165,6 +2271,13 @@ end
         end
 
         [M,names,order,meta] = fc_current_matrix(s,res);
+        if isfield(meta,'isRectangular') && meta.isRectangular
+            fc_nodata(axCompareBar,'Compare ROI is disabled in Left-vs-Right mode',C);
+            fc_nodata(axCompareMap,'Switch to Left only / Right only / Both / Merged',C);
+            fc_nodata(axCompareTS,'Selected and partner traces',C);
+            set(txtCompare,'String','Left-vs-Right mode is a rectangular matrix for Heatmap/Graph. Use Left only, Right only, Both, or Merged for Compare ROI.');
+            return;
+        end
         updateROIDropdowns(names);
         sel = fc_clip(get(ddCompareROI,'Value'),1,numel(names));
         rawSel = order(sel); tsSel = fc_display_ts_for_index(res,meta,sel);
@@ -2289,6 +2402,13 @@ end
             return;
         end
         [~,names,order,meta] = fc_current_matrix(s,res);
+        if isfield(meta,'isRectangular') && meta.isRectangular
+            fc_nodata(axPairTS,'Pair ROI is disabled in Left-vs-Right mode',C);
+            fc_nodata(axPairScat,'Switch to Left only / Right only / Both / Merged',C);
+            fc_nodata(axPairLag,'Lag correlation',C);
+            set(txtPair,'String','Left-vs-Right mode is a rectangular matrix for Heatmap/Graph. Use Left only, Right only, Both, or Merged for Pair ROI.');
+            return;
+        end
         updateROIDropdowns(names);
         aSel = fc_clip(get(ddPairA,'Value'),1,numel(names));
         bSel = fc_clip(get(ddPairB,'Value'),1,numel(names));
@@ -2380,16 +2500,22 @@ end
             return;
         end
 
-        [M,names] = fc_current_matrix(s,res);
+        [M,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
 
         A = abs(M) >= s.roiAbsThr;
-        A(1:size(A,1)+1:end) = false;
+        if ~(isfield(meta,'isRectangular') && meta.isRectangular)
+            A(1:size(A,1)+1:end) = false;
+        end
 
         W = M;
         W(~A) = 0;
 
         imagesc(axAdj,W,[-1 1]);
-        axis(axAdj,'image');
+        if isfield(meta,'isRectangular') && meta.isRectangular
+            axis(axAdj,'tight');
+        else
+            axis(axAdj,'image');
+        end
         colormap(axAdj,cmap);
         fc_ax(axAdj,C);
 
@@ -2400,45 +2526,27 @@ end
         xlabel(axAdj,'Atlas region','Color',C.dim,'FontWeight','bold','FontSize',16);
         ylabel(axAdj,'Atlas region','Color',C.dim,'FontWeight','bold','FontSize',16);
 
-        nG = size(W,1);
-        if nG <= 90
-            tickIdx = 1:nG;
-            labelLen = 9;
-            tickFont = 11;
-        elseif nG <= 140
-            tickIdx = 1:2:nG;
-            labelLen = 9;
-            tickFont = 10;
-        elseif nG <= 220
-            tickIdx = 1:3:nG;
-            labelLen = 9;
-            tickFont = 10;
-        else
-            tickIdx = 1:max(4,ceil(nG/60)):nG;
-            labelLen = 9;
-            tickFont = 9;
-        end
-
-        set(axAdj, ...
-            'XTick',tickIdx, ...
-            'YTick',tickIdx, ...
-            'XTickLabel',fc_abbrev_list(names(tickIdx),labelLen,s.showHemisphere), ...
-            'YTickLabel',fc_abbrev_list(names(tickIdx),labelLen,s.showHemisphere), ...
-            'TickLength',[0 0], ...
-            'FontName',C.font, ...
-            'FontSize',tickFont, ...
-            'FontWeight','bold');
-
-        try, xtickangle(axAdj,90); catch, end
+        fc_set_matrix_ticks(axAdj,W,names,meta,s.showHemisphere,C);
         xlabel(axAdj,'Atlas region','Color',C.fg,'FontWeight','bold','FontSize',15);
         ylabel(axAdj,'Atlas region','Color',C.fg,'FontWeight','bold','FontSize',15);
-        title(axAdj,'Thresholded weighted FC matrix', ...
-            'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',15);
-
+        if isfield(meta,'isRectangular') && meta.isRectangular
+            title(axAdj,'Left-vs-Right thresholded weighted FC matrix', ...
+                'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',15);
+        else
+            title(axAdj,'Thresholded weighted FC matrix', ...
+                'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',15);
+        end
         fc_colorbar_legend(axGraphCB,cmap,[-1 1],'Pearson r',C);
 
-        nEdges = nnz(triu(A,1));
-        possibleEdges = max(1,(size(A,1)*(size(A,1)-1)/2));
+        if isfield(meta,'isRectangular') && meta.isRectangular
+            nEdges = nnz(A);
+            possibleEdges = max(1,numel(A));
+            regionTxt = sprintf('%d left x %d right',size(A,1),size(A,2));
+        else
+            nEdges = nnz(triu(A,1));
+            possibleEdges = max(1,(size(A,1)*(size(A,1)-1)/2));
+            regionTxt = sprintf('%d',size(A,1));
+        end
         density = nEdges / possibleEdges;
 
         set(txtGraph,'String',sprintf([ ...
@@ -2446,10 +2554,10 @@ end
             'Entry = Pearson r\n' ...
             'shown only when |r| >= threshold.\n\n' ...
             'Threshold: %.2f\n' ...
-            'Regions: %d\n' ...
+            'Regions: %s\n' ...
             'Connections: %d\n' ...
             'Density: %.4f'], ...
-            s.roiAbsThr,nG,nEdges,density));
+            s.roiAbsThr,regionTxt,nEdges,density));
     end
 
     function updateROIDropdowns(names)
@@ -3426,6 +3534,54 @@ end
 mode = fc_region_mode_from_state(s);
 hasSignedLR = any(labels0 < 0);
 
+% FC_LR_EPOCH_PATCH_20260505_LVR_MATRIX
+if strcmpi(mode,'lvr')
+    leftIdx = [];
+    rightIdx = [];
+    for ii = 1:n0
+        sideNow = fc_region_side_from_name_label(names0{ii},labels0(ii),hasSignedLR);
+        if strcmpi(sideNow,'L'), leftIdx(end+1,1) = ii; end %#ok<AGROW>
+        if strcmpi(sideNow,'R'), rightIdx(end+1,1) = ii; end %#ok<AGROW>
+    end
+
+    if isempty(leftIdx) || isempty(rightIdx)
+        % Fallback to normal both-mode if hemisphere detection is unavailable.
+        mode = 'both';
+    else
+        namesL0 = names0(leftIdx);
+        namesR0 = names0(rightIdx);
+        cleanL = cell(size(namesL0));
+        cleanR = cell(size(namesR0));
+        for ii = 1:numel(namesL0), cleanL{ii} = lower(fc_region_fullname_no_lr(namesL0{ii})); end
+        for ii = 1:numel(namesR0), cleanR{ii} = lower(fc_region_fullname_no_lr(namesR0{ii})); end
+        [~,ordL] = sort(cleanL);
+        [~,ordR] = sort(cleanR);
+        leftIdx = leftIdx(ordL);
+        rightIdx = rightIdx(ordR);
+
+        M = M0(leftIdx,rightIdx);
+        names = names0(leftIdx);
+        order = leftIdx;
+
+        meta = struct();
+        meta.mode = 'lvr';
+        meta.isRectangular = true;
+        meta.namesY = names0(leftIdx);
+        meta.namesX = names0(rightIdx);
+        meta.orderY = leftIdx(:);
+        meta.orderX = rightIdx(:);
+        meta.displayLabelsY = labels0(leftIdx);
+        meta.displayLabelsX = labels0(rightIdx);
+        meta.displayLabels = labels0(leftIdx);
+        meta.rawLabels = labels0(:);
+        meta.rawNames = names0(:);
+        meta.groups = cell(numel(leftIdx),1);
+        for ii = 1:numel(leftIdx), meta.groups{ii} = leftIdx(ii); end
+        return;
+    end
+end
+% FC_LR_EPOCH_PATCH_20260505_LVR_MATRIX_END
+
 if strcmpi(mode,'merged') && isfield(res,'meanTS') && ~isempty(res.meanTS) && size(res.meanTS,2) == n0
     [TSmerge,names,labelsDisplay,groups,order] = fc_merge_lr_timecourses(res.meanTS,names0,labels0);
     M = fc_corr_matrix(TSmerge);
@@ -3494,7 +3650,10 @@ end
 if strcmpi(mode,'all') || strcmpi(mode,'merge') || strcmpi(mode,'bilateral')
     mode = 'merged';
 end
-if ~any(strcmpi(mode,{'both','left','right','merged'}))
+if strcmpi(mode,'left-vs-right') || strcmpi(mode,'left_vs_right') || strcmpi(mode,'leftright') || strcmpi(mode,'cross')
+    mode = 'lvr';
+end
+if ~any(strcmpi(mode,{'both','left','right','lvr','merged'}))
     mode = 'both';
 end
 end
@@ -3504,7 +3663,8 @@ mode = fc_region_mode_from_state(struct('roiHemiMode',mode));
 switch lower(mode)
     case 'left',   val = 2;
     case 'right',  val = 3;
-    case 'merged', val = 4;
+    case 'lvr',    val = 4;
+    case 'merged', val = 5;
     otherwise,      val = 1;
 end
 end
@@ -4305,6 +4465,157 @@ if numel(ab) > n
 end
 end
 
+function val = fc_epoch_mode_to_popup_value(mode)
+try, mode = lower(strtrim(char(mode))); catch, mode = 'whole'; end
+switch mode
+    case 'pre',    val = 2;
+    case 'during', val = 3;
+    case 'post',   val = 4;
+    otherwise,       val = 1;
+end
+end
+
+function label = fc_epoch_label(s)
+[t0,t1,name] = fc_epoch_window_sec(s,1,1); %#ok<ASGLU>
+if isinf(t1)
+    label = name;
+else
+    label = sprintf('%s %.2f-%.2f min',name,t0/60,t1/60);
+end
+end
+
+function [t0,t1,epName] = fc_epoch_window_sec(s,TR,nT)
+if nargin < 2 || isempty(TR) || ~isfinite(TR) || TR <= 0, TR = 1; end
+if nargin < 3 || isempty(nT) || ~isfinite(nT), nT = inf; end
+totalSec = inf;
+try
+    if isfinite(nT), totalSec = max(0,(double(nT)-1).*double(TR)); end
+catch
+    totalSec = inf;
+end
+mode = 'whole';
+try, if isfield(s,'fcEpochMode') && ~isempty(s.fcEpochMode), mode = lower(strtrim(char(s.fcEpochMode))); end, catch, end
+inj0 = 14; inj1 = 15; win = 3;
+try, if isfield(s,'fcInjStartMin') && isfinite(s.fcInjStartMin), inj0 = double(s.fcInjStartMin); end, catch, end
+try, if isfield(s,'fcInjEndMin') && isfinite(s.fcInjEndMin), inj1 = double(s.fcInjEndMin); end, catch, end
+try, if isfield(s,'fcEpochWinMin') && isfinite(s.fcEpochWinMin) && s.fcEpochWinMin > 0, win = double(s.fcEpochWinMin); end, catch, end
+inj0 = max(0,inj0); inj1 = max(inj0,inj1); win = max(0.01,win);
+switch mode
+    case 'pre'
+        t0 = max(0,(inj0-win).*60);
+        t1 = inj0.*60;
+        epName = sprintf('Pre-injection first %.2f min',win);
+    case 'during'
+        t0 = inj0.*60;
+        t1 = min(inj1,inj0+win).*60;
+        if t1 <= t0, t1 = (inj0+win).*60; end
+        epName = sprintf('During injection first %.2f min',win);
+    case 'post'
+        t0 = inj1.*60;
+        t1 = (inj1+win).*60;
+        epName = sprintf('Post-injection first %.2f min',win);
+    otherwise
+        t0 = 0;
+        t1 = inf;
+        epName = 'Whole recording';
+end
+if isfinite(totalSec)
+    t0 = max(0,min(t0,totalSec));
+    if isfinite(t1), t1 = max(t0,min(t1,totalSec)); end
+end
+end
+
+function res = fc_apply_epoch_to_roi_result(res,s)
+try
+    if ~isfield(res,'meanTSFull') || isempty(res.meanTSFull)
+        res.meanTSFull = res.meanTS;
+    end
+    baseTS = double(res.meanTSFull);
+    nT = size(baseTS,1);
+    TR = 1;
+    if isfield(res,'TR') && isfinite(res.TR) && res.TR > 0, TR = double(res.TR); end
+    if isfield(res,'timeMinFull') && ~isempty(res.timeMinFull) && numel(res.timeMinFull)==nT
+        tMinFull = double(res.timeMinFull(:));
+    elseif isfield(res,'timeMin') && ~isempty(res.timeMin) && numel(res.timeMin)==nT
+        tMinFull = double(res.timeMin(:));
+    else
+        tMinFull = ((0:nT-1)' .* TR) ./ 60;
+    end
+    [t0,t1,epName] = fc_epoch_window_sec(s,TR,nT);
+    tSec = tMinFull(:).*60;
+    idx = find(tSec >= t0 & tSec <= t1);
+    if numel(idx) < 3
+        idx = (1:nT)';
+        epName = [epName ' - fallback whole recording, fewer than 3 points in selected window'];
+    end
+    meanTS = baseTS(idx,:);
+    for kk = 1:size(meanTS,2)
+        x = meanTS(:,kk);
+        bad = ~isfinite(x);
+        if any(bad)
+            good = x(isfinite(x));
+            if isempty(good), x(bad) = 0; else, x(bad) = mean(good); end
+            meanTS(:,kk) = x;
+        end
+    end
+    res.meanTS = meanTS;
+    res.M = fc_corr_matrix(meanTS);
+    res.timeIdx = idx(:);
+    res.timeMin = tMinFull(idx(:));
+    res.timeSec = res.timeMin(:).*60;
+    res.timeMinFull = tMinFull(:);
+    res.timeSecFull = tMinFull(:).*60;
+    res.epochName = epName;
+    res.epochWindowSec = [t0 t1];
+catch
+    % Keep original result if anything unexpected happens.
+end
+end
+
+function tickIdx = fc_matrix_tick_indices(n)
+if n <= 90
+    tickIdx = 1:n;
+elseif n <= 140
+    tickIdx = 1:2:n;
+elseif n <= 220
+    tickIdx = 1:3:n;
+else
+    tickIdx = 1:max(4,ceil(n/60)):n;
+end
+end
+
+function fc_set_matrix_ticks(ax,M,names,meta,showHemisphere,C)
+if nargin < 5 || isempty(showHemisphere), showHemisphere = true; end
+nY = size(M,1); nX = size(M,2);
+namesY = names;
+namesX = names;
+try
+    if isfield(meta,'isRectangular') && meta.isRectangular
+        namesY = meta.namesY;
+        namesX = meta.namesX;
+        showHemisphere = false;
+    end
+catch
+end
+tickY = fc_matrix_tick_indices(nY);
+tickX = fc_matrix_tick_indices(nX);
+tickY = tickY(tickY >= 1 & tickY <= numel(namesY));
+tickX = tickX(tickX >= 1 & tickX <= numel(namesX));
+tickFont = 11;
+if max(nX,nY) > 90, tickFont = 10; end
+if max(nX,nY) > 220, tickFont = 9; end
+labelLen = 9;
+set(ax, ...
+    'XTick',tickX, ...
+    'YTick',tickY, ...
+    'XTickLabel',fc_abbrev_list(namesX(tickX),labelLen,showHemisphere), ...
+    'YTickLabel',fc_abbrev_list(namesY(tickY),labelLen,showHemisphere), ...
+    'TickLength',[0 0], ...
+    'FontName',C.font, ...
+    'FontSize',tickFont, ...
+    'FontWeight','bold');
+try, xtickangle(ax,90); catch, end
+end
 function col = fc_pair_color(list,val)
 if ischar(list), list = cellstr(list); end
 val = max(1,min(numel(list),val));
@@ -4810,6 +5121,8 @@ res.timeIdx = (1:size(meanTS,1))';
 res.epochName = ['Segmentation ' spaceName];
 res.sourceFile = fullFile;
 res.sourceType = 'HUMoR Segmentation';
+res.meanTSFull = meanTS;
+res.timeIdxFull = (1:size(meanTS,1))';
 res.timeSec = [];
 res.timeMin = [];
 
@@ -4831,6 +5144,11 @@ end
 
 try
     res.timeMin = fc_extract_seg_time_min(Seg,size(meanTS,1),TR);
+catch
+end
+try
+    res.timeMinFull = res.timeMin(:);
+    res.timeSecFull = res.timeMinFull .* 60;
 catch
 end
 
