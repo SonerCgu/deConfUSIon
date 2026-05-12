@@ -64,7 +64,7 @@ run_fusi_studio
 
 The recommended launcher is `run_fusi_studio`, not direct execution of `fusi_studio`, because the launcher sets up the MATLAB path and starts the main GUI more safely.
 
-Example:
+Example on Windows:
 
 ```matlab
 cd('D:\Github\HUMOR-Analysis-Tool')
@@ -81,7 +81,7 @@ run_fusi_studio
 4. Confirm the detected probe type and TR.
 5. Run **Full QC** before preprocessing.
 6. Review QC outputs.
-7. Apply only justified preprocessing.
+7. Apply only scientifically justified preprocessing.
 8. Inspect the dataset using the **Time-Course Viewer**.
 9. Generate PSC/SCM maps in the **SCM GUI**.
 10. Validate dynamic signal behavior using the **Video & SCM Mask** GUI.
