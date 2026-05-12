@@ -10265,8 +10265,7 @@ end
 % =========================================================
 function addStudioIcon()
 
-    studioRootForIcon = fileparts(mfilename('fullpath'));
-    iconFile = fullfile(studioRootForIcon, 'Icon.png');
+    iconFile = 'D:\Github\HUMOR-Analysis-Tool\Icon.png';
 
     if ~exist(iconFile,'file')
         disp(['Icon file not found: ' iconFile]);

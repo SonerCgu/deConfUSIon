@@ -4331,7 +4331,11 @@ end
 function d = getPreferredPacapRootDir(S)
     d = '';
 
-    cands = {'Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData\AprilStayLeuven\PACAP'};
+    if ispc
+        cands = {'Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData\AprilStayLeuven\PACAP'};
+    else
+        cands = {};
+    end
 
     try
         if isfield(S,'opt') && isfield(S.opt,'studio') && isstruct(S.opt.studio)
