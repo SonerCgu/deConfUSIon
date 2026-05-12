@@ -2,11 +2,13 @@
 
 **HUMoR** — *Hemodynamic Ultrasound Imaging of Molecular Reporters* — is a MATLAB-based graphical analysis environment for functional ultrasound imaging (fUSI). It is designed for individual-animal inspection, quality control, preprocessing, percentage signal change (PSC) mapping, signal change map (SCM) visualization, masking, atlas registration, group analysis, and functional connectivity workflows.
 
-The toolbox is built around a single entry point, `fusi_studio.m`, with modular analysis GUIs and helper functions for 2D probe data, step-motor / multi-slice data, and matrix / 3D probe data.
+The toolbox is built around a single entry point, `run_fusi_studio.m`, with modular analysis GUIs and helper functions for 2D probe data, step-motor / multi-slice data, and matrix / 3D probe data.
 
 > **Research software notice:** HUMoR outputs should always be manually reviewed. QC plots, raw movies, ROI traces, baseline windows, masks, and atlas registrations must be checked before a dataset is treated as analysis-ready or publication-ready.
 
----
+## User Manual IMPORTANT
+
+[Download the HUMoR fUSI Studio User Manual](docs/HUMoR_fUSI_Studio_User_Manual.pdf)
 
 ## Main features
 
