@@ -1457,6 +1457,13 @@ set(fig,'CloseRequestFcn',@cleanup);
 
     videosDir = fullfile(baseDir, 'Videos');
 
+    % HUMOR_LIVE_MP4_LOCAL_VIDEOS_ONLY_PATCH_V2
+    % Always save MP4s inside the loaded analysed animal/dataset folder.
+    % Do NOT redirect to AnalysedData/_LiveViewer_MP4 or Documents.
+    if exist(videosDir,'dir') ~= 7
+        mkdir(videosDir);
+    end
+
     if exist(videosDir,'dir') ~= 7
         [ok,msg] = mkdir(videosDir);
         if ~ok
@@ -1529,6 +1536,133 @@ function s = makeSafeAsciiFileName(s)
 
     if isempty(s)
         s = 'LiveViewer';
+    end
+end
+
+function videosDir = liveViewerSafeVideosDir(videosDir, baseDir, datasetName)
+    % HUMOR_LIVE_MP4_LOCAL_VIDEOS_ONLY_PATCH_V2
+    %#ok<INUSD>
+    try
+        if nargin >= 2 && ~isempty(baseDir)
+            videosDir = fullfile(char(baseDir), 'Videos');
+        end
+    catch
+    end
+    if exist(videosDir,'dir') ~= 7
+        mkdir(videosDir);
+    end
+end
+
+function rootDir = liveViewerFindAnalysedRoot(p)
+    % HUMOR_LIVE_MP4_SAFE_PATH_PATCH_V1
+    rootDir = '';
+    try
+        p = char(p);
+        pLow = lower(p);
+        idx = strfind(pLow, 'analyseddata');
+        if ~isempty(idx)
+            k = idx(1) + length('analyseddata') - 1;
+            rootDir = p(1:k);
+        end
+    catch
+        rootDir = '';
+    end
+end
+
+function outFile = liveViewerSafeMp4File(videosDir, dataTag, modeTag, zz, timeTag)
+    % HUMOR_LIVE_MP4_LOCAL_VIDEOS_ONLY_PATCH_V2
+    % Keep file inside videosDir. Do not use emergency external folders.
+    videosDir = char(videosDir);
+    if exist(videosDir,'dir') ~= 7
+        mkdir(videosDir);
+    end
+
+    dataTag = makeShortSafeAsciiFileName(dataTag, 36);
+    modeTag = makeShortSafeAsciiFileName(modeTag, 20);
+
+    if isempty(dataTag), dataTag = 'liveviewer'; end
+    if isempty(modeTag), modeTag = 'mode'; end
+
+    outFile = fullfile(videosDir, ...
+        sprintf('%s_%s_z%02d_%s.mp4', dataTag, modeTag, zz, timeTag));
+
+    % If path is still long, shorten only the filename, not the folder.
+    if numel(outFile) > 230
+        outFile = fullfile(videosDir, ...
+            sprintf('LV_%s_z%02d_%s.mp4', modeTag, zz, timeTag));
+    end
+    if numel(outFile) > 245
+        outFile = fullfile(videosDir, ...
+            sprintf('LV_z%02d_%s.mp4', zz, timeTag));
+    end
+end
+
+function rootDir = liveViewerEmergencyMp4Root()
+    % HUMOR_LIVE_MP4_SAFE_PATH_PATCH_V1
+    rootDir = '';
+    try
+        if ispc
+            up = getenv('USERPROFILE');
+            if ~isempty(up) && exist(up,'dir') == 7
+                rootDir = fullfile(up, 'Documents', 'HUMOR_LiveViewer_MP4');
+            end
+        end
+        if isempty(rootDir)
+            rootDir = fullfile(tempdir, 'HUMOR_LiveViewer_MP4');
+        end
+        if exist(rootDir,'dir') ~= 7
+            mkdir(rootDir);
+        end
+    catch
+        rootDir = tempdir;
+    end
+end
+
+function s = makeShortSafeAsciiFileName(s, maxN)
+    % HUMOR_LIVE_MP4_SAFE_PATH_PATCH_V1
+    if nargin < 2 || isempty(maxN)
+        maxN = 48;
+    end
+
+    s0 = '';
+    try
+        s0 = char(s);
+    catch
+        s0 = 'LiveViewer';
+    end
+
+    s = makeSafeAsciiFileName(s0);
+    if isempty(s)
+        s = 'LiveViewer';
+    end
+
+    if numel(s) <= maxN
+        return;
+    end
+
+    h = liveViewerSimpleHash(s);
+    keepN = max(8, maxN - numel(h) - 2);
+    nFront = ceil(keepN / 2);
+    nBack  = floor(keepN / 2);
+
+    s = [s(1:nFront) '_' h '_' s(end-nBack+1:end)];
+    if numel(s) > maxN
+        s = s(1:maxN);
+        s = regexprep(s,'_+$','');
+    end
+end
+
+function h = liveViewerSimpleHash(s)
+    % HUMOR_LIVE_MP4_SAFE_PATH_PATCH_V1
+    try
+        v = double(char(s));
+        x = 0;
+        for ii = 1:numel(v)
+            x = mod(x * 131 + v(ii), 2147483647);
+        end
+        h = lower(dec2hex(x, 8));
+    catch
+        h = lower(dec2hex(randi(2147483647), 8));
     end
 end
 
@@ -1647,7 +1781,8 @@ end
             modeName = modeNames{get(displayDropdown,'Value')};
             modeTag = lower(regexprep(modeName,'[^a-zA-Z0-9]+','_'));
 
-dataTag = lower(makeSafeAsciiFileName(datasetName));
+% HUMOR_LIVE_MP4_SAFE_PATH_PATCH_V1
+dataTag = lower(makeShortSafeAsciiFileName(datasetName, 42));
 
 if isempty(dataTag)
     dataTag = 'liveviewer';
@@ -1703,8 +1838,8 @@ end
                     zz = 1;
                 end
 
-            outFile = fullfile(videosDir, ...
-    sprintf('%s_%s_z%02d_%s.mp4', dataTag, modeTag, zz, timeTag));
+            % HUMOR_LIVE_MP4_SAFE_PATH_PATCH_V1
+            outFile = liveViewerSafeMp4File(videosDir, dataTag, modeTag, zz, timeTag);
 
 % Make absolutely sure the parent folder exists
 outParent = fileparts(outFile);
