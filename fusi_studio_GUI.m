@@ -711,7 +711,8 @@ end
 
         studio = guidata(fig);
 
-       data.displayNameFull = cleanLoadedDatasetName(datasetName);
+       data.displayNameFull = HUMOR_make_loaded_display_name(datasetName, path, file);
+       data.datasetSortTime = now;
         data.sourceFileName = file;
         data.sourcePath = path;
 
@@ -760,6 +761,10 @@ if exist(pscFolder,'dir')
 end
 
         preFiles = dir(fullfile(P.preprocRoot,'*.mat'));
+        shortPreFolder = fullfile(datasetFolder,'P');
+        if exist(shortPreFolder,'dir') == 7
+            preFiles = [preFiles; dir(fullfile(shortPreFolder,'*.mat'))];
+        end
         for kk = 1:numel(preFiles)
             [~,fullName] = fileparts(preFiles(kk).name);
             safeKey = makeSafeKey(fullName, studio.datasets);
@@ -1096,7 +1101,8 @@ end
 
     set(dlg,'Visible','on');
     try, HUMoR_popup_autofit_apply(dlg); catch, end
-    waitfor(dlg);
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+waitfor(dlg);
 
     function onSelectAll(~,~)
         for kk = 1:n
@@ -1311,6 +1317,7 @@ function imregdemonsCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
         studio.datasets.(keyName) = newData;
@@ -1322,8 +1329,17 @@ function imregdemonsCallback(~,~)
             mkdir(preFolder);
         end
 
-        save(fullfile(preFolder,[fullName '.mat']), ...
-            'newData','-v7.3');
+                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'preproc');
+        newData.savedFile = savePath;
+        newData.lazyFile = savePath;
+        displayNameFull = fullName;
+                preprocDisplayName = fullName;
+                try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
+                studio.datasets.(keyName) = newData;
+        save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+        addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -1693,7 +1709,8 @@ uicontrol('Parent',settingsPanel,'Style','text', ...
 
     set(dlg,'Visible','on');
     try, HUMoR_popup_autofit_apply(dlg); catch, end
-    waitfor(dlg);
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+waitfor(dlg);
 
     % =====================================================
     % Nested helper functions
@@ -1949,14 +1966,32 @@ function frameRateCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
         studio.datasets.(keyName) = newData;
         studio.activeDataset = keyName;
         studio.pipeline.preprocDone = true;
 
-        save(HUMOR_short_imreg_save_path(fullfile(studio.exportPath,'Preprocessing',[fullName '.mat'])), ...
-            'newData','-v7.3');
+                        preFolder = fullfile(studio.exportPath,'Preprocessing');
+                if ~isempty(strfind(lower(fullName),'_ica_'))
+                    opSaveTag = 'ica';
+                elseif ~isempty(strfind(lower(fullName),'_pca_'))
+                    opSaveTag = 'pca';
+                else
+                    opSaveTag = 'preproc';
+                end
+                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                newData.savedFile = savePath;
+                newData.lazyFile = savePath;
+                displayNameFull = fullName;
+                preprocDisplayName = fullName;
+                try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
+                studio.datasets.(keyName) = newData;
+                save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2027,14 +2062,32 @@ fullName = [baseStem '_scrub_' methKey '_' interpKey '_' ts];
         newData.preprocessing = sprintf('Scrubbing (%s, %s)', method, interpMethod);
         newData.scrubbingStats = stats;
         newData.displayNameFull = fullName;
+        newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
         studio.datasets.(keyName) = newData;
         studio.activeDataset = keyName;
         studio.pipeline.preprocDone = true;
 
-        save(HUMOR_short_imreg_save_path(fullfile(studio.exportPath,'Preprocessing',[fullName '.mat'])), ...
-             'newData','-v7.3');
+                        preFolder = fullfile(studio.exportPath,'Preprocessing');
+                if ~isempty(strfind(lower(fullName),'_ica_'))
+                    opSaveTag = 'ica';
+                elseif ~isempty(strfind(lower(fullName),'_pca_'))
+                    opSaveTag = 'pca';
+                else
+                    opSaveTag = 'preproc';
+                end
+                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                newData.savedFile = savePath;
+                newData.lazyFile = savePath;
+                displayNameFull = fullName;
+                preprocDisplayName = fullName;
+                try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
+                studio.datasets.(keyName) = newData;
+                save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2127,14 +2180,32 @@ function stepMotorCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
         studio.datasets.(keyName) = newData;
         studio.activeDataset = keyName;
         studio.pipeline.preprocDone = true;
 
-        save(HUMOR_short_imreg_save_path(fullfile(studio.exportPath,'Preprocessing',[fullName '.mat'])), ...
-            'newData','-v7.3');
+                        preFolder = fullfile(studio.exportPath,'Preprocessing');
+                if ~isempty(strfind(lower(fullName),'_ica_'))
+                    opSaveTag = 'ica';
+                elseif ~isempty(strfind(lower(fullName),'_pca_'))
+                    opSaveTag = 'pca';
+                else
+                    opSaveTag = 'preproc';
+                end
+                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                newData.savedFile = savePath;
+                newData.lazyFile = savePath;
+                displayNameFull = fullName;
+                preprocDisplayName = fullName;
+                try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
+                studio.datasets.(keyName) = newData;
+                save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2209,14 +2280,32 @@ fullName = sprintf('%s_despike_z%s_%s', baseStem, numTag(zthr), ts);
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
         studio.datasets.(keyName) = newData;
         studio.activeDataset = keyName;
         studio.pipeline.preprocDone = true;
 
-        save(HUMOR_short_imreg_save_path(fullfile(studio.exportPath,'Preprocessing',[fullName '.mat'])), ...
-            'newData','-v7.3');
+                        preFolder = fullfile(studio.exportPath,'Preprocessing');
+                if ~isempty(strfind(lower(fullName),'_ica_'))
+                    opSaveTag = 'ica';
+                elseif ~isempty(strfind(lower(fullName),'_pca_'))
+                    opSaveTag = 'pca';
+                else
+                    opSaveTag = 'preproc';
+                end
+                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                newData.savedFile = savePath;
+                newData.lazyFile = savePath;
+                displayNameFull = fullName;
+                preprocDisplayName = fullName;
+                try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
+                studio.datasets.(keyName) = newData;
+                save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2380,6 +2469,7 @@ function temporalSmoothingCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
         studio.datasets.(keyName) = newData;
@@ -2391,8 +2481,17 @@ function temporalSmoothingCallback(~,~)
             mkdir(preFolder);
         end
 
-        save(fullfile(preFolder,[fullName '.mat']), ...
-            'newData','-v7.3');
+                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'preproc');
+        newData.savedFile = savePath;
+        newData.lazyFile = savePath;
+        displayNameFull = fullName;
+                preprocDisplayName = fullName;
+                try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
+                studio.datasets.(keyName) = newData;
+        save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+        addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2420,7 +2519,7 @@ function cfg = showTemporalSmoothSubsampleDialog(data)
     % ---------------- defaults ----------------
     defaultMode = 1;          % 1 = sliding, 2 = block/subsample
     defaultWinSec = 60;       % temporal smoothing default
-    defaultNsub = 50;         % subsampling default
+    defaultNsub = min(50, max(1, T));   % subsampling default, clamped for short scans
     defaultMethod = 1;        % 1 = mean, 2 = median
     defaultChunk = 50000;
 
@@ -2754,7 +2853,8 @@ try, HUMoR_popup_polish_now(gcf); catch, end
 
     set(dlg,'Visible','on');
     try, HUMoR_popup_autofit_apply(dlg); catch, end
-    waitfor(dlg);
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+waitfor(dlg);
 
     % =====================================================
     % Nested callbacks
@@ -2775,13 +2875,13 @@ try, HUMoR_popup_polish_now(gcf); catch, end
             winSecTxt = sprintf('%.6g s = %d frames', winSec, winVol);
         end
 
-        if ~isfinite(nsub) || nsub < 2
+        if ~isfinite(nsub) || nsub < 1
             nsubTxt = 'invalid';
             outTR = NaN;
             outVols = NaN;
             discard = NaN;
         else
-            nsub = round(nsub);
+            nsub = min(round(nsub), max(1,T));
             outTR = nsub * TR;
             outVols = floor(T / nsub);
             discard = T - outVols * nsub;
@@ -2814,7 +2914,7 @@ try, HUMoR_popup_polish_now(gcf); catch, end
     function presetSmooth(~,~)
         set(modePopup,'Value',1);
         set(winSecEdit,'String','60');
-        set(nsubEdit,'String','50');
+        set(nsubEdit,'String',num2str(defaultNsub));
         set(methodPopup,'Value',1);
         set(chunkEdit,'String','50000');
         updateSummary();
@@ -2823,7 +2923,7 @@ try, HUMoR_popup_polish_now(gcf); catch, end
     function presetSubsample(~,~)
         set(modePopup,'Value',2);
         set(winSecEdit,'String','60');
-        set(nsubEdit,'String','50');
+        set(nsubEdit,'String',num2str(defaultNsub));
         set(methodPopup,'Value',1);
         set(chunkEdit,'String','50000');
         updateSummary();
@@ -2867,20 +2967,15 @@ try, HUMoR_popup_polish_now(gcf); catch, end
             cfg.chunkVoxels = round(chunkVox);
 
         else
-            if ~isfinite(nsub) || nsub < 2
-                uiwait(errordlg('Subsampling factor must be >= 2 frames.', ...
+            if ~isfinite(nsub) || nsub < 1
+                uiwait(errordlg('Subsampling factor must be >= 1 frame.', ...
                     'Invalid subsampling factor','modal'));
                 return;
             end
 
-            nsub = round(nsub);
-            if floor(T / nsub) < 1
-                uiwait(errordlg(sprintf( ...
-                    'Not enough frames. Dataset has %d volumes, but n = %d.', ...
-                    T, nsub), ...
-                    'Invalid subsampling factor','modal'));
-                return;
-            end
+            nsub = min(round(nsub), max(1,T));
+            set(nsubEdit,'String',num2str(nsub));
+            updateSummary();
 
             methodList = get(methodPopup,'String');
             methodName = lower(methodList{get(methodPopup,'Value')});
@@ -2911,7 +3006,6 @@ end
 function pcaCallback(~,~)
 
     studio = guidata(fig);
-
     if ~studio.isLoaded
         errordlg('Load data first.');
         return;
@@ -2925,20 +3019,13 @@ function pcaCallback(~,~)
 
     data = getActiveData();
     ts = datestr(now,'yyyymmdd_HHMMSS');
-
     setProgramStatus(false);
     drawnow;
 
     try
         switch upper(strtrim(methodChoice))
-
-            % ---------------------------------------------------------
-            % PCA branch
-            % ---------------------------------------------------------
             case 'PCA'
-
                 addLog('Running PCA denoising... (select PCs to remove)');
-
                 opts = struct();
                 opts.nCompMax = 50;
                 opts.maxDisplayPoints = 2000;
@@ -2946,73 +3033,57 @@ function pcaCallback(~,~)
                 opts.centerMode = 'voxel';
                 opts.onApply = @(sel) decomp_onApply('PCA', sel);
                 opts.onCancel = @() decomp_onCancel('PCA');
-
                 [newData, stats] = pca_denoise(data, studio.exportPath, ['pca_' ts], opts);
-
                 if ~isfield(stats,'applied') || ~stats.applied
                     setProgramStatus(true);
                     return;
                 end
-
-                baseStem = getCurrentNamingStem(studio);
-
+                baseStem = HUMOR_compact_chain_name(getCurrentNamingStem(studio));
                 pcTag = 'dropPCunknown';
                 if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents)
                     pcTag = makePcDropTag(stats.selectedComponents);
                 end
-
-                fullName = sprintf('%s_pca_%s_%s', baseStem, pcTag, ts);
+                scopeTag = '';
+                if isfield(stats,'sliceScope')
+                    scopeTag = HUMOR_pcaica_scope_tag(stats.sliceScope);
+                end
+                if isempty(scopeTag)
+                    fullName = sprintf('%s_pca_%s_%s', baseStem, pcTag, ts);
+                else
+                    fullName = sprintf('%s_%s_pca_%s_%s', baseStem, scopeTag, pcTag, ts);
+                end
                 keyName = makeSafeKey(fullName, studio.datasets);
-
                 newData.preprocessing = 'PCA denoising';
                 newData.displayNameFull = fullName;
-                newData.sourceDatasetKey = studio.activeDataset;
+        newData.datasetSortTime = now;
+        newData.sourceDatasetKey = studio.activeDataset;
                 newData.pcaStats = stats;
-
+                datasetSortTime = now;
+                newData.datasetSortTime = datasetSortTime;
+                preFolder = fullfile(studio.exportPath,'Preprocessing');
+                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'pca');
+                newData.savedFile = savePath;
+                newData.lazyFile = savePath;
+                displayNameFull = fullName;
+                preprocDisplayName = fullName;
+                try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-
-                save(HUMOR_short_imreg_save_path(fullfile(studio.exportPath,'Preprocessing',[fullName '.mat'])), ...
-                    'newData','-v7.3');
-
+                save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                addLog(['Saved MAT -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
-
-                if isfield(stats,'percentExplainedRemoved')
-                    addLog(sprintf('PCA removed %.2f%% variance proxy.', stats.percentExplainedRemoved));
-                end
-
-                if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents)
-                    addLog(['Dropped PCs: ' sprintf('%d ', stats.selectedComponents)]);
-                end
-
-                if isfield(stats,'qcFile') && ~isempty(stats.qcFile)
-                    addLog(['PCA QC saved: ' stats.qcFile]);
-                end
-                if isfield(stats,'qcGlobalMeanFile') && ~isempty(stats.qcGlobalMeanFile)
-                    addLog(['PCA QC saved: ' stats.qcGlobalMeanFile]);
-                end
-                if isfield(stats,'qcMeanImageFile') && ~isempty(stats.qcMeanImageFile)
-                    addLog(['PCA QC saved: ' stats.qcMeanImageFile]);
-                end
-                if isfield(stats,'qcGridFiles') && ~isempty(stats.qcGridFiles)
-                    for ii = 1:numel(stats.qcGridFiles)
-                        addLog(['PCA QC grid saved: ' stats.qcGridFiles{ii}]);
-                    end
-                end
-
+                if isfield(stats,'percentExplainedRemoved'), addLog(sprintf('PCA removed %.2f%% variance proxy.', stats.percentExplainedRemoved)); end
+                if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents), addLog(['Dropped PCs: ' sprintf('%d ', stats.selectedComponents)]); end
                 addLog(['PCA complete -> ' fullName]);
 
-            % ---------------------------------------------------------
-            % ICA branch
-            % ---------------------------------------------------------
             case 'ICA'
-
                 addLog('Running ICA denoising... (compute ICs, then select ICs to remove)');
-
                 opts = struct();
-                opts.nCompMax = 30;              % ICA should usually be a bit lower than PCA
+                opts.nCompMax = 30;
                 opts.maxDisplayPoints = 2000;
                 opts.chunkT = 250;
                 opts.centerMode = 'voxel';
@@ -3021,70 +3092,54 @@ function pcaCallback(~,~)
                 opts.verbose = true;
                 opts.onApply = @(sel) decomp_onApply('ICA', sel);
                 opts.onCancel = @() decomp_onCancel('ICA');
-
                 [newData, stats] = ica_denoise(data, studio.exportPath, ['ica_' ts], opts);
-
                 if ~isfield(stats,'applied') || ~stats.applied
                     setProgramStatus(true);
                     return;
                 end
-
-                baseStem = getCurrentNamingStem(studio);
-
+                baseStem = HUMOR_compact_chain_name(getCurrentNamingStem(studio));
                 icTag = 'dropICunknown';
                 if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents)
                     icTag = makeIcDropTag(stats.selectedComponents);
                 end
-
-                fullName = sprintf('%s_ica_%s_%s', baseStem, icTag, ts);
+                scopeTag = '';
+                if isfield(stats,'sliceScope')
+                    scopeTag = HUMOR_pcaica_scope_tag(stats.sliceScope);
+                end
+                if isempty(scopeTag)
+                    fullName = sprintf('%s_ica_%s_%s', baseStem, icTag, ts);
+                else
+                    fullName = sprintf('%s_%s_ica_%s_%s', baseStem, scopeTag, icTag, ts);
+                end
                 keyName = makeSafeKey(fullName, studio.datasets);
-
                 newData.preprocessing = 'ICA denoising';
                 newData.displayNameFull = fullName;
-                newData.sourceDatasetKey = studio.activeDataset;
+        newData.datasetSortTime = now;
+        newData.sourceDatasetKey = studio.activeDataset;
                 newData.icaStats = stats;
-
+                datasetSortTime = now;
+                newData.datasetSortTime = datasetSortTime;
+                preFolder = fullfile(studio.exportPath,'Preprocessing');
+                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'ica');
+                newData.savedFile = savePath;
+                newData.lazyFile = savePath;
+                displayNameFull = fullName;
+                preprocDisplayName = fullName;
+                try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-
-                save(HUMOR_short_imreg_save_path(fullfile(studio.exportPath,'Preprocessing',[fullName '.mat'])), ...
-                    'newData','-v7.3');
-
+                save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                addLog(['Saved MAT -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
-
-                if isfield(stats,'percentEnergyRemoved')
-                    addLog(sprintf('ICA removed %.2f%% component-energy proxy.', stats.percentEnergyRemoved));
-                end
-
-                if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents)
-                    addLog(['Dropped ICs: ' sprintf('%d ', stats.selectedComponents)]);
-                end
-
-                if isfield(stats,'qcFile') && ~isempty(stats.qcFile)
-                    addLog(['ICA QC saved: ' stats.qcFile]);
-                end
-                if isfield(stats,'qcGlobalMeanFile') && ~isempty(stats.qcGlobalMeanFile)
-                    addLog(['ICA QC saved: ' stats.qcGlobalMeanFile]);
-                end
-                if isfield(stats,'qcMeanImageFile') && ~isempty(stats.qcMeanImageFile)
-                    addLog(['ICA QC saved: ' stats.qcMeanImageFile]);
-                end
-                if isfield(stats,'qcGridFiles') && ~isempty(stats.qcGridFiles)
-                    for ii = 1:numel(stats.qcGridFiles)
-                        addLog(['ICA QC grid saved: ' stats.qcGridFiles{ii}]);
-                    end
-                end
-
+                if isfield(stats,'percentEnergyRemoved'), addLog(sprintf('ICA removed %.2f%% component-energy proxy.', stats.percentEnergyRemoved)); end
+                if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents), addLog(['Dropped ICs: ' sprintf('%d ', stats.selectedComponents)]); end
                 if isfield(stats,'converged')
-                    if stats.converged
-                        addLog(sprintf('ICA converged in %d iterations.', stats.nIter));
-                    else
-                        addLog(sprintf('ICA warning: did not fully converge in %d iterations.', stats.nIter));
-                    end
+                    if stats.converged, addLog(sprintf('ICA converged in %d iterations.', stats.nIter)); else, addLog(sprintf('ICA warning: did not fully converge in %d iterations.', stats.nIter)); end
                 end
-
                 addLog(['ICA complete -> ' fullName]);
 
             otherwise
@@ -3092,12 +3147,10 @@ function pcaCallback(~,~)
                 setProgramStatus(true);
                 return;
         end
-
     catch ME
         addLog(['PCA / ICA ERROR: ' ME.message]);
         errordlg(ME.message,'PCA / ICA Failure');
     end
-
     setProgramStatus(true);
 
     function decomp_onApply(methodName, sel)
@@ -3105,7 +3158,8 @@ function pcaCallback(~,~)
             addLog([methodName ' applied: no components selected. Please wait...']);
         else
             sel = unique(sel(:)');
-            addLog([methodName ' applied, dropping ' upper(methodName(1:2)) 's: ' sprintf('%d ', sel) ' - please wait...']);
+            if strcmpi(methodName,'PCA'), compName = 'PCs'; else, compName = 'ICs'; end
+            addLog([methodName ' applied, dropping ' compName ': ' sprintf('%d ', sel) ' - please wait...']);
         end
         drawnow;
     end
@@ -3165,6 +3219,7 @@ function computePSCCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
         studio.datasets.(keyName) = newData;
@@ -3275,6 +3330,7 @@ function filteringCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
         studio.datasets.(keyName) = newData;
@@ -3286,8 +3342,16 @@ function filteringCallback(~,~)
             mkdir(preFolder);
         end
 
-        save(fullfile(preFolder,[fullName '.mat']), ...
-            'newData','-v7.3');
+        savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'filter');
+        newData.savedFile = savePath;
+        newData.lazyFile = savePath;
+        studio.datasets.(keyName) = newData;
+        displayNameFull = fullName;
+        preprocDisplayName = fullName;
+        save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+        addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -3599,7 +3663,8 @@ try, HUMoR_popup_polish_now(gcf); catch, end
     set(dlg,'Visible','on');
     drawnow;
     try, HUMoR_popup_autofit_apply(dlg); catch, end
-    waitfor(dlg);
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+waitfor(dlg);
 
     % ---------------------------------------------------------------------
     % Nested helpers
@@ -4710,6 +4775,7 @@ fcScaleFcSetupFonts(dlg);
 
 set(dlg,'Visible','on');
 try, HUMoR_popup_autofit_apply(dlg); catch, end
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
 waitfor(dlg);
 
     % =====================================================

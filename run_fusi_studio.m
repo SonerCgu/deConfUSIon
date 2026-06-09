@@ -33,12 +33,26 @@ try
         if numel(nm) >= 8 && strcmp(nm(1:8),'_backup_')
             isBadPath = true;
         end
-        if strcmp(nm,'_legacy_unused') || strcmp(nm,'_health_reports') || strcmp(nm,'_archive_review')
+        if strcmp(nm,'_legacy_unused') || strcmp(nm,'_health_reports') || strcmp(nm,'_archive_review') || strcmp(nm,'_patch_backups') || strcmp(nm,'_legacy_HUMOR_helpers')
             isBadPath = true;
         end
         if isBadPath
             pp = fullfile(root,nm);
-            try, rmpath(genpath(pp)); catch, end
+            try
+    gp = genpath(pp);
+    if ~isempty(gp)
+        gpParts = regexp(gp,pathsep,'split');
+        curPath = [path pathsep];
+        for ip = 1:numel(gpParts)
+            onePath = gpParts{ip};
+            if isempty(onePath), continue; end
+            if ~isempty(strfind(curPath,[onePath pathsep]))
+                try, rmpath(onePath); catch, end
+            end
+        end
+    end
+catch
+end
         end
     end
 catch

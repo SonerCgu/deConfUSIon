@@ -1506,6 +1506,461 @@ catch ME_last_layout
 end
 % FC_LAST_USEWIN_HEATMAP_LAYOUT_20260512_END
 
+% HUMOR_FC_BOX4_SYMMETRIC_FINAL_20260527
+try
+    % Keep lower control panels balanced.
+    try, set(pROI, 'Position', [0.015 0.400 0.970 0.200]); catch, end
+    try, set(pSave,'Position', [0.015 0.020 0.970 0.360]); catch, end
+
+    % Box 3: prevent Prev/Next/Segmentation row from crowding the next panel.
+    try, set(findobj(pROI,'String','Load Seg MAT'),'Position',[0.020 0.130 0.270 0.150]); catch, end
+    try, set(btnComparePrev,'Position',[0.315 0.130 0.145 0.150]); catch, end
+    try, set(btnCompareNext,'Position',[0.475 0.130 0.145 0.150]); catch, end
+    try, set(findobj(pROI,'String','Export CSV'),'Position',[0.760 0.130 0.200 0.150]); catch, end
+
+    % Box 4 row 1: color + seed z-limit.
+    try, set(findobj(pSave,'Style','text','String','Color'),'Position',[0.050 0.790 0.095 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(ddCmapGlobal,'Parent',pSave,'Position',[0.150 0.770 0.350 0.105],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','text','String','Seed z-limit'),'Position',[0.540 0.790 0.180 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(edSeedCLim,'Parent',pSave,'Position',[0.735 0.770 0.110 0.105],'FontSize',9); catch, end
+
+    % Box 4 row 2: checkboxes.
+    try, set(cbShowLR,'Parent',pSave,'Position',[0.050 0.610 0.210 0.095],'FontSize',9); catch, end
+    try, set(cbSliceRegionOnly,'Parent',pSave,'Position',[0.335 0.610 0.240 0.095],'FontSize',9); catch, end
+
+    % Box 4 row 3: regions, labels, pick/all.
+    try, set(findobj(pSave,'Style','text','String','Regions'),'Position',[0.050 0.445 0.100 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(ddRegionMode,'Parent',pSave,'Position',[0.150 0.420 0.390 0.105],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','text','String','Labels'),'Position',[0.585 0.445 0.085 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(findobj(pSave,'Tag','FC_MatrixTickMode'),'Parent',pSave,'Position',[0.675 0.420 0.165 0.105],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','Pick'),'Position',[0.855 0.420 0.060 0.105],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','All'),'Position',[0.925 0.420 0.050 0.105],'FontSize',8); catch, end
+
+    % Box 4 row 4: window row. No overlaps.
+    try, set(findobj(fig,'Style','text','String','Window'),'Parent',pSave,'Position',[0.030 0.250 0.085 0.065],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(ddEpochMode,'Parent',pSave,'Position',[0.120 0.220 0.160 0.100],'FontSize',8); catch, end
+    try, set(findobj(fig,'Style','text','String','Start'),'Parent',pSave,'Position',[0.300 0.250 0.055 0.065],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edInjStart,'Parent',pSave,'Position',[0.360 0.215 0.070 0.105],'FontSize',8); catch, end
+    try, set(findobj(fig,'Style','text','String','End'),'Parent',pSave,'Position',[0.450 0.250 0.050 0.065],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edInjEnd,'Parent',pSave,'Position',[0.505 0.215 0.070 0.105],'FontSize',8); catch, end
+    try, set(findobj(fig,'Style','text','String','Win'),'Parent',pSave,'Position',[0.600 0.250 0.045 0.065],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edEpochWin,'Parent',pSave,'Position',[0.650 0.215 0.065 0.105],'FontSize',8); catch, end
+    try, set(findobj(pSave,'String','Apply win'),'String','Apply'); catch, end
+    try, set(findobj(pSave,'String','Apply window'),'String','Apply'); catch, end
+    try
+        hApply = findobj(pSave,'Style','pushbutton','String','Apply');
+        if ~isempty(hApply)
+            try, set(hApply(2:end),'Visible','off'); catch, end
+            set(hApply(1),'Visible','on','Enable','on','Position',[0.790 0.235 0.165 0.095], ...
+                'BackgroundColor',C.blue,'ForegroundColor','w','FontSize',9,'FontWeight','bold','Callback',@onEpochApply);
+        end
+    catch
+    end
+    try, set(findobj(pSave,'String','Use win'),'Parent',pSave,'Position',[0.805 0.160 0.150 0.060],'FontSize',8); catch, end
+
+    % Bottom row: constant gaps.
+    try, set(findobj(pSave,'String','Export GA'),'Position',[0.020 0.035 0.150 0.090],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Reset view'),'String','Reset'); catch, end
+    try, set(findobj(pSave,'String','Reset'),'Position',[0.185 0.035 0.130 0.090],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Region key'),'Position',[0.330 0.035 0.160 0.090],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Save'),'Position',[0.510 0.035 0.120 0.090],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Help'),'Position',[0.650 0.035 0.120 0.090],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Close'),'Position',[0.790 0.035 0.165 0.090],'FontSize',9); catch, end
+catch ME_box4_sym
+    try, fprintf('FC Box 4 final layout warning: %s\n',ME_box4_sym.message); catch, end
+end
+% HUMOR_FC_BOX4_SYMMETRIC_FINAL_20260527_END
+% HUMOR_FC_FINAL_LEFT_LAYOUT_20260527
+try
+    % Region panel slightly smaller; Display/Save gets enough height.
+    try, set(pROI, 'Position', [0.015 0.410 0.970 0.185]); catch, end
+    try, set(pSave,'Position', [0.015 0.020 0.970 0.375]); catch, end
+
+    % Box 3: put Prev/Next in top-right, away from lower panel.
+    try, set(findobj(pROI,'String','ROI current'),'Position',[0.020 0.730 0.220 0.145]); catch, end
+    try, set(findobj(pROI,'String','ROI all'),'Position',[0.260 0.730 0.190 0.145]); catch, end
+    try, set(findobj(pROI,'Style','text','String','Matrix value'),'Position',[0.480 0.765 0.155 0.080]); catch, end
+    try, set(ddROISpace,'Position',[0.630 0.735 0.205 0.105]); catch, end
+    try, set(findobj(pROI,'Style','text','String','|r| thr'),'Position',[0.850 0.765 0.070 0.080]); catch, end
+    try, set(edROIThr,'Position',[0.915 0.735 0.060 0.105]); catch, end
+    try, set(findobj(pROI,'Style','text','String','Compare ROI'),'Position',[0.020 0.500 0.165 0.085]); catch, end
+    try, set(ddCompareROI,'Position',[0.185 0.475 0.400 0.105]); catch, end
+    try, set(findobj(pROI,'String','Compare'),'Position',[0.610 0.475 0.170 0.115]); catch, end
+    try, set(findobj(pROI,'Style','text','String','Top'),'Position',[0.805 0.500 0.050 0.085]); catch, end
+    try, set(edTopN,'Position',[0.860 0.475 0.065 0.105]); catch, end
+    try, set(btnComparePrev,'Position',[0.670 0.115 0.130 0.125]); catch, end
+    try, set(btnCompareNext,'Position',[0.815 0.115 0.130 0.125]); catch, end
+    try, set(txtComparePage,'Position',[0.670 0.020 0.275 0.080]); catch, end
+    try, set(findobj(pROI,'String','Load Seg MAT'),'Position',[0.020 0.105 0.260 0.135]); catch, end
+    try, set(findobj(pROI,'String','Export CSV'),'Position',[0.430 0.105 0.190 0.135]); catch, end
+
+    % Hide display controls moved to Seed Map tab.
+    try, set(findobj(pSave,'Style','text','String','Overlay'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Underlay style'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Gamma'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Sharp'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Overlay opacity'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Z'),'Visible','off'); catch, end
+
+    % Box 4 row 1.
+    try, set(findobj(pSave,'Style','text','String','Color'),'Position',[0.050 0.790 0.090 0.070],'HorizontalAlignment','left','Visible','on'); catch, end
+    try, set(ddCmapGlobal,'Parent',pSave,'Position',[0.145 0.765 0.355 0.110],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','text','String','Seed z-limit'),'Position',[0.540 0.790 0.180 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(edSeedCLim,'Parent',pSave,'Position',[0.730 0.765 0.115 0.110],'FontSize',9); catch, end
+
+    % Box 4 row 2.
+    try, set(cbShowLR,'Parent',pSave,'Position',[0.050 0.615 0.210 0.095],'FontSize',9); catch, end
+    try, set(cbSliceRegionOnly,'Parent',pSave,'Position',[0.330 0.615 0.250 0.095],'FontSize',9); catch, end
+
+    % Box 4 row 3.
+    try, set(findobj(pSave,'Style','text','String','Regions'),'Position',[0.050 0.455 0.095 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(ddRegionMode,'Parent',pSave,'Position',[0.145 0.430 0.390 0.105],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','text','String','Labels'),'Position',[0.575 0.455 0.080 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(findobj(pSave,'Tag','FC_MatrixTickMode'),'Parent',pSave,'Position',[0.655 0.430 0.170 0.105],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','Pick'),'Position',[0.845 0.430 0.060 0.105],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','All'),'Position',[0.920 0.430 0.055 0.105],'FontSize',8); catch, end
+
+    % Box 4 row 4: window row, no overlaps.
+    try, set(findobj(pSave,'Style','text','String','Window'),'Position',[0.025 0.245 0.080 0.060],'HorizontalAlignment','left','FontSize',8); catch, end
+    try, set(ddEpochMode,'Parent',pSave,'Position',[0.105 0.215 0.180 0.095],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','text','String','Start'),'Position',[0.305 0.245 0.055 0.060],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edInjStart,'Parent',pSave,'Position',[0.365 0.215 0.070 0.095],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','text','String','End'),'Position',[0.455 0.245 0.050 0.060],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edInjEnd,'Parent',pSave,'Position',[0.510 0.215 0.070 0.095],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','text','String','Win'),'Position',[0.600 0.245 0.045 0.060],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edEpochWin,'Parent',pSave,'Position',[0.650 0.215 0.070 0.095],'FontSize',8); catch, end
+    try, set(findobj(pSave,'String','Apply win'),'String','Apply'); catch, end
+    try, set(findobj(pSave,'String','Apply window'),'String','Apply'); catch, end
+    try
+        hApply = findobj(pSave,'Style','pushbutton','String','Apply');
+        if ~isempty(hApply)
+            try, set(hApply(2:end),'Visible','off'); catch, end
+            set(hApply(1),'Visible','on','Parent',pSave,'Position',[0.760 0.220 0.190 0.095],'FontSize',9,'FontWeight','bold');
+        end
+    catch
+    end
+    try, set(findobj(pSave,'String','Use win'),'Parent',pSave,'Position',[0.775 0.150 0.170 0.060],'FontSize',8); catch, end
+
+    % Bottom buttons: equal gaps.
+    try, set(findobj(pSave,'String','Export GA'),'Position',[0.020 0.035 0.150 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Reset view'),'String','Reset'); catch, end
+    try, set(findobj(pSave,'String','Reset'),'Position',[0.185 0.035 0.130 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Region key'),'Position',[0.330 0.035 0.165 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Save'),'Position',[0.515 0.035 0.115 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Help'),'Position',[0.650 0.035 0.115 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Close'),'Position',[0.785 0.035 0.165 0.095],'FontSize',9); catch, end
+catch ME_final_left
+    try, fprintf('FC final left layout warning: %s\n',ME_final_left.message); catch, end
+end
+% HUMOR_FC_FINAL_LEFT_LAYOUT_20260527_END
+% HUMOR_FC_POLISH_BOX4_20260527
+try
+    try, set(pROI, 'Position', [0.015 0.410 0.970 0.185]); catch, end
+    try, set(pSave,'Position', [0.015 0.020 0.970 0.375]); catch, end
+
+    % Region panel: Prev/Next top-right, no overlap with Display/Save.
+    try, set(findobj(pROI,'String','ROI current'),'Position',[0.020 0.730 0.220 0.145]); catch, end
+    try, set(findobj(pROI,'String','ROI all'),'Position',[0.260 0.730 0.190 0.145]); catch, end
+    try, set(ddROISpace,'Position',[0.630 0.735 0.205 0.105]); catch, end
+    try, set(edROIThr,'Position',[0.915 0.735 0.060 0.105]); catch, end
+    try, set(findobj(pROI,'Style','text','String','Compare ROI'),'Position',[0.020 0.500 0.165 0.085]); catch, end
+    try, set(ddCompareROI,'Position',[0.185 0.475 0.400 0.105]); catch, end
+    try, set(findobj(pROI,'String','Compare'),'Position',[0.610 0.475 0.170 0.115]); catch, end
+    try, set(edTopN,'Position',[0.860 0.475 0.065 0.105]); catch, end
+    try, set(btnComparePrev,'Position',[0.670 0.115 0.130 0.125]); catch, end
+    try, set(btnCompareNext,'Position',[0.815 0.115 0.130 0.125]); catch, end
+    try, set(findobj(pROI,'String','Load Seg MAT'),'Position',[0.020 0.105 0.260 0.135]); catch, end
+    try, set(findobj(pROI,'String','Export CSV'),'Position',[0.430 0.105 0.190 0.135]); catch, end
+
+    % Hide controls moved to Seed Map display panel.
+    try, set(findobj(pSave,'Style','text','String','Overlay'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Underlay style'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Gamma'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Sharp'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Overlay opacity'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Z'),'Visible','off'); catch, end
+
+    % Display/Save row 1.
+    try, set(findobj(pSave,'Style','text','String','Color'),'Position',[0.050 0.790 0.090 0.070],'HorizontalAlignment','left','Visible','on'); catch, end
+    try, set(ddCmapGlobal,'Parent',pSave,'Position',[0.145 0.765 0.355 0.110],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','text','String','Seed z-limit'),'Position',[0.540 0.790 0.180 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(edSeedCLim,'Parent',pSave,'Position',[0.730 0.765 0.115 0.110],'FontSize',9); catch, end
+
+    % Display/Save row 2.
+    try, set(cbShowLR,'Parent',pSave,'Position',[0.050 0.615 0.210 0.095],'FontSize',9); catch, end
+    try, set(cbSliceRegionOnly,'Parent',pSave,'Position',[0.330 0.615 0.250 0.095],'FontSize',9); catch, end
+
+    % Display/Save row 3.
+    try, set(findobj(pSave,'Style','text','String','Regions'),'Position',[0.050 0.455 0.095 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(ddRegionMode,'Parent',pSave,'Position',[0.145 0.430 0.390 0.105],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','text','String','Labels'),'Position',[0.575 0.455 0.080 0.070],'HorizontalAlignment','left'); catch, end
+    try, set(findobj(pSave,'Tag','FC_MatrixTickMode'),'Parent',pSave,'Position',[0.655 0.430 0.170 0.105],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','Pick'),'Position',[0.845 0.430 0.060 0.105],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','All'),'Position',[0.920 0.430 0.055 0.105],'FontSize',8); catch, end
+
+    % Display/Save window row moved upward; bottom buttons separated.
+    try, set(findobj(pSave,'Style','text','String','Window'),'Position',[0.025 0.280 0.080 0.060],'HorizontalAlignment','left','FontSize',8); catch, end
+    try, set(ddEpochMode,'Parent',pSave,'Position',[0.105 0.255 0.180 0.095],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','text','String','Start'),'Position',[0.305 0.280 0.055 0.060],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edInjStart,'Parent',pSave,'Position',[0.365 0.255 0.070 0.095],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','text','String','End'),'Position',[0.455 0.280 0.050 0.060],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edInjEnd,'Parent',pSave,'Position',[0.510 0.255 0.070 0.095],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','text','String','Win'),'Position',[0.600 0.280 0.045 0.060],'HorizontalAlignment','center','FontSize',8); catch, end
+    try, set(edEpochWin,'Parent',pSave,'Position',[0.650 0.255 0.070 0.095],'FontSize',8); catch, end
+    try, set(findobj(pSave,'String','Apply win'),'String','Apply'); catch, end
+    try, set(findobj(pSave,'String','Apply window'),'String','Apply'); catch, end
+    try
+        hApply = findobj(pSave,'Style','pushbutton','String','Apply');
+        if ~isempty(hApply)
+            try, set(hApply(2:end),'Visible','off'); catch, end
+            set(hApply(1),'Visible','on','Parent',pSave,'Position',[0.760 0.260 0.190 0.095],'FontSize',9,'FontWeight','bold');
+        end
+    catch
+    end
+    try, set(findobj(pSave,'String','Use win'),'Parent',pSave,'Position',[0.775 0.195 0.170 0.055],'FontSize',8); catch, end
+
+    % Bottom buttons, clean row below window controls.
+    try, set(findobj(pSave,'String','Export GA'),'Position',[0.020 0.030 0.150 0.100],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Reset view'),'String','Reset'); catch, end
+    try, set(findobj(pSave,'String','Reset'),'Position',[0.185 0.030 0.130 0.100],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Region key'),'Position',[0.330 0.030 0.165 0.100],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Save'),'Position',[0.515 0.030 0.115 0.100],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Help'),'Position',[0.650 0.030 0.115 0.100],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Close'),'Position',[0.785 0.030 0.165 0.100],'FontSize',9); catch, end
+catch ME_box4
+    try, fprintf('FC Box 4 polish warning: %s\n',ME_box4.message); catch, end
+end
+% HUMOR_FC_POLISH_BOX4_20260527_END
+% HUMOR_FC_BOX4_CLEAN_FINAL_20260527
+try
+    % Give Display/Save enough vertical room and keep Box 3 compact.
+    try, set(pROI, 'Position', [0.015 0.430 0.970 0.165]); catch, end
+    try, set(pSave,'Position', [0.015 0.015 0.970 0.400]); catch, end
+
+    % Box 3: Prev/Next top-right row, away from Box 4.
+    try, set(findobj(pROI,'String','ROI current'),'Position',[0.020 0.725 0.220 0.165]); catch, end
+    try, set(findobj(pROI,'String','ROI all'),'Position',[0.260 0.725 0.190 0.165]); catch, end
+    try, set(ddROISpace,'Position',[0.630 0.745 0.205 0.115]); catch, end
+    try, set(edROIThr,'Position',[0.915 0.745 0.060 0.115]); catch, end
+    try, set(findobj(pROI,'Style','text','String','Compare ROI'),'Position',[0.020 0.485 0.165 0.090]); catch, end
+    try, set(ddCompareROI,'Position',[0.185 0.460 0.400 0.115]); catch, end
+    try, set(findobj(pROI,'String','Compare'),'Position',[0.610 0.460 0.170 0.130]); catch, end
+    try, set(edTopN,'Position',[0.860 0.460 0.065 0.115]); catch, end
+    try, set(findobj(pROI,'String','Load Seg MAT'),'Position',[0.020 0.095 0.260 0.145]); catch, end
+    try, set(findobj(pROI,'String','Export CSV'),'Position',[0.430 0.095 0.190 0.145]); catch, end
+    try, set(btnComparePrev,'Position',[0.670 0.095 0.130 0.145]); catch, end
+    try, set(btnCompareNext,'Position',[0.815 0.095 0.130 0.145]); catch, end
+
+    % Hide duplicate display controls that were moved to Seed Map tab.
+    try, set(findobj(pSave,'Style','text','String','Overlay'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Underlay style'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Gamma'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Sharp'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Overlay opacity'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Z'),'Visible','off'); catch, end
+
+    % Box 4 row 1: Color and z-limit.
+    try, set(findobj(pSave,'Style','text','String','Color'),'Position',[0.045 0.815 0.090 0.060],'HorizontalAlignment','left','Visible','on'); catch, end
+    try, set(ddCmapGlobal,'Parent',pSave,'Position',[0.140 0.785 0.365 0.100],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','text','String','Seed z-limit'),'Position',[0.550 0.815 0.175 0.060],'HorizontalAlignment','left'); catch, end
+    try, set(edSeedCLim,'Parent',pSave,'Position',[0.730 0.785 0.115 0.100],'FontSize',9); catch, end
+
+    % Box 4 row 2: checkboxes.
+    try, set(cbShowLR,'Parent',pSave,'Position',[0.045 0.650 0.220 0.080],'FontSize',9); catch, end
+    try, set(cbSliceRegionOnly,'Parent',pSave,'Position',[0.330 0.650 0.260 0.080],'FontSize',9); catch, end
+
+    % Box 4 row 3: regions and labels.
+    try, set(findobj(pSave,'Style','text','String','Regions'),'Position',[0.045 0.505 0.095 0.060],'HorizontalAlignment','left'); catch, end
+    try, set(ddRegionMode,'Parent',pSave,'Position',[0.140 0.475 0.395 0.100],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','text','String','Labels'),'Position',[0.575 0.505 0.080 0.060],'HorizontalAlignment','left'); catch, end
+    try, set(findobj(pSave,'Tag','FC_MatrixTickMode'),'Parent',pSave,'Position',[0.655 0.475 0.175 0.100],'FontSize',9); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','Pick'),'Position',[0.850 0.475 0.060 0.100],'FontSize',8); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','All'),'Position',[0.920 0.475 0.055 0.100],'FontSize',8); catch, end
+
+    % Box 4 row 4: window controls, clearly above bottom buttons.
+    try, set(findobj(pSave,'Style','text','String','Window'),'Position',[0.045 0.335 0.085 0.055],'HorizontalAlignment','left','FontSize',8.5); catch, end
+    try, set(ddEpochMode,'Parent',pSave,'Position',[0.140 0.305 0.170 0.095],'FontSize',8.5); catch, end
+    try, set(findobj(pSave,'Style','text','String','Start'),'Position',[0.340 0.335 0.055 0.055],'HorizontalAlignment','center','FontSize',8.5); catch, end
+    try, set(edInjStart,'Parent',pSave,'Position',[0.400 0.305 0.070 0.095],'FontSize',8.5); catch, end
+    try, set(findobj(pSave,'Style','text','String','End'),'Position',[0.495 0.335 0.050 0.055],'HorizontalAlignment','center','FontSize',8.5); catch, end
+    try, set(edInjEnd,'Parent',pSave,'Position',[0.550 0.305 0.070 0.095],'FontSize',8.5); catch, end
+    try, set(findobj(pSave,'Style','text','String','Win'),'Position',[0.645 0.335 0.045 0.055],'HorizontalAlignment','center','FontSize',8.5); catch, end
+    try, set(edEpochWin,'Parent',pSave,'Position',[0.695 0.305 0.070 0.095],'FontSize',8.5); catch, end
+    try, set(findobj(pSave,'String','Apply win'),'String','Apply'); catch, end
+    try, set(findobj(pSave,'String','Apply window'),'String','Apply'); catch, end
+    try
+        hApply = findobj(pSave,'Style','pushbutton','String','Apply');
+        if ~isempty(hApply)
+            try, set(hApply(2:end),'Visible','off'); catch, end
+            set(hApply(1),'Visible','on','Parent',pSave,'Position',[0.805 0.315 0.160 0.085],'FontSize',9,'FontWeight','bold');
+        end
+    catch
+    end
+    try, set(findobj(pSave,'String','Use win'),'Parent',pSave,'Position',[0.815 0.250 0.150 0.055],'FontSize',8.5); catch, end
+
+    % Bottom button row: separated from window controls.
+    try, set(findobj(pSave,'String','Export GA'),'Position',[0.020 0.040 0.150 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Reset view'),'String','Reset'); catch, end
+    try, set(findobj(pSave,'String','Reset'),'Position',[0.185 0.040 0.130 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Region key'),'Position',[0.330 0.040 0.165 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Save'),'Position',[0.515 0.040 0.115 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Help'),'Position',[0.650 0.040 0.115 0.095],'FontSize',9); catch, end
+    try, set(findobj(pSave,'String','Close'),'Position',[0.785 0.040 0.165 0.095],'FontSize',9); catch, end
+catch ME_box4_clean
+    try, fprintf('FC Box 4 clean-final warning: %s\n',ME_box4_clean.message); catch, end
+end
+% HUMOR_FC_BOX4_CLEAN_FINAL_20260527_END
+% HUMOR_FC_MICRO_LAYOUT_FINAL_20260527
+try
+    %% ---------------- Seed Map display panel: no wrapped/cut labels ----------------
+    try
+        pSeedDisplayFinal = [];
+        pp = findall(pSeedView,'Type','uipanel');
+        for ip = 1:numel(pp)
+            ttl = '';
+            try, ttl = lower(char(get(pp(ip),'Title'))); catch, end
+            if ~isempty(strfind(ttl,'display controls')) || ~isempty(strfind(ttl,'seed-map display'))
+                pSeedDisplayFinal = pp(ip);
+                break;
+            end
+        end
+
+        if isempty(pSeedDisplayFinal) || ~ishandle(pSeedDisplayFinal)
+            pSeedDisplayFinal = uipanel('Parent',pSeedView,'Units','normalized', ...
+                'Position',[0.595 0.020 0.400 0.360], ...
+                'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+                'Title','Display controls', ...
+                'FontName',C.font,'FontWeight','bold','FontSize',11);
+        end
+
+        set(pSeedDisplayFinal,'Parent',pSeedView,'Units','normalized', ...
+            'Position',[0.595 0.020 0.400 0.360], ...
+            'Title','Display controls','FontName',C.font,'FontWeight','bold','FontSize',11);
+
+        try, delete(findall(pSeedDisplayFinal,'Type','uicontrol','Style','text')); catch, end
+
+        % Row 1: Overlay / Z / Alpha. Labels are wide enough.
+        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
+            'Position',[0.030 0.735 0.145 0.145], ...
+            'String','Overlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+        set(ddOverlay,'Parent',pSeedDisplayFinal,'Units','normalized', ...
+            'Position',[0.175 0.695 0.355 0.190],'FontSize',8.2);
+
+        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
+            'Position',[0.560 0.735 0.045 0.145], ...
+            'String','Z','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+        set(edSliceBox,'Parent',pSeedDisplayFinal,'Units','normalized', ...
+            'Position',[0.600 0.690 0.075 0.195],'FontSize',8.2);
+
+        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
+            'Position',[0.700 0.735 0.120 0.145], ...
+            'String','Alpha','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+        set(edSeedAlpha,'Parent',pSeedDisplayFinal,'Units','normalized', ...
+            'Position',[0.820 0.690 0.110 0.195],'FontSize',8.2);
+
+        % Row 2: Underlay on its own wide row.
+        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
+            'Position',[0.030 0.470 0.170 0.135], ...
+            'String','Underlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+        set(ddUnderlayStyle,'Parent',pSeedDisplayFinal,'Units','normalized', ...
+            'Position',[0.205 0.430 0.685 0.180],'FontSize',8.2);
+
+        % Row 3: Gamma and Sharpness. Full words, no mid-word wrapping.
+        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
+            'Position',[0.030 0.195 0.140 0.125], ...
+            'String','Gamma','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+        set(edUGamma,'Parent',pSeedDisplayFinal,'Units','normalized', ...
+            'Position',[0.170 0.155 0.125 0.180],'FontSize',8.2);
+
+        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
+            'Position',[0.455 0.195 0.210 0.125], ...
+            'String','Sharpness','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+        set(edUSharp,'Parent',pSeedDisplayFinal,'Units','normalized', ...
+            'Position',[0.675 0.155 0.125 0.180],'FontSize',8.2);
+    catch ME_seed_micro
+        try, fprintf('FC seed panel micro-layout warning: %s\n',ME_seed_micro.message); catch, end
+    end
+
+    %% ---------------- Box 4: remove duplicate Pick/All and separate Apply/Use win ----------------
+    try
+        % Keep Pick/All only beside Labels; hide any old duplicates below Window.
+        hPick = findobj(pSave,'Style','pushbutton','String','Pick');
+        if ~isempty(hPick)
+            try, set(hPick,'Visible','off'); catch, end
+            set(hPick(1),'Parent',pSave,'Visible','on', ...
+                'Position',[0.850 0.475 0.060 0.100],'FontSize',8,'FontWeight','bold');
+        end
+        hAll = findobj(pSave,'Style','pushbutton','String','All');
+        if ~isempty(hAll)
+            try, set(hAll,'Visible','off'); catch, end
+            set(hAll(1),'Parent',pSave,'Visible','on', ...
+                'Position',[0.920 0.475 0.055 0.100],'FontSize',8,'FontWeight','bold');
+        end
+
+        % Clean region/label row so Pick/All no longer fall below Window.
+        try, set(findobj(pSave,'Style','text','String','Regions'), ...
+            'Position',[0.045 0.505 0.095 0.060],'HorizontalAlignment','left'); catch, end
+        try, set(ddRegionMode,'Parent',pSave, ...
+            'Position',[0.140 0.475 0.395 0.100],'FontSize',9); catch, end
+        try, set(findobj(pSave,'Style','text','String','Labels'), ...
+            'Position',[0.575 0.505 0.080 0.060],'HorizontalAlignment','left'); catch, end
+        try, set(findobj(pSave,'Tag','FC_MatrixTickMode'),'Parent',pSave, ...
+            'Position',[0.655 0.475 0.175 0.100],'FontSize',9); catch, end
+
+        % Move Window row upward and keep bottom button row separate.
+        try, set(findobj(pSave,'Style','text','String','Window'), ...
+            'Position',[0.045 0.335 0.085 0.055],'HorizontalAlignment','left','FontSize',8.5); catch, end
+        try, set(ddEpochMode,'Parent',pSave, ...
+            'Position',[0.140 0.305 0.170 0.095],'FontSize',8.5); catch, end
+        try, set(findobj(pSave,'Style','text','String','Start'), ...
+            'Position',[0.340 0.335 0.055 0.055],'HorizontalAlignment','center','FontSize',8.5); catch, end
+        try, set(edInjStart,'Parent',pSave, ...
+            'Position',[0.400 0.305 0.070 0.095],'FontSize',8.5); catch, end
+        try, set(findobj(pSave,'Style','text','String','End'), ...
+            'Position',[0.495 0.335 0.050 0.055],'HorizontalAlignment','center','FontSize',8.5); catch, end
+        try, set(edInjEnd,'Parent',pSave, ...
+            'Position',[0.550 0.305 0.070 0.095],'FontSize',8.5); catch, end
+        try, set(findobj(pSave,'Style','text','String','Win'), ...
+            'Position',[0.645 0.335 0.045 0.055],'HorizontalAlignment','center','FontSize',8.5); catch, end
+        try, set(edEpochWin,'Parent',pSave, ...
+            'Position',[0.695 0.305 0.070 0.095],'FontSize',8.5); catch, end
+
+        % Apply button and Use win checkbox: separated vertically.
+        try, set(findobj(pSave,'String','Apply win'),'String','Apply'); catch, end
+        try, set(findobj(pSave,'String','Apply window'),'String','Apply'); catch, end
+        hApply = findobj(pSave,'Style','pushbutton','String','Apply');
+        if ~isempty(hApply)
+            try, set(hApply(2:end),'Visible','off'); catch, end
+            set(hApply(1),'Parent',pSave,'Visible','on', ...
+                'Position',[0.805 0.315 0.160 0.085],'FontSize',9,'FontWeight','bold');
+        end
+        hUse = findobj(pSave,'String','Use win');
+        if ~isempty(hUse)
+            set(hUse(1),'Parent',pSave,'Visible','on', ...
+                'Position',[0.805 0.235 0.160 0.060],'FontSize',8.5);
+        end
+
+        % Bottom row.
+        try, set(findobj(pSave,'String','Export GA'),'Position',[0.020 0.040 0.150 0.095],'FontSize',9); catch, end
+        try, set(findobj(pSave,'String','Reset view'),'String','Reset'); catch, end
+        try, set(findobj(pSave,'String','Reset'),'Position',[0.185 0.040 0.130 0.095],'FontSize',9); catch, end
+        try, set(findobj(pSave,'String','Region key'),'Position',[0.330 0.040 0.165 0.095],'FontSize',9); catch, end
+        try, set(findobj(pSave,'String','Save'),'Position',[0.515 0.040 0.115 0.095],'FontSize',9); catch, end
+        try, set(findobj(pSave,'String','Help'),'Position',[0.650 0.040 0.115 0.095],'FontSize',9); catch, end
+        try, set(findobj(pSave,'String','Close'),'Position',[0.785 0.040 0.165 0.095],'FontSize',9); catch, end
+    catch ME_box_micro
+        try, fprintf('FC Box 4 micro-layout warning: %s\n',ME_box_micro.message); catch, end
+    end
+catch ME_micro_final
+    try, fprintf('FC final micro-layout warning: %s\n',ME_micro_final.message); catch, end
+end
+% HUMOR_FC_MICRO_LAYOUT_FINAL_20260527_END
 tabNames = {'Seed Map','ROI Heatmap','Compare ROI','Pair ROI','Graph'};
 tabKeys  = {'seed','heatmap','compare','pair','graph'};
 tabBtns = zeros(numel(tabNames),1);
@@ -1564,6 +2019,312 @@ axSeedTS = axes('Parent',pSeedView,'Units','normalized','Position',[0.665 0.470 
     'Color',C.bgAx,'XColor',C.dim,'YColor',C.dim);
 axSeedHist = axes('Parent',pSeedView,'Units','normalized','Position',[0.665 0.160 0.285 0.190], ...
     'Color',C.bgAx,'XColor',C.dim,'YColor',C.dim);
+% HUMOR_FC_SEEDMAP_DISPLAY_CONTROLS_FIXED_20260527
+try
+    try, set(axSeedTS,'Position',[0.665 0.515 0.285 0.150]); catch, end
+    try, set(axSeedHist,'Position',[0.665 0.280 0.285 0.165]); catch, end
+
+    pSeedDisplayControls = uipanel('Parent',pSeedView,'Units','normalized', ...
+        'Position',[0.635 0.025 0.345 0.205], ...
+        'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+        'Title','Display controls', ...
+        'FontName',C.font,'FontWeight','bold','FontSize',10);
+
+    try, set(findobj(pSave,'Style','text','String','Overlay'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Underlay style'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Gamma'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Sharp'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Overlay opacity'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Z'),'Visible','off'); catch, end
+
+    fc_label(pSeedDisplayControls,[0.025 0.650 0.125 0.220],'Overlay',C);
+    set(ddOverlay,'Parent',pSeedDisplayControls,'Position',[0.155 0.630 0.315 0.250],'FontSize',C.fsTiny);
+    fc_label(pSeedDisplayControls,[0.495 0.650 0.045 0.220],'Z',C);
+    set(edSliceBox,'Parent',pSeedDisplayControls,'Position',[0.540 0.630 0.105 0.250],'FontSize',C.fsTiny);
+    fc_label(pSeedDisplayControls,[0.675 0.650 0.160 0.220],'Opacity',C);
+    set(edSeedAlpha,'Parent',pSeedDisplayControls,'Position',[0.845 0.630 0.125 0.250],'FontSize',C.fsTiny);
+
+    fc_label(pSeedDisplayControls,[0.025 0.250 0.190 0.220],'Underlay',C);
+    set(ddUnderlayStyle,'Parent',pSeedDisplayControls,'Position',[0.220 0.230 0.315 0.250],'FontSize',C.fsTiny);
+    fc_label(pSeedDisplayControls,[0.560 0.250 0.105 0.220],'Gamma',C);
+    set(edUGamma,'Parent',pSeedDisplayControls,'Position',[0.665 0.230 0.105 0.250],'FontSize',C.fsTiny);
+    fc_label(pSeedDisplayControls,[0.790 0.250 0.090 0.220],'Sharp',C);
+    set(edUSharp,'Parent',pSeedDisplayControls,'Position',[0.885 0.230 0.085 0.250],'FontSize',C.fsTiny);
+
+    try, set(findobj(pSave,'Style','text','String','Color'),'Position',[0.020 0.800 0.125 0.085],'Visible','on'); catch, end
+    try, set(ddCmapGlobal,'Position',[0.150 0.775 0.335 0.110]); catch, end
+    try, set(findobj(pSave,'Style','text','String','Seed z-limit'),'Position',[0.520 0.800 0.190 0.085]); catch, end
+    try, set(edSeedCLim,'Position',[0.730 0.775 0.110 0.110]); catch, end
+    try, set(cbShowLR,'Position',[0.020 0.620 0.260 0.100]); catch, end
+    try, set(cbSliceRegionOnly,'Position',[0.310 0.620 0.240 0.100]); catch, end
+
+    try, set(findobj(pSave,'Style','text','String','Regions'),'Position',[0.020 0.450 0.125 0.085]); catch, end
+    try, set(ddRegionMode,'Position',[0.150 0.425 0.390 0.110]); catch, end
+    try, set(findobj(pSave,'Style','text','String','Labels'),'Position',[0.575 0.450 0.105 0.085]); catch, end
+    try, set(findobj(pSave,'Tag','FC_MatrixTickMode'),'Position',[0.685 0.425 0.180 0.110]); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','Pick'),'Position',[0.020 0.245 0.130 0.105]); catch, end
+    try, set(findobj(pSave,'Style','pushbutton','String','All'),'Position',[0.170 0.245 0.110 0.105]); catch, end
+
+    try, set(findobj(pSave,'String','Reset view'),'String','Reset'); catch, end
+    try, set(findobj(pSave,'String','Export GA'),'Position',[0.020 0.040 0.140 0.095]); catch, end
+    try, set(findobj(pSave,'String','Reset'),'Position',[0.180 0.040 0.130 0.095]); catch, end
+    try, set(findobj(pSave,'String','Region key'),'Position',[0.330 0.040 0.160 0.095]); catch, end
+    try, set(findobj(pSave,'String','Save'),'Position',[0.510 0.040 0.110 0.095]); catch, end
+    try, set(findobj(pSave,'String','Help'),'Position',[0.640 0.040 0.110 0.095]); catch, end
+    try, set(findobj(pSave,'String','Close'),'Position',[0.770 0.040 0.180 0.095]); catch, end
+catch ME_fc_qol
+    try, fprintf('FC layout QoL warning: %s\n',ME_fc_qol.message); catch, end
+end
+% HUMOR_FC_SEEDMAP_DISPLAY_CONTROLS_FIXED_20260527_END
+% HUMOR_FC_SEED_DISPLAY_FINAL_20260527
+try
+    % Make room in the bottom-right of the Seed Map tab.
+    try, set(axSeedTS,'Position',[0.665 0.565 0.305 0.125]); catch, end
+    try, set(axSeedHist,'Position',[0.665 0.335 0.305 0.155]); catch, end
+
+    % Reuse old display panel if it already exists; otherwise create one.
+    pSeedDisplayControlsFinal = [];
+    try
+        pp = findall(pSeedView,'Type','uipanel');
+        for ip = 1:numel(pp)
+            ttl = '';
+            try, ttl = get(pp(ip),'Title'); catch, end
+            ttlLow = lower(char(ttl));
+            if ~isempty(strfind(ttlLow,'display controls')) || ~isempty(strfind(ttlLow,'seed-map display'))
+                pSeedDisplayControlsFinal = pp(ip);
+                break;
+            end
+        end
+    catch
+    end
+    if isempty(pSeedDisplayControlsFinal) || ~ishandle(pSeedDisplayControlsFinal)
+        pSeedDisplayControlsFinal = uipanel('Parent',pSeedView,'Units','normalized', ...
+            'Position',[0.625 0.030 0.365 0.250], ...
+            'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'Title','Display controls', ...
+            'FontName',C.font,'FontWeight','bold','FontSize',11);
+    end
+    set(pSeedDisplayControlsFinal,'Position',[0.625 0.030 0.365 0.250], ...
+        'Title','Display controls','FontName',C.font,'FontWeight','bold','FontSize',11);
+
+    % Delete only old text labels inside this small panel, then recreate clean labels.
+    try, delete(findall(pSeedDisplayControlsFinal,'Type','uicontrol','Style','text')); catch, end
+
+    try, set(findobj(pSave,'Style','text','String','Overlay'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Underlay style'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Gamma'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Sharp'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Overlay opacity'),'Visible','off'); catch, end
+    try, set(findobj(pSave,'Style','text','String','Z'),'Visible','off'); catch, end
+
+    uicontrol('Parent',pSeedDisplayControlsFinal,'Style','text','Units','normalized','Position',[0.030 0.690 0.130 0.180], ...
+        'String','Overlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(ddOverlay,'Parent',pSeedDisplayControlsFinal,'Position',[0.165 0.645 0.315 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayControlsFinal,'Style','text','Units','normalized','Position',[0.505 0.690 0.050 0.180], ...
+        'String','Z','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(edSliceBox,'Parent',pSeedDisplayControlsFinal,'Position',[0.555 0.645 0.105 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayControlsFinal,'Style','text','Units','normalized','Position',[0.685 0.690 0.140 0.180], ...
+        'String','Opacity','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(edSeedAlpha,'Parent',pSeedDisplayControlsFinal,'Position',[0.835 0.645 0.125 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayControlsFinal,'Style','text','Units','normalized','Position',[0.030 0.275 0.155 0.180], ...
+        'String','Underlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(ddUnderlayStyle,'Parent',pSeedDisplayControlsFinal,'Position',[0.195 0.230 0.335 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayControlsFinal,'Style','text','Units','normalized','Position',[0.560 0.275 0.105 0.180], ...
+        'String','Gamma','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(edUGamma,'Parent',pSeedDisplayControlsFinal,'Position',[0.665 0.230 0.105 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayControlsFinal,'Style','text','Units','normalized','Position',[0.790 0.275 0.080 0.180], ...
+        'String','Sharp','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(edUSharp,'Parent',pSeedDisplayControlsFinal,'Position',[0.875 0.230 0.085 0.230],'FontSize',9);
+catch ME_seed_final
+    try, fprintf('FC Seed Map display-control final layout warning: %s\n',ME_seed_final.message); catch, end
+end
+% HUMOR_FC_SEED_DISPLAY_FINAL_20260527_END
+% HUMOR_FC_FINAL_SEED_DISPLAY_PANEL_20260527
+try
+    % Right side: make room for a larger display-control panel.
+    try, set(axSeedCB,'Position',[0.655 0.800 0.320 0.040]); catch, end
+    try, set(axSeedTS,'Position',[0.655 0.585 0.320 0.125]); catch, end
+    try, set(axSeedHist,'Position',[0.655 0.385 0.320 0.130]); catch, end
+
+    pSeedDisplayFinal = [];
+    try
+        pp = findall(pSeedView,'Type','uipanel');
+        for ip = 1:numel(pp)
+            ttl = '';
+            try, ttl = char(get(pp(ip),'Title')); catch, end
+            ttlLow = lower(ttl);
+            if ~isempty(strfind(ttlLow,'display controls')) || ~isempty(strfind(ttlLow,'seed-map display'))
+                pSeedDisplayFinal = pp(ip);
+                break;
+            end
+        end
+    catch
+    end
+    if isempty(pSeedDisplayFinal) || ~ishandle(pSeedDisplayFinal)
+        pSeedDisplayFinal = uipanel('Parent',pSeedView,'Units','normalized', ...
+            'Position',[0.620 0.025 0.370 0.300], ...
+            'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'Title','Display controls', ...
+            'FontName',C.font,'FontWeight','bold','FontSize',11);
+    end
+    set(pSeedDisplayFinal,'Parent',pSeedView,'Units','normalized', ...
+        'Position',[0.620 0.025 0.370 0.300], ...
+        'Title','Display controls','FontName',C.font,'FontWeight','bold','FontSize',11);
+
+    try, delete(findall(pSeedDisplayFinal,'Type','uicontrol','Style','text')); catch, end
+
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.035 0.735 0.160 0.165], ...
+        'String','Overlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(ddOverlay,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.200 0.690 0.350 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.585 0.735 0.045 0.165], ...
+        'String','Z','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(edSliceBox,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.630 0.690 0.100 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.755 0.735 0.100 0.165], ...
+        'String','Alpha','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(edSeedAlpha,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.860 0.690 0.100 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.035 0.390 0.160 0.165], ...
+        'String','Underlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(ddUnderlayStyle,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.200 0.345 0.350 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.575 0.390 0.115 0.165], ...
+        'String','Gamma','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(edUGamma,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.695 0.345 0.105 0.230],'FontSize',9);
+
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.820 0.390 0.080 0.165], ...
+        'String','Sharp','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
+    set(edUSharp,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.900 0.345 0.060 0.230],'FontSize',9);
+
+catch ME_final_seed
+    try, fprintf('FC final Seed Map layout warning: %s\n',ME_final_seed.message); catch, end
+end
+% HUMOR_FC_FINAL_SEED_DISPLAY_PANEL_20260527_END
+% HUMOR_FC_POLISH_SEED_PANEL_20260527
+try
+    try, set(axSeedCB,'Position',[0.650 0.800 0.325 0.040]); catch, end
+    try, set(axSeedTS,'Position',[0.650 0.585 0.325 0.125]); catch, end
+    try, set(axSeedHist,'Position',[0.650 0.390 0.325 0.125]); catch, end
+
+    pSeedDisplayFinal = [];
+    try
+        pp = findall(pSeedView,'Type','uipanel');
+        for ip = 1:numel(pp)
+            ttl = '';
+            try, ttl = lower(char(get(pp(ip),'Title'))); catch, end
+            if ~isempty(strfind(ttl,'display controls')) || ~isempty(strfind(ttl,'seed-map display'))
+                pSeedDisplayFinal = pp(ip);
+                break;
+            end
+        end
+    catch
+    end
+    if isempty(pSeedDisplayFinal) || ~ishandle(pSeedDisplayFinal)
+        pSeedDisplayFinal = uipanel('Parent',pSeedView,'Units','normalized', ...
+            'Position',[0.610 0.025 0.385 0.330], ...
+            'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'Title','Display controls', ...
+            'FontName',C.font,'FontWeight','bold','FontSize',11);
+    end
+    set(pSeedDisplayFinal,'Parent',pSeedView,'Units','normalized', ...
+        'Position',[0.610 0.025 0.385 0.330], ...
+        'Title','Display controls','FontName',C.font,'FontWeight','bold','FontSize',11);
+
+    try, delete(findall(pSeedDisplayFinal,'Type','uicontrol','Style','text')); catch, end
+
+    % Row 1: overlay, z, alpha.
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.030 0.740 0.160 0.140], ...
+        'String','Overlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',9,'HorizontalAlignment','left');
+    set(ddOverlay,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.190 0.700 0.350 0.190],'FontSize',8.5);
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.570 0.740 0.045 0.140], ...
+        'String','Z','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',9,'HorizontalAlignment','left');
+    set(edSliceBox,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.615 0.695 0.080 0.195],'FontSize',8.5);
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.720 0.740 0.110 0.140], ...
+        'String','Alpha','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',9,'HorizontalAlignment','left');
+    set(edSeedAlpha,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.835 0.695 0.100 0.195],'FontSize',8.5);
+
+    % Row 2: underlay only, wide enough that label does not wrap.
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.030 0.440 0.180 0.140], ...
+        'String','Underlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',9,'HorizontalAlignment','left');
+    set(ddUnderlayStyle,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.220 0.400 0.580 0.190],'FontSize',8.5);
+
+    % Row 3: gamma and sharp, moved down to avoid wrapping.
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.030 0.145 0.130 0.140], ...
+        'String','Gamma','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',9,'HorizontalAlignment','left');
+    set(edUGamma,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.170 0.105 0.120 0.190],'FontSize',8.5);
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.380 0.145 0.110 0.140], ...
+        'String','Sharp','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',9,'HorizontalAlignment','left');
+    set(edUSharp,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.500 0.105 0.120 0.190],'FontSize',8.5);
+catch ME_seed
+    try, fprintf('FC seed panel polish warning: %s\n',ME_seed.message); catch, end
+end
+% HUMOR_FC_POLISH_SEED_PANEL_20260527_END
+% HUMOR_FC_SEED_PANEL_CLEAN_FINAL_20260527
+try
+    try, set(axSeedCB,'Position',[0.650 0.805 0.325 0.040]); catch, end
+    try, set(axSeedTS,'Position',[0.650 0.595 0.325 0.120]); catch, end
+    try, set(axSeedHist,'Position',[0.650 0.405 0.325 0.120]); catch, end
+
+    pSeedDisplayFinal = [];
+    try
+        pp = findall(pSeedView,'Type','uipanel');
+        for ip = 1:numel(pp)
+            ttl = '';
+            try, ttl = lower(char(get(pp(ip),'Title'))); catch, end
+            if ~isempty(strfind(ttl,'display controls')) || ~isempty(strfind(ttl,'seed-map display'))
+                pSeedDisplayFinal = pp(ip);
+                break;
+            end
+        end
+    catch
+    end
+    if isempty(pSeedDisplayFinal) || ~ishandle(pSeedDisplayFinal)
+        pSeedDisplayFinal = uipanel('Parent',pSeedView,'Units','normalized', ...
+            'Position',[0.605 0.025 0.390 0.345], ...
+            'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
+            'Title','Display controls', ...
+            'FontName',C.font,'FontWeight','bold','FontSize',11);
+    end
+    set(pSeedDisplayFinal,'Parent',pSeedView,'Units','normalized', ...
+        'Position',[0.605 0.025 0.390 0.345], ...
+        'Title','Display controls','FontName',C.font,'FontWeight','bold','FontSize',11);
+
+    try, delete(findall(pSeedDisplayFinal,'Type','uicontrol','Style','text')); catch, end
+
+    % Row 1: overlay, Z, alpha.
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.030 0.745 0.145 0.135], ...
+        'String','Overlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+    set(ddOverlay,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.175 0.705 0.360 0.180],'FontSize',8.2);
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.560 0.745 0.040 0.135], ...
+        'String','Z','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+    set(edSliceBox,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.600 0.700 0.075 0.185],'FontSize',8.2);
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.700 0.745 0.100 0.135], ...
+        'String','Alpha','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+    set(edSeedAlpha,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.805 0.700 0.105 0.185],'FontSize',8.2);
+
+    % Row 2: underlay only. Wide label + wide popup prevents wrapping.
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.030 0.460 0.175 0.135], ...
+        'String','Underlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+    set(ddUnderlayStyle,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.210 0.420 0.660 0.180],'FontSize',8.2);
+
+    % Row 3: gamma and sharp. Sharpness moved farther right.
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.030 0.170 0.135 0.135], ...
+        'String','Gamma','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+    set(edUGamma,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.170 0.130 0.120 0.180],'FontSize',8.2);
+    uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized','Position',[0.560 0.170 0.105 0.135], ...
+        'String','Sharp','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
+    set(edUSharp,'Parent',pSeedDisplayFinal,'Units','normalized','Position',[0.675 0.130 0.120 0.180],'FontSize',8.2);
+catch ME_seed_clean
+    try, fprintf('FC seed panel clean-final warning: %s\n',ME_seed_clean.message); catch, end
+end
+% HUMOR_FC_SEED_PANEL_CLEAN_FINAL_20260527_END
+
 
 % ROI Heatmap tab - bigger
 axHeat = axes('Parent',pHeatView,'Units','normalized','Position',[0.070 0.115 0.845 0.845], ...
@@ -1706,6 +2467,8 @@ catch ME_preloadSeg
     try, setStatus(['Step-motor segmentation preload skipped: ' ME_preloadSeg.message],C.warn); catch, end
 end
 refreshAll();
+% HUMOR_FORCE_LAYOUT_AFTER_INITIAL_REFRESH_20260527
+try, drawnow; HUMOR_FC_force_layout(fig); catch, end; try, HUMOR_FC_remember_layout(fig,'capture'); catch, end % HUMOR_CAPTURE_GOOD_FC_LAYOUT_20260527 catch ME_forceLayout, try fprintf('FC layout force warning: %s\n',ME_forceLayout.message); catch, end, end
 
 % =========================================================================
 % CALLBACKS
@@ -1999,6 +2762,38 @@ refreshAll();
         if ishandle(tabBtns(idx))
             set(tabBtns(idx),'Value',1,'BackgroundColor',C.blue,'ForegroundColor','w');
         end
+        % HUMOR_FORCE_LAYOUT_AFTER_SWITCHTAB_20260527
+        try, drawnow; HUMOR_FC_force_layout(fig); catch, end
+    end
+
+    function restoreGoodLayoutAfterSeg()
+        % HUMOR_RESTORE_GOOD_FC_LAYOUT_AFTER_SEG_FUNCTION_20260527
+        try, drawnow; HUMOR_FC_force_layout(fig); catch, end
+        try, drawnow; HUMOR_FC_remember_layout(fig,'restore'); catch, end
+        try
+            tLayout = timer('StartDelay',0.10,'TimerFcn',@(~,~)restoreLater());
+            start(tLayout);
+        catch
+        end
+        function restoreLater()
+            try, HUMOR_FC_force_layout(fig); catch, end
+            try, HUMOR_FC_remember_layout(fig,'restore'); catch, end
+            try, stop(tLayout); delete(tLayout); catch, end
+        end
+    end
+
+    function localOneShotForceLayout(delaySec)
+        try
+            tLayoutOnce = timer('ExecutionMode','singleShot', ...
+                'StartDelay',delaySec, ...
+                'TimerFcn',@(~,~)localOneShotForceLayoutRun());
+            start(tLayoutOnce);
+        catch
+        end
+        function localOneShotForceLayoutRun()
+            try, HUMOR_FC_force_layout(fig); catch, end
+            try, stop(tLayoutOnce); delete(tLayoutOnce); catch, end
+        end
     end
 
     function onSubject(~,~)
@@ -2025,27 +2820,36 @@ refreshAll();
         guidata(fig,s);
         refreshAll();
     end
-
     function onSliceRegionOnly(~,~)
         s = guidata(fig);
         s.sliceRegionOnly = logical(get(cbSliceRegionOnly,'Value'));
+        try, s.fcSelectedRegionIdx = []; s.fcSelectedRegionY = []; s.fcSelectedRegionX = []; catch, end
         guidata(fig,s);
-        refreshHeatmapView();
-        refreshGraphView();
+        refreshAll();
         if s.sliceRegionOnly
-            setStatus(sprintf('Slice ROI filter ON: heatmap/graph show regions present in Z %d/%d.',s.slice,s.Z),C.good);
+            try, setStatus(sprintf('Slice ROI filter ON: Z %d/%d.',s.slice,s.Z),C.good); catch, end
         else
-            setStatus('Slice ROI filter OFF: heatmap/graph show all selected regions.',C.dim);
+            try, setStatus('Slice ROI filter OFF.',C.dim); catch, end
         end
     end
-
     function onSliceSlider(~,~)
         s = guidata(fig);
         s.slice = fc_clip(round(get(slSlice,'Value')),1,s.Z);
         set(edSlice,'String',num2str(s.slice));
+        try, set(edSliceBox,'String',num2str(s.slice)); catch, end
+        try, set(txtSeedSlice,'String',sprintf('Seed map | slice Z %d / %d   mouse-wheel = change slice',s.slice,s.Z)); catch, end
+        try, set(txtCompareSlice,'String',sprintf('Compare map slice Z %d / %d   scroll = change slice',s.slice,s.Z)); catch, end
+        try, s.fcSelectedRegionIdx = []; s.fcSelectedRegionY = []; s.fcSelectedRegionX = []; catch, end
         guidata(fig,s);
         refreshAll();
+        if isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
+            try, setStatus(sprintf('Slice ROI filter updated for Z %d/%d.',s.slice,s.Z),C.good); catch, end
+        end
     end
+
+
+
+
 
     function onSliceEdit(~,~)
         s = guidata(fig);
@@ -2376,7 +3180,6 @@ refreshAll();
         refreshGraphView();
         refreshSeedView();
     end
-
     function onRegionMode(~,~)
         s = guidata(fig);
         try
@@ -2385,18 +3188,17 @@ refreshAll();
             if ischar(items), items = cellstr(items); end
             val = fc_clip(round(val),1,numel(items));
             choice = lower(strtrim(items{val}));
-            if ~isempty(strfind(choice,'left')) && ~isempty(strfind(choice,'right'))
+            if ~isempty(strfind(choice,'left vs right'))
                 s.roiHemiMode = 'lvr';
             elseif ~isempty(strfind(choice,'left'))
                 s.roiHemiMode = 'left';
             elseif ~isempty(strfind(choice,'right'))
                 s.roiHemiMode = 'right';
-            elseif ~isempty(strfind(choice,'merged')) || ~isempty(strfind(choice,'no l/r')) || ~isempty(strfind(choice,'all'))
+            elseif ~isempty(strfind(choice,'merged')) || ~isempty(strfind(choice,'no l/r'))
                 s.roiHemiMode = 'merged';
             else
                 s.roiHemiMode = 'both';
             end
-
             if strcmpi(s.roiHemiMode,'left') || strcmpi(s.roiHemiMode,'right') || strcmpi(s.roiHemiMode,'both')
                 s.showHemisphere = true;
                 try, set(cbShowLR,'Value',1); catch, end
@@ -2404,17 +3206,16 @@ refreshAll();
                 s.showHemisphere = false;
                 try, set(cbShowLR,'Value',0); catch, end
             end
+            try, s.fcSelectedRegionIdx = []; s.fcSelectedRegionY = []; s.fcSelectedRegionX = []; catch, end
         catch
             s.roiHemiMode = 'both';
         end
         guidata(fig,s);
-        refreshHeatmapView();
-        refreshCompareView();
-        refreshPairView();
-        refreshGraphView();
-        refreshSeedView();
-        setStatus(['Region mode: ' s.roiHemiMode],C.good);
+        refreshAll();
+        try, setStatus(['Region mode: ' s.roiHemiMode],C.good); catch, end
     end
+
+
 
     function onEpochMode(~,~)
         s = guidata(fig);
@@ -2885,6 +3686,11 @@ function onMapClick(~,~)
                 numel(res.labels), size(res.meanTS,1)), C.good);
 
             refreshAll();
+        try, localOneShotForceLayout(0.10); catch, end
+        try, localOneShotForceLayout(0.30); catch, end
+        try, pause(0.05); drawnow; HUMOR_FC_force_layout(fig); catch, end
+% HUMOR_FORCE_LAYOUT_AFTER_SEGLOAD_20260527
+try, drawnow; HUMOR_FC_force_layout(fig); catch, end
             switchTab('heatmap');
 
         catch ME
@@ -2892,6 +3698,17 @@ function onMapClick(~,~)
             errordlg(ME.message,'Load Segmentation');
             if s.opts.debugRethrow, rethrow(ME); end
         end
+        % HUMOR_FINAL_END_OF_LOADSEG_LAYOUT_RESTORE_20260528
+        % Final restore AFTER segmentation load + heatmap switch have finished.
+        try
+            drawnow;
+            HUMOR_FC_force_layout(fig);
+            pause(0.10); drawnow;
+            HUMOR_FC_force_layout(fig);
+        catch ME_finalLoadSegLayout
+            try, fprintf('FC final Load Seg layout restore warning: %s\n',ME_finalLoadSegLayout.message); catch, end
+        end
+
     end
 
     function onLoadUnderlay(~,~)
@@ -3308,6 +4125,12 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         end
 
         [M,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
+% HUMOR_HEATMAP_CUSTOM_VISIBILITY_20260527
+if (isfield(s,'fcSelectedRegionIdx') && ~isempty(s.fcSelectedRegionIdx)) || ...
+   (isfield(s,'fcSelectedRegionY') && ~isempty(s.fcSelectedRegionY)) || ...
+   (isfield(s,'fcSelectedRegionX') && ~isempty(s.fcSelectedRegionX))
+    [M,names,order,meta] = fc_apply_region_visibility(s,M,names,order,meta);
+end
         [M,names,order,meta] = fc_apply_region_visibility(s,M,names,order,meta);
 
         Mshow = M;
@@ -3382,6 +4205,7 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         end
 
         [M,names,order,meta] = fc_current_matrix(s,res);
+        [M,names,order,meta] = fc_apply_region_visibility(s,M,names,order,meta);
         if isfield(meta,'isRectangular') && meta.isRectangular
             fc_nodata(axCompareBar,'Compare ROI is disabled in Left-vs-Right mode',C);
             fc_nodata(axCompareMap,'Switch to Left only / Right only / Both / Merged',C);
@@ -3512,7 +4336,8 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
             set(txtPair,'String','No ROI result yet. Compute ROI current first.');
             return;
         end
-        [~,names,order,meta] = fc_current_matrix(s,res);
+        [Mpair,names,order,meta] = fc_current_matrix(s,res);
+        [Mpair,names,order,meta] = fc_apply_region_visibility(s,Mpair,names,order,meta); %#ok<ASGLU>
         if isfield(meta,'isRectangular') && meta.isRectangular
             fc_nodata(axPairTS,'Pair ROI is disabled in Left-vs-Right mode',C);
             fc_nodata(axPairScat,'Switch to Left only / Right only / Both / Merged',C);
@@ -4153,22 +4978,15 @@ end
 end
 
 function [f,p] = fc_uigetfile_start(filterSpec,titleStr,startDir)
-if nargin < 3 || isempty(startDir) || ~exist(startDir,'dir')
+if nargin < 3 || isempty(startDir) || exist(startDir,'dir') ~= 7
     startDir = pwd;
-try
-    if isfield(opts,'stepMotorFolder') && ~isempty(opts.stepMotorFolder) && exist(opts.stepMotorFolder,'dir') == 7
-        segDir0 = fullfile(opts.stepMotorFolder,'Segmentation');
-        if exist(segDir0,'dir') == 7, startDir = segDir0; return; end
-        startDir = opts.stepMotorFolder; return;
-    end
-catch
-end
 end
 oldDir = pwd;
 cleanupObj = onCleanup(@() cd(oldDir)); %#ok<NASGU>
 try, cd(startDir); catch, end
 [f,p] = uigetfile(filterSpec,titleStr);
 end
+
 
 function [I,varName] = fc_pick_data_from_mat(S)
 I = []; varName = '';
@@ -4704,17 +5522,19 @@ M(1:size(M,1)+1:end) = 1;
 end
 
 function [M,names,order,meta] = fc_current_matrix(s,res)
-% HUMOR_REPAIR_TRUE_SLICE_CURRENT_MATRIX_20260519
+% Region-mode aware matrix builder.
+% Slice ROIs ON means selected-slice ROI FC is recomputed before L/R mode is applied.
 try
     if isfield(s,'Z') && s.Z > 1 && isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
-        if ~(isstruct(res) && isfield(res,'sliceOnly') && isequal(res.sliceOnly,true))
-            res = HUMOR_FC_make_slice_roi_result(s,s.currentSubject,res,s.slice);
-        end
+        res = HUMOR_FC_make_slice_roi_result(s,s.currentSubject,res,s.slice);
     end
 catch
 end
-% Region-mode aware matrix builder.
 % Modes:
+
+
+
+
 %   both   = L_ and R_ regions remain separate.
 %   left   = only L_ / negative-label regions.
 %   right  = only R_ / positive-label regions when signed LR exists.
@@ -6181,43 +7001,69 @@ end
 end
 
 function startDir = fc_segmentation_start_dir(subj,opts)
-% Prefer the HUMoR segmentation output folder.
+% Prefer HUMoR Segmentation or loaded analysis folder for Load Seg MAT.
 startDir = pwd;
+cands = {};
 try
-    if isfield(opts,'stepMotorFolder') && ~isempty(opts.stepMotorFolder) && exist(opts.stepMotorFolder,'dir') == 7
-        segDir0 = fullfile(opts.stepMotorFolder,'Segmentation');
-        if exist(segDir0,'dir') == 7, startDir = segDir0; return; end
-        startDir = opts.stepMotorFolder; return;
+    if isfield(subj,'analysisDir') && ~isempty(subj.analysisDir)
+        base = char(subj.analysisDir);
+        cands{end+1} = fullfile(base,'Segmentation'); %#ok<AGROW>
+        cands{end+1} = base; %#ok<AGROW>
     end
 catch
 end
 try
     if isfield(opts,'exportPath') && ~isempty(opts.exportPath)
-        segDir = fullfile(opts.exportPath,'Segmentation');
-        if exist(segDir,'dir'), startDir = segDir; return; end
+        base = char(opts.exportPath);
+        cands{end+1} = fullfile(base,'Segmentation'); %#ok<AGROW>
+        cands{end+1} = base; %#ok<AGROW>
     end
 catch
 end
 try
     if isfield(opts,'saveRoot') && ~isempty(opts.saveRoot)
-        segDir = fullfile(opts.saveRoot,'Segmentation');
-        if exist(segDir,'dir'), startDir = segDir; return; end
+        base = char(opts.saveRoot);
+        cands{end+1} = fullfile(base,'Segmentation'); %#ok<AGROW>
+        cands{end+1} = base; %#ok<AGROW>
     end
 catch
 end
 try
-    if isfield(subj,'analysisDir') && ~isempty(subj.analysisDir)
-        segDir = fullfile(subj.analysisDir,'Segmentation');
-        if exist(segDir,'dir'), startDir = segDir; return; end
-        if exist(subj.analysisDir,'dir'), startDir = subj.analysisDir; return; end
+    if isfield(opts,'loadedPath') && ~isempty(opts.loadedPath)
+        base = char(opts.loadedPath);
+        if exist(base,'file') == 2, base = fileparts(base); end
+        cands{end+1} = fullfile(base,'Segmentation'); %#ok<AGROW>
+        cands{end+1} = base; %#ok<AGROW>
     end
 catch
 end
+try
+    if isfield(opts,'stepMotorFolder') && ~isempty(opts.stepMotorFolder)
+        base = char(opts.stepMotorFolder);
+        cands{end+1} = fullfile(base,'Segmentation'); %#ok<AGROW>
+        cands{end+1} = base; %#ok<AGROW>
+    end
+catch
+end
+
+for ii = 1:numel(cands)
+    try
+        d = cands{ii};
+        if ~isempty(d) && exist(d,'dir') == 7
+            startDir = d;
+            return;
+        end
+    catch
+    end
+end
+
+% Last fallback only: generic FC start folder.
 try
     startDir = fc_start_dir(subj,opts);
 catch
 end
 end
+
 
 function [res, info, roiAtlas] = fc_read_segmentation_result(fullFile, fallbackTR, opts)
 % TRUE-LR Segmentation loader.

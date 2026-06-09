@@ -112,8 +112,17 @@ if T < 2
 end
 
 % ------------------- window -------------------
-winVol = max(1, round(winSec / TR));
+requestedWinVol = max(1, round(winSec / TR));
+winVol = min(requestedWinVol, T);
+stats.requestedWinVol = requestedWinVol;
 stats.winVol = winVol;
+if requestedWinVol > T
+    stats.windowClampedToDataLength = true;
+    stats.note = sprintf('Requested window was %d frames, but dataset has only %d frames; using %d frames.', requestedWinVol, T, winVol);
+    warning('Temporal window/subsampling factor (%d frames) is longer than the dataset (%d frames). Using %d frames instead.', requestedWinVol, T, winVol);
+else
+    stats.windowClampedToDataLength = false;
+end
 
 if strcmp(opts.mode,'sliding')
     prePad  = floor(winVol/2);

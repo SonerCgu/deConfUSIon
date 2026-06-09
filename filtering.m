@@ -98,8 +98,42 @@ else
     error('Data must be 3D [Y X T] or 4D [Y X Z T].');
 end
 
-if nt < 10
-    error('Too few time points for temporal filtering.');
+if nt < 2
+    warning('Too few time points for temporal filtering (T=%d). Returning unchanged dataset.', nt);
+    I_filt = I;
+    stats = struct();
+    stats.filterType = opts.type;
+    stats.order = opts.order;
+    stats.Fs = 1 / TR;
+    stats.TR = TR;
+    stats.Nyquist = stats.Fs / 2;
+    stats.FcLow = opts.FcLow;
+    stats.FcHigh = opts.FcHigh;
+    stats.Wn = [];
+    stats.trimStart = opts.trimStart;
+    stats.trimEnd = opts.trimEnd;
+    stats.trimStartFrames = 0;
+    stats.trimEndFrames = 0;
+    stats.filteredFrameStart = 1;
+    stats.filteredFrameEnd = nt;
+    stats.nFilteredFrames = nt;
+    stats.useTaper = false;
+    stats.taperLengthFrames = 0;
+    stats.chunkSize = opts.chunkSize;
+    stats.nChunks = 0;
+    stats.nVoxels = numel(I);
+    stats.unstable = false;
+    stats.b = [];
+    stats.a = [];
+    stats.qcFolder = '';
+    stats.qcFrequencyResponseFile = '';
+    stats.qcGlobalMeanFile = '';
+    stats.qcSpectrumFile = '';
+    stats.processingTime = toc(tStart);
+    stats.optsResolved = opts;
+    stats.skipped = true;
+    stats.skipReason = 'T < 2';
+    return;
 end
 
 Fs  = 1 / TR;
@@ -186,10 +220,13 @@ end
 
 minFiltLen = 3 * max(length(a), length(b));
 
+useSinglePassFallback = false;
 if nFiltFrames <= minFiltLen
-    error(['Filtered segment is too short for filtfilt. ', ...
-           'Available frames = %d, minimum recommended = %d.'], ...
-           nFiltFrames, minFiltLen + 1);
+    useSinglePassFallback = true;
+    warning(['Filtered segment is too short for zero-phase filtfilt ', ...
+             '(available frames = %d, recommended minimum = %d). ', ...
+             'Using single-pass Butterworth fallback so the dataset is still saved.'], ...
+             nFiltFrames, minFiltLen + 1);
 end
 
 unstable = any(abs(roots(a)) >= 1);
@@ -294,7 +331,11 @@ for c = 1:nChunks
     valid = all(isfinite(block),2) & std(block,0,2) > 1e-8;
 
     if any(valid)
-        block(valid,:) = filtfilt(b,a,block(valid,:)')';
+        if useSinglePassFallback
+            block(valid,:) = filter(b,a,block(valid,:)')';
+        else
+            block(valid,:) = filtfilt(b,a,block(valid,:)')';
+        end
     end
 
     flatWork(s:e,:) = block;
@@ -394,6 +435,8 @@ stats.nChunks = nChunks;
 stats.nVoxels = nVox;
 
 stats.unstable = unstable;
+stats.usedSinglePassFallback = useSinglePassFallback;
+stats.minFiltFiltFramesRecommended = minFiltLen + 1;
 stats.b = b;
 stats.a = a;
 
