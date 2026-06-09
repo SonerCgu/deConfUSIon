@@ -158,7 +158,7 @@ fig = figure('Name',['fUSI Viewer v8 - ' systemType], ...
     'DefaultAxesFontName','Helvetica', ...
     'DefaultAxesFontSize',11);
 % HUMoR_FORCE_FULLSCREEN_PATCH31
-try, HUMoR_force_fullscreen_fig(fig); catch, end
+try, deConfUSIon_force_fullscreen_fig(fig); catch, end
 
 
 drawnow;

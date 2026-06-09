@@ -56,6 +56,18 @@ if ~isfield(SAtlas,'atlas')
 end
 atlas = SAtlas.atlas;
 
+% deConfUSIon JM atlas auto-prepare START
+try
+    rootDCU = fileparts(mfilename('fullpath'));
+    atlasToolsDCU = fullfile(rootDCU,'atlas_tools');
+    if exist(atlasToolsDCU,'dir') == 7, addpath(atlasToolsDCU,'-begin'); end
+    atlas = deConfUSIon_prepare_atlas(atlas, atlasPath);
+catch ME_atlas
+    warning('deConfUSIon:AtlasAutoPrepare', 'JM atlas auto-prepare skipped: %s', ME_atlas.message);
+end
+% deConfUSIon JM atlas auto-prepare END
+
+
 %% ---------------------------------------------------------
 % 2) ANALYSED + REGISTRATION2D FOLDER
 %% ---------------------------------------------------------

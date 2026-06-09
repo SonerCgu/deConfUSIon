@@ -2,7 +2,7 @@ function out = fusi_studio_GUI(action)
 % fusi_studio_GUI - GUI/source part 1 of the split Studio
 %
 % This is a valid MATLAB file that stores one source chunk for the split
-% HUMoR / fUSI Studio. Run run_fusi_studio.m to assemble and launch.
+% deConfUSIon / fUSI Studio. Run run_fusi_studio.m to assemble and launch.
 
 if nargin == 0
     run_fusi_studio;
@@ -98,7 +98,7 @@ studio.pipeline = struct( ...
 %  FIGURE WINDOW
 % =========================================================
 fig = figure( ...
-    'Name','HUMoR Analysis Tool', ...
+    'Name','deConfUSIon', ...
     'Color',[0.05 0.05 0.05], ...
     'Units','normalized', ...
     'Position',[0 0 1 1], ...
@@ -120,7 +120,7 @@ guidata(fig, studio);
 %  TITLE
 % =========================================================
 uicontrol(fig,'Style','text', ...
-    'String','HUMoR Analysis Tool', ...
+    'String','deConfUSIon', ...
     'Units','normalized', ...
     'Position',[0.300 0.951 0.400 0.035], ...
     'FontSize',27, ...
@@ -662,7 +662,7 @@ studio.registrationPath = '';
         if ~exist('TR','var') || isempty(TR) || ~isnumeric(TR) || ~isfinite(TR) || TR <= 0
             TR = studio_get_last_tr_default();
         end
-        [chosenTR, datasetFolder, outputWasCancelled, probeType, defaultTR] = studio_load_options_dark_dialog_patch16(chosenTR, datasetFolder, analysedRoot, datasetName, probeType, defaultTR, data, meta);
+        [chosenTR, datasetFolder, outputWasCancelled, probeType, defaultTR] = studio_load_options_dark_dialog(chosenTR, datasetFolder, analysedRoot, datasetName, probeType, defaultTR, data, meta);
         if outputWasCancelled
             addLog('Load cancelled during TR/output-folder selection.');
             setProgramStatus(true);
@@ -711,7 +711,7 @@ end
 
         studio = guidata(fig);
 
-       data.displayNameFull = HUMOR_make_loaded_display_name(datasetName, path, file);
+       data.displayNameFull = deConfUSIon_make_loaded_display_name(datasetName, path, file);
        data.datasetSortTime = now;
         data.sourceFileName = file;
         data.sourcePath = path;
@@ -1100,8 +1100,8 @@ end
         'Callback',@onCancel);
 
     set(dlg,'Visible','on');
-    try, HUMoR_popup_autofit_apply(dlg); catch, end
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
 waitfor(dlg);
 
     function onSelectAll(~,~)
@@ -1329,7 +1329,7 @@ function imregdemonsCallback(~,~)
             mkdir(preFolder);
         end
 
-                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'preproc');
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'preproc');
         newData.savedFile = savePath;
         newData.lazyFile = savePath;
         displayNameFull = fullName;
@@ -1337,8 +1337,8 @@ function imregdemonsCallback(~,~)
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
         save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
         addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
@@ -1708,8 +1708,8 @@ uicontrol('Parent',settingsPanel,'Style','text', ...
     updateSummary();
 
     set(dlg,'Visible','on');
-    try, HUMoR_popup_autofit_apply(dlg); catch, end
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
 waitfor(dlg);
 
     % =====================================================
@@ -1908,11 +1908,11 @@ function frameRateCallback(~,~)
 
         try
             if isfield(QC_before,'figIntensity') && ishghandle(QC_before.figIntensity)
-                HUMoR_save_qc_png_white(QC_before.figIntensity, ...
+                deConfUSIon_save_qc_png_white(QC_before.figIntensity, ...
                     fullfile(qcFolder,['FrameRate_ORIGINAL_Intensity_Rejection_' ts '.png']));
             end
             if isfield(QC_before,'figRejected') && ishghandle(QC_before.figRejected) && (~isfield(QC_before,'figIntensity') || ~isequal(QC_before.figRejected,QC_before.figIntensity))
-                HUMoR_save_qc_png_white(QC_before.figRejected, ...
+                deConfUSIon_save_qc_png_white(QC_before.figRejected, ...
                     fullfile(qcFolder,['FrameRate_ORIGINAL_Rejected_' ts '.png']));
             end
         catch
@@ -1939,11 +1939,11 @@ function frameRateCallback(~,~)
 
         try
             if isfield(QC_after,'figIntensity') && ishghandle(QC_after.figIntensity)
-                HUMoR_save_qc_png_white(QC_after.figIntensity, ...
+                deConfUSIon_save_qc_png_white(QC_after.figIntensity, ...
                     fullfile(qcFolder,['FrameRate_INTERPOLATED_Intensity_Rejection_' ts '.png']));
             end
             if isfield(QC_after,'figRejected') && ishghandle(QC_after.figRejected) && (~isfield(QC_after,'figIntensity') || ~isequal(QC_after.figRejected,QC_after.figIntensity))
-                HUMoR_save_qc_png_white(QC_after.figRejected, ...
+                deConfUSIon_save_qc_png_white(QC_after.figRejected, ...
                     fullfile(qcFolder,['FrameRate_INTERPOLATED_Rejected_' ts '.png']));
             end
         catch
@@ -1981,7 +1981,7 @@ function frameRateCallback(~,~)
                 else
                     opSaveTag = 'preproc';
                 end
-                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
@@ -1989,8 +1989,8 @@ function frameRateCallback(~,~)
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
                 save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
@@ -2077,7 +2077,7 @@ fullName = [baseStem '_scrub_' methKey '_' interpKey '_' ts];
                 else
                     opSaveTag = 'preproc';
                 end
-                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
@@ -2085,8 +2085,8 @@ fullName = [baseStem '_scrub_' methKey '_' interpKey '_' ts];
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
                 save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
@@ -2195,7 +2195,7 @@ function stepMotorCallback(~,~)
                 else
                     opSaveTag = 'preproc';
                 end
-                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
@@ -2203,8 +2203,8 @@ function stepMotorCallback(~,~)
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
                 save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
@@ -2295,7 +2295,7 @@ fullName = sprintf('%s_despike_z%s_%s', baseStem, numTag(zthr), ts);
                 else
                     opSaveTag = 'preproc';
                 end
-                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
@@ -2303,8 +2303,8 @@ fullName = sprintf('%s_despike_z%s_%s', baseStem, numTag(zthr), ts);
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
                 save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
@@ -2481,7 +2481,7 @@ function temporalSmoothingCallback(~,~)
             mkdir(preFolder);
         end
 
-                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'preproc');
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'preproc');
         newData.savedFile = savePath;
         newData.lazyFile = savePath;
         displayNameFull = fullName;
@@ -2489,8 +2489,8 @@ function temporalSmoothingCallback(~,~)
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
         save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
         addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
@@ -2547,7 +2547,7 @@ function cfg = showTemporalSmoothSubsampleDialog(data)
         'WindowStyle','modal', ...
         'Visible','off', ...
         'CloseRequestFcn',@onCancel);
-try, HUMoR_popup_polish_now(gcf); catch, end
+try, deConfUSIon_popup_polish_now(gcf); catch, end
 
 
     try
@@ -2852,8 +2852,8 @@ try, HUMoR_popup_polish_now(gcf); catch, end
     updateSummary();
 
     set(dlg,'Visible','on');
-    try, HUMoR_popup_autofit_apply(dlg); catch, end
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
 waitfor(dlg);
 
     % =====================================================
@@ -3038,14 +3038,14 @@ function pcaCallback(~,~)
                     setProgramStatus(true);
                     return;
                 end
-                baseStem = HUMOR_compact_chain_name(getCurrentNamingStem(studio));
+                baseStem = deConfUSIon_compact_chain_name(getCurrentNamingStem(studio));
                 pcTag = 'dropPCunknown';
                 if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents)
                     pcTag = makePcDropTag(stats.selectedComponents);
                 end
                 scopeTag = '';
                 if isfield(stats,'sliceScope')
-                    scopeTag = HUMOR_pcaica_scope_tag(stats.sliceScope);
+                    scopeTag = deConfUSIon_pcaica_scope_tag(stats.sliceScope);
                 end
                 if isempty(scopeTag)
                     fullName = sprintf('%s_pca_%s_%s', baseStem, pcTag, ts);
@@ -3061,7 +3061,7 @@ function pcaCallback(~,~)
                 datasetSortTime = now;
                 newData.datasetSortTime = datasetSortTime;
                 preFolder = fullfile(studio.exportPath,'Preprocessing');
-                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'pca');
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'pca');
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
@@ -3071,8 +3071,8 @@ function pcaCallback(~,~)
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
                 save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
@@ -3097,14 +3097,14 @@ function pcaCallback(~,~)
                     setProgramStatus(true);
                     return;
                 end
-                baseStem = HUMOR_compact_chain_name(getCurrentNamingStem(studio));
+                baseStem = deConfUSIon_compact_chain_name(getCurrentNamingStem(studio));
                 icTag = 'dropICunknown';
                 if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents)
                     icTag = makeIcDropTag(stats.selectedComponents);
                 end
                 scopeTag = '';
                 if isfield(stats,'sliceScope')
-                    scopeTag = HUMOR_pcaica_scope_tag(stats.sliceScope);
+                    scopeTag = deConfUSIon_pcaica_scope_tag(stats.sliceScope);
                 end
                 if isempty(scopeTag)
                     fullName = sprintf('%s_ica_%s_%s', baseStem, icTag, ts);
@@ -3120,7 +3120,7 @@ function pcaCallback(~,~)
                 datasetSortTime = now;
                 newData.datasetSortTime = datasetSortTime;
                 preFolder = fullfile(studio.exportPath,'Preprocessing');
-                savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'ica');
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'ica');
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
@@ -3130,8 +3130,8 @@ function pcaCallback(~,~)
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
                 save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
@@ -3342,15 +3342,22 @@ function filteringCallback(~,~)
             mkdir(preFolder);
         end
 
-        savePath = HUMOR_safe_preproc_save_path(preFolder, fullName, keyName, 'filter');
+        savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'filter');
         newData.savedFile = savePath;
         newData.lazyFile = savePath;
         studio.datasets.(keyName) = newData;
         displayNameFull = fullName;
         preprocDisplayName = fullName;
+        if isfield(newData,'datasetSortTime') && ~isempty(newData.datasetSortTime)
+            datasetSortTime = newData.datasetSortTime; %#ok<NASGU>
+        else
+            datasetSortTime = now; %#ok<NASGU>
+            newData.datasetSortTime = datasetSortTime;
+            studio.datasets.(keyName) = newData;
+        end
         save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
-                try, HUMOR_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, HUMOR_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
+                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
+                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
         addLog(['Saved MAT -> ' savePath]);
 
         guidata(fig, studio);
@@ -3427,7 +3434,7 @@ defaultHigh = defaultLowPass;    % for band-pass high edge
         'Visible','off', ...
         'CloseRequestFcn',@onCancel, ...
         'KeyPressFcn',@onKey);
-try, HUMoR_popup_polish_now(gcf); catch, end
+try, deConfUSIon_popup_polish_now(gcf); catch, end
 
 
     try
@@ -3662,8 +3669,8 @@ try, HUMoR_popup_polish_now(gcf); catch, end
 
     set(dlg,'Visible','on');
     drawnow;
-    try, HUMoR_popup_autofit_apply(dlg); catch, end
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
 waitfor(dlg);
 
     % ---------------------------------------------------------------------
@@ -4410,7 +4417,7 @@ loadedStepInfo = [];  % HUMOR_FC_STEP_FOLDER_SETUP_PATCH_20260519
         'Visible','off', ...
         'CloseRequestFcn',@onCancel, ...
         'KeyPressFcn',@onKey);
-try, HUMoR_popup_polish_now(gcf); catch, end
+try, deConfUSIon_popup_polish_now(gcf); catch, end
 
 
     try
@@ -4774,8 +4781,8 @@ updateSummary();
 fcScaleFcSetupFonts(dlg);
 
 set(dlg,'Visible','on');
-try, HUMoR_popup_autofit_apply(dlg); catch, end
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
+try, deConfUSIon_popup_autofit_apply(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
 waitfor(dlg);
 
     % =====================================================
@@ -4919,7 +4926,7 @@ set(ddUnderlay,'Value',1);
         folder = uigetdir(startDir,'Select step-motor analysed/session folder');
         if isequal(folder,0), return; end
         loadedStepFolder = folder;
-        loadedStepInfo = HUMOR_find_stepmotor_seg_fc_files(folder);
+        loadedStepInfo = deConfUSIon_find_stepmotor_seg_fc_files(folder);
 
         if isfield(loadedStepInfo,'segmentationFile') && ~isempty(loadedStepInfo.segmentationFile)
             loadedSegmentationFile = loadedStepInfo.segmentationFile;
@@ -4927,7 +4934,7 @@ set(ddUnderlay,'Value',1);
 
         if isfield(loadedStepInfo,'nameFile') && ~isempty(loadedStepInfo.nameFile) && exist(loadedStepInfo.nameFile,'file') == 2
             try
-                loadedNames = HUMOR_read_region_names_file(loadedStepInfo.nameFile);
+                loadedNames = deConfUSIon_read_region_names_file(loadedStepInfo.nameFile);
                 if ~isempty(loadedNames.labels)
                     loadedNamesName = localFileNameForFCSetup(loadedStepInfo.nameFile);
                     set(ddNames,'Value',2);
@@ -5081,7 +5088,7 @@ function onLoadNames(~,~)
         if isequal(folder,0), return; end
 
         try
-            R = HUMOR_FC_find_stepmotor_txt_names(folder);
+            R = deConfUSIon_FC_find_stepmotor_txt_names(folder);
             if isempty(R.names.labels)
                 errordlg({'No readable region-name TXT/CSV/MAT files were found recursively.','','Selected folder:',folder,'','Expected example:','Registration2D\SourceSlice001_AtlasSlice111\AtlasRegions_slice111.txt','',R.summary},'FC step-motor names');
                 return;
@@ -5112,7 +5119,7 @@ function onLoadNames(~,~)
     end
 
     try
-        loadedNames = HUMOR_FC_read_region_names_file(fullfile(p,f));
+        loadedNames = deConfUSIon_FC_read_region_names_file(fullfile(p,f));
         if isempty(loadedNames.labels)
             errordlg('Could not parse labels/names from selected file.','FC names');
             return;

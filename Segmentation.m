@@ -38,7 +38,7 @@ if nargin < 3 || isempty(logFcn)
 end
 
 Seg = [];
-logMsg(logFcn,'--- HUMoR Atlas Segmentation ---');
+logMsg(logFcn,'--- deConfUSIon Atlas Segmentation ---');
 
 if nargin < 1 || isempty(studio) || ~isstruct(studio)
     error('studio struct is required.');
@@ -158,7 +158,7 @@ logMsg(logFcn,'Extracting left/right/bilateral region time courses...');
 [LeftRaw, RightRaw, BothRaw, region] = extractRegionTimecourses(D4, R, validDataMask, labelInfo, cfg.minVoxels, logFcn);
 try
     if isfield(cfg,'regionNameFile') && ~isempty(cfg.regionNameFile) && exist(cfg.regionNameFile,'file') == 2
-        region = HUMOR_apply_region_names_to_region(region,cfg.regionNameFile);
+        region = deConfUSIon_apply_region_names_to_region(region,cfg.regionNameFile);
         labelInfo.regionNameFile = cfg.regionNameFile;
         logMsg(logFcn,['Applied region names from: ' cfg.regionNameFile]);
     end
@@ -287,7 +287,7 @@ orange  = [0.95 0.58 0.18];
 yellow  = fgDim;  % yellow guidance text removed; keep variable for compatibility
 
 dlg = figure( ...
-    'Name','HUMoR Atlas Segmentation Setup', ...
+    'Name','deConfUSIon Atlas Segmentation Setup', ...
     'Color',bg, ...
     'MenuBar','none', ...
     'ToolBar','none', ...
@@ -720,7 +720,7 @@ waitfor(dlg);
         folder = uigetdir(startDir,'Select step-motor analysed/session folder containing Registration2D / Segmentation');
         if isequal(folder,0), return; end
         cfg.stepMotorFolder = folder;
-        info = HUMOR_find_stepmotor_seg_fc_files(folder);
+        info = deConfUSIon_find_stepmotor_seg_fc_files(folder);
         if isfield(info,'reg2DFiles') && ~isempty(info.reg2DFiles)
             cfg.reg2DFiles = sortReg2DFiles(info.reg2DFiles);
             set(hAtlas,'Value',2);
@@ -1260,7 +1260,7 @@ D4src = force4DForSegmentation(Din, struct('isStatic3D',false));
 
 files = cfg.reg2DFiles;
 if isempty(files) && isfield(cfg,'stepMotorFolder') && ~isempty(cfg.stepMotorFolder) && exist(cfg.stepMotorFolder,'dir') == 7
-    stepInfo = HUMOR_find_stepmotor_seg_fc_files(cfg.stepMotorFolder);
+    stepInfo = deConfUSIon_find_stepmotor_seg_fc_files(cfg.stepMotorFolder);
     if isfield(stepInfo,'reg2DFiles') && ~isempty(stepInfo.reg2DFiles)
         files = sortReg2DFiles(stepInfo.reg2DFiles);
     end
@@ -1769,6 +1769,18 @@ end
 S = load(atlasPath);
 if isfield(S,'atlas')
     atlas = S.atlas;
+
+% deConfUSIon JM atlas auto-prepare START
+try
+    rootDCU = fileparts(mfilename('fullpath'));
+    atlasToolsDCU = fullfile(rootDCU,'atlas_tools');
+    if exist(atlasToolsDCU,'dir') == 7, addpath(atlasToolsDCU,'-begin'); end
+    atlas = deConfUSIon_prepare_atlas(atlas, atlasPath);
+catch ME_atlas
+    warning('deConfUSIon:AtlasAutoPrepare', 'JM atlas auto-prepare skipped: %s', ME_atlas.message);
+end
+% deConfUSIon JM atlas auto-prepare END
+
 else
     error('Selected atlas MAT does not contain variable atlas.');
 end
@@ -2066,3 +2078,110 @@ end
 y = sqrt(sum(d.^2,dim) ./ denom);
 y(n==0) = NaN;
 end
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from deConfUSIon_apply_region_names_to_region.m on 09-Jun-2026 16:52:19
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function region = deConfUSIon_apply_region_names_to_region(region, nameFile)
+% Replace generic Region N names using an external name table.
+try
+    T = deConfUSIon_read_region_names_file(nameFile);
+    if isempty(T) || ~isstruct(T) || ~isfield(T,'labels') || isempty(T.labels)
+        return;
+    end
+    labsT = abs(round(double(T.labels(:))));
+    for ii = 1:numel(region.labels)
+        lab = abs(round(double(region.labels(ii))));
+        jj = find(labsT == lab,1,'first');
+        if isempty(jj), continue; end
+        if isfield(T,'acronyms') && jj <= numel(T.acronyms)
+            a = strtrim(char(T.acronyms{jj}));
+            if ~isempty(a), region.acronyms{ii} = a; end
+        end
+        if isfield(T,'names') && jj <= numel(T.names)
+            n = strtrim(char(T.names{jj}));
+            if ~isempty(n), region.names{ii} = n; end
+        end
+    end
+catch
+end
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated tiny helper from deConfUSIon_read_region_names_file.m on 09-Jun-2026 16:59:38
+%% ------------------------------------------------------------------------
+
+function T = deConfUSIon_read_region_names_file(fullFile)
+T = struct('labels',[],'names',{{}});
+if nargin < 1 || isempty(fullFile) || exist(fullFile,'file') ~= 2, return; end
+[~,~,ext] = fileparts(fullFile); ext = lower(ext);
+if strcmpi(ext,'.mat')
+    S = load(fullFile);
+    try
+        if isfield(S,'Seg') && isstruct(S.Seg) && isfield(S.Seg,'region')
+            T = localRegion(S.Seg.region); if ~isempty(T.labels), return; end
+        end
+        if isfield(S,'region') && isstruct(S.region)
+            T = localRegion(S.region); if ~isempty(T.labels), return; end
+        end
+        if isfield(S,'roiNameTable') && isstruct(S.roiNameTable)
+            x = S.roiNameTable;
+            if isfield(x,'labels') && isfield(x,'names')
+                T.labels = double(x.labels(:)); T.names = cellstr(x.names(:)); return;
+            end
+        end
+        if isfield(S,'labels') && isfield(S,'names')
+            T.labels = double(S.labels(:)); T.names = cellstr(S.names(:)); return;
+        end
+    catch
+    end
+    return;
+end
+fid = fopen(fullFile,'r'); if fid < 0, return; end
+cleanupObj = onCleanup(@() fclose(fid)); %#ok<NASGU>
+labels = []; names = {};
+while ~feof(fid)
+    line = fgetl(fid);
+    if ~ischar(line), continue; end
+    line = strtrim(line);
+    if isempty(line) || line(1)=='#' || line(1)=='%', continue; end
+    line = strrep(line,char(9),','); line = strrep(line,';',',');
+    parts = regexp(line,',','split');
+    if numel(parts) < 2, parts = regexp(line,'\s+','split'); end
+    if numel(parts) < 2, continue; end
+    lab = str2double(strtrim(parts{1}));
+    if ~isfinite(lab), continue; end
+    nm = strtrim(parts{2});
+    if numel(parts) > 2
+        for k = 3:numel(parts)
+            pk = strtrim(parts{k});
+            if ~isempty(pk), nm = [nm ' ' pk]; end %#ok<AGROW>
+        end
+    end
+    labels(end+1,1) = lab; %#ok<AGROW>
+    names{end+1,1} = nm; %#ok<AGROW>
+end
+T.labels = labels; T.names = names;
+end
+
+function T = localRegion(r)
+T = struct('labels',[],'names',{{}});
+if isfield(r,'labels'), T.labels = double(r.labels(:)); end
+if isfield(r,'names') && ~isempty(r.names)
+    T.names = cellstr(r.names(:));
+elseif isfield(r,'acronyms') && ~isempty(r.acronyms)
+    T.names = cellstr(r.acronyms(:));
+end
+if ~isempty(T.labels) && ~isempty(T.names)
+    n = min(numel(T.labels),numel(T.names));
+    T.labels = T.labels(1:n); T.names = T.names(1:n);
+else
+    T = struct('labels',[],'names',{{}});
+end
+end
+

@@ -1,0 +1,13 @@
+Final cleanup decision summary
+==============================
+
+atlas_tools: KEEP. Contains rgb2acr.xlsx and list_selected_regions.txt. These are needed for JM color/order support.
+backups: KEEP until full testing with normal 2D and 2D step-motor data passes. After that, copy/zip backups outside the repository and then delete the backups folder if desired.
+run_fusi_studio.m: KEEP. deConfUSIon.m launches through it; it assembles the split GUI/runtime.
+save_correct_colors.m: OPTIONAL MANUAL TOOL in atlas_tools. Keep if you want manual atlas RGB fixing; automatic registration does not call it.
+studio_load_options_dark_dialog.m: KEEP. Runtime load options dialog.
+studio_resolve_paths.m: KEEP. Used by group/studio path resolution.
+studio_mkdir.m: KEEP if present. It is referenced by fusi_studio_GUI.m.
+dropdown metadata helpers: KEEP. Needed for saved preprocessing outputs to appear correctly in dropdowns.
+popup/autofit helpers: KEEP. GUI/timer callback helpers should remain external.
+FC/step-motor helpers: KEEP. Shared across FC/studio/step-motor workflows.

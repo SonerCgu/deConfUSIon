@@ -16,7 +16,7 @@ function fig = FunctionalConnectivity(dataIn, saveRoot, tag, opts)
 %   8) Vertical heatmap legends are reversed correctly: +1/high at top, -1/low at bottom.
 %   9) File pickers robustly start in Registration folder via temporary cd().
 %  10) Underlay remains separated from ROI labels.
-%  11) Can load HUMoR Segmentation.mat region-time outputs directly into ROI FC.
+%  11) Can load deConfUSIon Segmentation.mat region-time outputs directly into ROI FC.
 %
 % INPUT
 %   dataIn:
@@ -44,6 +44,30 @@ function fig = FunctionalConnectivity(dataIn, saveRoot, tag, opts)
 %   .underlayGamma
 %   .underlayLogGain
 %   .underlaySharpness
+
+% deConfUSIon no-input startup guard -------------------------------------
+% Allows command-window use: FunctionalConnectivity
+% If no input is provided, try workspace data first, then ask for a MAT file.
+if nargin < 1
+    dataIn = [];
+end
+if nargin < 2
+    saveRoot = [];
+end
+if nargin < 3
+    tag = [];
+end
+if nargin < 4
+    opts = [];
+end
+if isempty(dataIn)
+    [dataIn, saveRoot, tag, opts] = fc_noarg_startup_deconfusion(saveRoot, tag, opts);
+end
+if isempty(dataIn)
+    error('FunctionalConnectivity:NoInput', ['FunctionalConnectivity needs dataIn. ' ...
+        'Open FC from deConfUSIon after loading data, or call FunctionalConnectivity(dataIn).']);
+end
+% ------------------------------------------------------------------------
 
 if nargin < 2 || isempty(saveRoot), saveRoot = pwd; end
 if nargin < 3 || isempty(tag), tag = datestr(now,'yyyymmdd_HHMMSS'); end
@@ -2468,7 +2492,7 @@ catch ME_preloadSeg
 end
 refreshAll();
 % HUMOR_FORCE_LAYOUT_AFTER_INITIAL_REFRESH_20260527
-try, drawnow; HUMOR_FC_force_layout(fig); catch, end; try, HUMOR_FC_remember_layout(fig,'capture'); catch, end % HUMOR_CAPTURE_GOOD_FC_LAYOUT_20260527 catch ME_forceLayout, try fprintf('FC layout force warning: %s\n',ME_forceLayout.message); catch, end, end
+try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end; try, deConfUSIon_FC_remember_layout(fig,'capture'); catch, end % HUMOR_CAPTURE_GOOD_FC_LAYOUT_20260527 catch ME_forceLayout, try fprintf('FC layout force warning: %s\n',ME_forceLayout.message); catch, end, end
 
 % =========================================================================
 % CALLBACKS
@@ -2578,7 +2602,7 @@ try, drawnow; HUMOR_FC_force_layout(fig); catch, end; try, HUMOR_FC_remember_lay
             end
 
             % --------------------------------------------------
-            % B) Best source: HUMoR Segmentation MAT.
+            % B) Best source: deConfUSIon Segmentation MAT.
             %    Use Seg.region.acronyms for Abbrev and
             %    Seg.region.names for Full region name.
             % --------------------------------------------------
@@ -2763,21 +2787,21 @@ try, drawnow; HUMOR_FC_force_layout(fig); catch, end; try, HUMOR_FC_remember_lay
             set(tabBtns(idx),'Value',1,'BackgroundColor',C.blue,'ForegroundColor','w');
         end
         % HUMOR_FORCE_LAYOUT_AFTER_SWITCHTAB_20260527
-        try, drawnow; HUMOR_FC_force_layout(fig); catch, end
+        try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
     end
 
     function restoreGoodLayoutAfterSeg()
         % HUMOR_RESTORE_GOOD_FC_LAYOUT_AFTER_SEG_FUNCTION_20260527
-        try, drawnow; HUMOR_FC_force_layout(fig); catch, end
-        try, drawnow; HUMOR_FC_remember_layout(fig,'restore'); catch, end
+        try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
+        try, drawnow; deConfUSIon_FC_remember_layout(fig,'restore'); catch, end
         try
             tLayout = timer('StartDelay',0.10,'TimerFcn',@(~,~)restoreLater());
             start(tLayout);
         catch
         end
         function restoreLater()
-            try, HUMOR_FC_force_layout(fig); catch, end
-            try, HUMOR_FC_remember_layout(fig,'restore'); catch, end
+            try, deConfUSIon_FC_force_layout(fig); catch, end
+            try, deConfUSIon_FC_remember_layout(fig,'restore'); catch, end
             try, stop(tLayout); delete(tLayout); catch, end
         end
     end
@@ -2791,7 +2815,7 @@ try, drawnow; HUMOR_FC_force_layout(fig); catch, end; try, HUMOR_FC_remember_lay
         catch
         end
         function localOneShotForceLayoutRun()
-            try, HUMOR_FC_force_layout(fig); catch, end
+            try, deConfUSIon_FC_force_layout(fig); catch, end
             try, stop(tLayoutOnce); delete(tLayoutOnce); catch, end
         end
     end
@@ -3455,7 +3479,7 @@ function onMapClick(~,~)
             end
             folder = uigetdir(startDir,'Select step-motor analysed/session folder');
             if isequal(folder,0), return; end
-            P = HUMOR_FC_stepmotor_read_folder(folder,s.Y,s.X,s.Z);
+            P = deConfUSIon_FC_stepmotor_read_folder(folder,s.Y,s.X,s.Z);
             did = false;
             if ~isempty(P.atlas)
                 s.subjects(s.currentSubject).roiAtlas = round(double(P.atlas));
@@ -3484,7 +3508,7 @@ function onMapClick(~,~)
         fullFile = fullfile(p,f);
         [~,~,extNow] = fileparts(fullFile); extNow = lower(extNow);
         if any(strcmp(extNow,{'.txt','.csv','.tsv'}))
-            P = HUMOR_FC_stepmotor_read_folder(p,s.Y,s.X,s.Z,fullFile);
+            P = deConfUSIon_FC_stepmotor_read_folder(p,s.Y,s.X,s.Z,fullFile);
             if ~isempty(P.names.labels)
                 s.opts.roiNameTable = P.names;
                 s.loadedRegionNameFile = fullFile;
@@ -3547,7 +3571,7 @@ function onMapClick(~,~)
             folder = uigetdir(startDir,'Select Registration2D or step-motor analysed/session folder');
             if isequal(folder,0), return; end
 
-            R = HUMOR_FC_find_stepmotor_txt_names(folder);
+            R = deConfUSIon_FC_find_stepmotor_txt_names(folder);
             if isempty(R.names.labels)
                 errordlg({'No readable region-name TXT/CSV/MAT files were found recursively.','','Selected folder:',folder,'','Expected example:','Registration2D\SourceSlice001_AtlasSlice111\AtlasRegions_slice111.txt','',R.summary},'Step-motor names');
                 return;
@@ -3589,7 +3613,7 @@ function onMapClick(~,~)
 
         try
             fullFile = fullfile(p,f);
-            T = HUMOR_FC_read_region_names_file(fullFile);
+            T = deConfUSIon_FC_read_region_names_file(fullFile);
             if isempty(T.labels)
                 errordlg('Could not parse labels/names from selected file.','Region names');
                 return;
@@ -3688,9 +3712,9 @@ function onMapClick(~,~)
             refreshAll();
         try, localOneShotForceLayout(0.10); catch, end
         try, localOneShotForceLayout(0.30); catch, end
-        try, pause(0.05); drawnow; HUMOR_FC_force_layout(fig); catch, end
+        try, pause(0.05); drawnow; deConfUSIon_FC_force_layout(fig); catch, end
 % HUMOR_FORCE_LAYOUT_AFTER_SEGLOAD_20260527
-try, drawnow; HUMOR_FC_force_layout(fig); catch, end
+try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
             switchTab('heatmap');
 
         catch ME
@@ -3702,9 +3726,9 @@ try, drawnow; HUMOR_FC_force_layout(fig); catch, end
         % Final restore AFTER segmentation load + heatmap switch have finished.
         try
             drawnow;
-            HUMOR_FC_force_layout(fig);
+            deConfUSIon_FC_force_layout(fig);
             pause(0.10); drawnow;
-            HUMOR_FC_force_layout(fig);
+            deConfUSIon_FC_force_layout(fig);
         catch ME_finalLoadSegLayout
             try, fprintf('FC final Load Seg layout restore warning: %s\n',ME_finalLoadSegLayout.message); catch, end
         end
@@ -5323,7 +5347,7 @@ R = tmp;
 end
 
 function T = fc_read_region_names(fullf)
-T = HUMOR_FC_read_region_names_file(fullf);
+T = deConfUSIon_FC_read_region_names_file(fullf);
 end
 
 function T = fc_region_names_from_mat(S)
@@ -5526,7 +5550,7 @@ function [M,names,order,meta] = fc_current_matrix(s,res)
 % Slice ROIs ON means selected-slice ROI FC is recomputed before L/R mode is applied.
 try
     if isfield(s,'Z') && s.Z > 1 && isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
-        res = HUMOR_FC_make_slice_roi_result(s,s.currentSubject,res,s.slice);
+        res = deConfUSIon_FC_make_slice_roi_result(s,s.currentSubject,res,s.slice);
     end
 catch
 end
@@ -5575,8 +5599,18 @@ if strcmpi(mode,'lvr')
         cleanR = cell(size(namesR0));
         for ii = 1:numel(namesL0), cleanL{ii} = lower(fc_region_fullname_no_lr(namesL0{ii})); end
         for ii = 1:numel(namesR0), cleanR{ii} = lower(fc_region_fullname_no_lr(namesR0{ii})); end
-        [~,ordL] = sort(cleanL);
-        [~,ordR] = sort(cleanR);
+        try
+            [ordL,okJML] = deConfUSIon_fc_jm_order(labels0(leftIdx),namesL0);
+        catch
+            okJML = false;
+        end
+        if ~okJML, [~,ordL] = sort(cleanL); end
+        try
+            [ordR,okJMR] = deConfUSIon_fc_jm_order(labels0(rightIdx),namesR0);
+        catch
+            okJMR = false;
+        end
+        if ~okJMR, [~,ordR] = sort(cleanR); end
         leftIdx = leftIdx(ordL);
         rightIdx = rightIdx(ordR);
 
@@ -5639,7 +5673,12 @@ try
             end
             [~,ord2] = sort(cleanNames);
         otherwise
-            [~,ord2] = sort(labelsDisplay);
+            try
+                [ord2,okJM] = deConfUSIon_fc_jm_order(labelsDisplay,names);
+                if ~okJM, [~,ord2] = sort(labelsDisplay); end
+            catch
+                [~,ord2] = sort(labelsDisplay);
+            end
     end
 catch
     ord2 = 1:numel(names);
@@ -6957,7 +6996,7 @@ for i = 1:s.nSub
     try
         fcBundle.subjects(i).isStepMotor3D = (isfield(s,'Z') && s.Z > 1);
         fcBundle.subjects(i).nSlices = s.Z;
-        fcBundle.subjects(i).sliceResults = HUMOR_FC_build_slice_bundle(s,i,res);
+        fcBundle.subjects(i).sliceResults = deConfUSIon_FC_build_slice_bundle(s,i,res);
         fcBundle.subjects(i).sliceExportNote = 'sliceResults contain true slice-specific ROI FC matrices.';
     catch ME_sliceExport
         fcBundle.subjects(i).sliceResults = struct([]);
@@ -7001,7 +7040,7 @@ end
 end
 
 function startDir = fc_segmentation_start_dir(subj,opts)
-% Prefer HUMoR Segmentation or loaded analysis folder for Load Seg MAT.
+% Prefer deConfUSIon Segmentation or loaded analysis folder for Load Seg MAT.
 startDir = pwd;
 cands = {};
 try
@@ -7340,7 +7379,7 @@ res.TR = TR;
 res.timeIdx = (1:size(meanTS,1))';
 res.epochName = ['Segmentation ' spaceName];
 res.sourceFile = fullFile;
-res.sourceType = 'HUMoR Segmentation';
+res.sourceType = 'deConfUSIon Segmentation';
 res.meanTSFull = meanTS;
 res.timeIdxFull = (1:size(meanTS,1))';
 res.timeSec = [];
@@ -7562,7 +7601,7 @@ try
 catch
 end
 
-% If this came from HUMoR Segmentation, retrieve acronyms and full names directly from Seg.region.
+% If this came from deConfUSIon Segmentation, retrieve acronyms and full names directly from Seg.region.
 try
     segFile = '';
     if isfield(res,'sourceFile') && ~isempty(res.sourceFile) && exist(res.sourceFile,'file')
@@ -7644,8 +7683,8 @@ try
         try, meta.displayLabels = meta.displayLabelsY; catch, end
 
         if isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
-            ySlice = HUMOR_FC_slice_keep_indices(s,meta,size(M,1),'y');
-            xSlice = HUMOR_FC_slice_keep_indices(s,meta,size(M,2),'x');
+            ySlice = deConfUSIon_FC_slice_keep_indices(s,meta,size(M,1),'y');
+            xSlice = deConfUSIon_FC_slice_keep_indices(s,meta,size(M,2),'x');
             if ~isempty(ySlice) && ~isempty(xSlice)
                 M = M(ySlice,xSlice);
                 try, meta.namesY = meta.namesY(ySlice); catch, end
@@ -7674,7 +7713,7 @@ try
     end
 
     if isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
-        keepSlice = HUMOR_FC_slice_keep_indices(s,meta,size(M,1),'both');
+        keepSlice = deConfUSIon_FC_slice_keep_indices(s,meta,size(M,1),'both');
         if ~isempty(keepSlice)
             M = M(keepSlice,keepSlice);
             names = names(keepSlice);
@@ -7966,3 +8005,444 @@ txt = strjoin(lines,newline);
 end
 
 
+
+
+
+
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from deConfUSIon_FC_build_slice_bundle.m on 09-Jun-2026 16:52:18
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function sliceResults = deConfUSIon_FC_build_slice_bundle(s,subIdx,resWhole)
+sliceResults = struct([]);
+try
+    if ~isfield(s,'Z') || s.Z < 1 || isempty(resWhole), return; end
+    n = 0;
+    for z = 1:s.Z
+        ss = s;
+        ss.slice = z;
+        ss.sliceRegionOnly = true;
+        rz = deConfUSIon_FC_make_slice_roi_result(ss,subIdx,resWhole,z);
+        if isempty(rz) || ~isfield(rz,'M') || isempty(rz.M), continue; end
+        if ~isfield(rz,'labels') || numel(rz.labels) < 2, continue; end
+
+        n = n + 1;
+        R = double(rz.M);
+        Zm = atanh(max(-0.999999,min(0.999999,R)));
+        Zm(1:size(Zm,1)+1:end) = 0;
+
+        sliceResults(n).sliceIndex = z; %#ok<AGROW>
+        sliceResults(n).sliceLabel = sprintf('Slice%03d',z);
+        sliceResults(n).labels = rz.labels;
+        sliceResults(n).names = rz.names;
+        sliceResults(n).counts = rz.counts;
+        sliceResults(n).meanTS = rz.meanTS;
+        sliceResults(n).R = R;
+        sliceResults(n).Z = Zm;
+        sliceResults(n).M = R;
+        sliceResults(n).statMatrix = Zm;
+        sliceResults(n).statSpace = 'Fisher z';
+        sliceResults(n).displayMatrix = R;
+        sliceResults(n).displaySpace = 'Pearson r';
+        if isfield(rz,'timeIdx'), sliceResults(n).timeIdx = rz.timeIdx; else, sliceResults(n).timeIdx = []; end
+    end
+catch
+    sliceResults = struct([]);
+end
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from deConfUSIon_FC_find_stepmotor_txt_names.m on 09-Jun-2026 16:52:18
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function out = deConfUSIon_FC_find_stepmotor_txt_names(folder)
+% Recursively finds AtlasRegions_slice*.txt and other region-name files.
+
+out = struct();
+out.folder = folder;
+out.names = struct('labels',[] ,'names',{{}});
+out.files = {};
+out.bestFile = '';
+out.summary = '';
+
+if nargin < 1 || isempty(folder) || exist(folder,'dir') ~= 7
+    return;
+end
+
+files = localFiles(folder);
+
+% Prefer AtlasRegions_slice*.txt, then region/label/name files.
+cand = {};
+score = [];
+
+for i = 1:numel(files)
+    f = files{i};
+    ext = localExt(f);
+    if ~(strcmp(ext,'.txt') || strcmp(ext,'.csv') || strcmp(ext,'.tsv') || strcmp(ext,'.mat'))
+        continue;
+    end
+
+    nm = lower(localShort(f));
+    sc = 0;
+
+    if ~isempty(strfind(nm,'atlasregions_slice')), sc = sc + 1000; end
+    if ~isempty(strfind(nm,'atlasregions')), sc = sc + 900; end
+    if ~isempty(strfind(nm,'atlas_regions')), sc = sc + 850; end
+    if ~isempty(strfind(nm,'regiontable')), sc = sc + 800; end
+    if ~isempty(strfind(nm,'region_table')), sc = sc + 800; end
+    if ~isempty(strfind(nm,'regionnames')), sc = sc + 700; end
+    if ~isempty(strfind(nm,'region_names')), sc = sc + 700; end
+    if ~isempty(strfind(nm,'roinames')), sc = sc + 650; end
+    if ~isempty(strfind(nm,'roi_names')), sc = sc + 650; end
+    if ~isempty(strfind(nm,'labels')), sc = sc + 300; end
+    if ~isempty(strfind(nm,'names')), sc = sc + 300; end
+    if ~isempty(strfind(nm,'inforegions')), sc = sc + 600; end
+    if ~isempty(strfind(nm,'segmentation_')), sc = sc + 500; end
+
+    if ~isempty(strfind(nm,'functionalconnectivity')), sc = sc - 1000; end
+    if ~isempty(strfind(nm,'fc_groupbundle')), sc = sc - 1000; end
+
+    if sc > 0
+        T = deConfUSIon_FC_read_region_names_file(f);
+        if ~isempty(T.labels)
+            cand{end+1} = f; %#ok<AGROW>
+            score(end+1) = sc + numel(T.labels); %#ok<AGROW>
+        end
+    end
+end
+
+if isempty(cand)
+    out.summary = sprintf('No readable TXT/CSV/MAT region-name files found recursively under: %s',folder);
+    return;
+end
+
+[~,ord] = sort(score,'descend');
+cand = cand(ord);
+
+Tall = struct('labels',[] ,'names',{{}});
+for i = 1:numel(cand)
+    T = deConfUSIon_FC_read_region_names_file(cand{i});
+    Tall = localMerge(Tall,T);
+end
+
+out.names = Tall;
+out.files = cand;
+out.bestFile = cand{1};
+out.summary = sprintf('Loaded %d unique labels from %d recursive file(s). Best: %s', ...
+    numel(out.names.labels), numel(out.files), localShort(out.bestFile));
+end
+
+function files = localFiles(folder)
+files = {};
+d = dir(folder);
+for i = 1:numel(d)
+    nm = d(i).name;
+    if strcmp(nm,'.') || strcmp(nm,'..'), continue; end
+    f = fullfile(folder,nm);
+    if d(i).isdir
+        sub = localFiles(f);
+        files = [files sub]; %#ok<AGROW>
+    else
+        files{end+1} = f; %#ok<AGROW>
+    end
+end
+end
+
+function T = localMerge(A,B)
+T = A;
+if isempty(B.labels), return; end
+for i = 1:numel(B.labels)
+    lab = double(B.labels(i));
+    nm = B.names{i};
+    if isempty(T.labels) || ~any(double(T.labels(:)) == lab)
+        T.labels(end+1,1) = lab; %#ok<AGROW>
+        T.names{end+1,1} = nm; %#ok<AGROW>
+    end
+end
+end
+
+function ext = localExt(f)
+[~,~,ext] = fileparts(f);
+ext = lower(ext);
+end
+
+function nm = localShort(f)
+[~,a,b] = fileparts(f);
+nm = [a b];
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from deConfUSIon_FC_slice_keep_indices.m on 09-Jun-2026 16:52:19
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function keep = deConfUSIon_FC_slice_keep_indices(s,meta,n,axisName)
+keep = [];
+try
+    subj = s.subjects(s.currentSubject);
+    if isempty(subj.roiAtlas), return; end
+    A = subj.roiAtlas;
+    if ndims(A) < 3
+        atlasS = round(double(A));
+    else
+        z = max(1,min(size(A,3),round(s.slice)));
+        atlasS = round(double(A(:,:,z)));
+    end
+    present = unique(atlasS(isfinite(atlasS) & atlasS ~= 0));
+    if isempty(present), return; end
+    presentAbs = unique(abs(present));
+    for ii = 1:n
+        labs = [];
+        if isfield(meta,'isRectangular') && meta.isRectangular
+            if strcmpi(axisName,'x')
+                if isfield(meta,'orderX') && isfield(meta,'rawLabels')
+                    idx = meta.orderX(ii); if idx >= 1 && idx <= numel(meta.rawLabels), labs = meta.rawLabels(idx); end
+                elseif isfield(meta,'displayLabelsX')
+                    labs = meta.displayLabelsX(ii);
+                end
+            else
+                if isfield(meta,'orderY') && isfield(meta,'rawLabels')
+                    idx = meta.orderY(ii); if idx >= 1 && idx <= numel(meta.rawLabels), labs = meta.rawLabels(idx); end
+                elseif isfield(meta,'displayLabelsY')
+                    labs = meta.displayLabelsY(ii);
+                end
+            end
+        else
+            if isfield(meta,'groups') && ii <= numel(meta.groups) && isfield(meta,'rawLabels')
+                idx = meta.groups{ii}; idx = idx(:);
+                idx = idx(idx >= 1 & idx <= numel(meta.rawLabels));
+                labs = meta.rawLabels(idx);
+            elseif isfield(meta,'displayLabels') && ii <= numel(meta.displayLabels)
+                labs = meta.displayLabels(ii);
+            end
+        end
+        labs = round(double(labs(:)));
+        labs = labs(isfinite(labs) & labs ~= 0);
+        if isempty(labs), continue; end
+        if any(ismember(labs,present)) || any(ismember(abs(labs),presentAbs))
+            keep(end+1) = ii; %#ok<AGROW>
+        end
+    end
+catch
+    keep = [];
+end
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from fc_compare_slice_note.m on 09-Jun-2026 16:52:20
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function note = fc_compare_slice_note(s,lab)
+note = '';
+try
+    subj = s.subjects(s.currentSubject);
+    A = subj.roiAtlas;
+    if isempty(A), note = sprintf('Slice Z %d/%d: no atlas loaded',s.slice,s.Z); return; end
+    if ndims(A) < 3
+        atlasS = round(double(A)); zNow = 1; zMax = 1;
+    else
+        zNow = max(1,min(size(A,3),round(s.slice))); zMax = size(A,3);
+        atlasS = round(double(A(:,:,zNow)));
+    end
+    exactPix = nnz(atlasS == round(double(lab)));
+    absPix = nnz(abs(atlasS) == abs(round(double(lab))));
+    if exactPix > 0
+        note = sprintf('Slice Z %d/%d: selected region present (%d pixels, exact label)',zNow,zMax,exactPix);
+    elseif absPix > 0
+        note = sprintf('Slice Z %d/%d: selected region present by absolute label (%d pixels)',zNow,zMax,absPix);
+    else
+        note = sprintf('Slice Z %d/%d: selected region not present; map shows other slice regions correlated with it',zNow,zMax);
+    end
+catch
+    note = '';
+end
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from fc_label_mask_for_slice.m on 09-Jun-2026 16:52:20
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function mask = fc_label_mask_for_slice(atlasS,lab)
+atlasS = round(double(atlasS));
+lab = round(double(lab));
+mask = atlasS == lab;
+if ~any(mask(:))
+    mask = abs(atlasS) == abs(lab);
+end
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from fc_region_names_from_region_struct.m on 09-Jun-2026 16:52:20
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function T = fc_region_names_from_region_struct(r)
+T = struct('labels',[],'names',{{}});
+try
+    if ~isstruct(r), return; end
+    if isfield(r,'labels'), labs = double(r.labels(:)); else, labs = []; end
+    names = {};
+    if isfield(r,'names') && ~isempty(r.names)
+        names = cellstr(r.names(:));
+    elseif isfield(r,'acronyms') && ~isempty(r.acronyms)
+        names = cellstr(r.acronyms(:));
+    end
+    if isempty(labs) || isempty(names), return; end
+    n = min(numel(labs),numel(names));
+    T.labels = labs(1:n);
+    T.names = names(1:n);
+catch
+    T = struct('labels',[],'names',{{}});
+end
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from fc_slice_filter_text.m on 09-Jun-2026 16:52:21
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function txt = fc_slice_filter_text(s)
+try
+    if isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
+        txt = sprintf('Z %d/%d only',s.slice,s.Z);
+    else
+        txt = sprintf('all regions; Z %d/%d display',s.slice,s.Z);
+    end
+catch
+    txt = 'all regions';
+end
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% deConfUSIon local helper: no-input startup for direct FC command use
+%% ------------------------------------------------------------------------
+function [dataIn, saveRoot, tag, opts] = fc_noarg_startup_deconfusion(saveRoot, tag, opts)
+    if nargin < 1 || isempty(saveRoot), saveRoot = pwd; end
+    if nargin < 2 || isempty(tag), tag = datestr(now,'yyyymmdd_HHMMSS'); end
+    if nargin < 3 || isempty(opts), opts = struct(); end
+    dataIn = [];
+
+    names = {'dataIn','I','I3D','PSC','data','functional','func','movie','volume','loadedData'};
+    for ii = 1:numel(names)
+        try
+            if evalin('base', ['exist(''' names{ii} ''',''var'')'])
+                v = evalin('base', names{ii});
+                if fc_noarg_candidate_ok_deconfusion(v)
+                    dataIn = v;
+                    fprintf('FunctionalConnectivity: using base workspace variable: %s\n', names{ii});
+                    return;
+                end
+            end
+        catch
+        end
+    end
+
+    try
+        if evalin('base','exist(''studio'',''var'')')
+            st = evalin('base','studio');
+            dataIn = fc_noarg_pick_from_struct_deconfusion(st);
+            if ~isempty(dataIn)
+                fprintf('FunctionalConnectivity: using data found in base workspace variable: studio\n');
+                return;
+            end
+        end
+    catch
+    end
+
+    try
+        [f,p] = uigetfile({'*.mat','MAT-files (*.mat)'}, 'Select fUSI data MAT file for Functional Connectivity');
+        if isequal(f,0)
+            dataIn = [];
+            return;
+        end
+        S = load(fullfile(p,f));
+        dataIn = fc_noarg_pick_from_struct_deconfusion(S);
+        if isempty(dataIn)
+            error('No numeric 3D/4D data or compatible struct found in selected MAT file.');
+        end
+        saveRoot = p;
+        [~,tag0] = fileparts(f);
+        if isempty(tag), tag = tag0; end
+        fprintf('FunctionalConnectivity: using MAT file: %s\n', fullfile(p,f));
+    catch ME
+        dataIn = [];
+        warning('FunctionalConnectivity:noInputLoadFailed', 'Could not load data for FC: %s', ME.message);
+    end
+end
+
+function v = fc_noarg_pick_from_struct_deconfusion(S)
+    v = [];
+    if fc_noarg_candidate_ok_deconfusion(S)
+        v = S;
+        return;
+    end
+    if ~isstruct(S)
+        return;
+    end
+
+    preferred = {'I','I3D','PSC','data','functional','func','movie','volume','loadedData','activeData','currentData'};
+    for ii = 1:numel(preferred)
+        if isfield(S, preferred{ii})
+            vv = S.(preferred{ii});
+            if fc_noarg_candidate_ok_deconfusion(vv)
+                v = vv;
+                return;
+            end
+            if isstruct(vv)
+                v = fc_noarg_pick_from_struct_deconfusion(vv);
+                if ~isempty(v), return; end
+            end
+        end
+    end
+
+    fn = fieldnames(S);
+    for ii = 1:numel(fn)
+        vv = S.(fn{ii});
+        if fc_noarg_candidate_ok_deconfusion(vv)
+            v = vv;
+            return;
+        end
+    end
+end
+
+function tf = fc_noarg_candidate_ok_deconfusion(v)
+    tf = false;
+    if isnumeric(v) && ndims(v) >= 3 && numel(v) > 100
+        tf = true;
+        return;
+    end
+    if iscell(v) && ~isempty(v)
+        tf = true;
+        return;
+    end
+    if isstruct(v)
+        goodFields = {'I','I4','I3D','PSC','data','functional','func','movie','volume','roiTC','regionTC'};
+        for jj = 1:numel(goodFields)
+            if isfield(v, goodFields{jj})
+                tf = true;
+                return;
+            end
+        end
+    end
+end

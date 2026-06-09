@@ -1,6 +1,6 @@
-# HUMoR Analysis Tool / fUSI Studio New
+# deConfUSIon / fUSI Studio New
 
-**HUMoR Analysis Tool / fUSI Studio** is a MATLAB-based graphical toolbox for functional ultrasound imaging (fUSI) data analysis.
+**deConfUSIon / fUSI Studio** is a MATLAB-based graphical toolbox for functional ultrasound imaging (fUSI) data analysis.
 
 HUMoR stands for **Hemodynamic Ultrasound Imaging of Molecular Reporters**. The toolbox supports a complete fUSI analysis workflow, including data loading, quality control, preprocessing, percentage signal change (PSC) computation, signal change map (SCM) visualization, masking, atlas registration, group analysis, and functional connectivity.
 
@@ -116,7 +116,7 @@ run_fusi_studio
 
 | Module | Main file(s) | Purpose |
 |---|---|---|
-| Main launcher | `run_fusi_studio.m` | Starts HUMoR/fUSI Studio and sets up the path. |
+| Main launcher | `run_fusi_studio.m` | Starts deConfUSIon/fUSI Studio and sets up the path. |
 | Main GUI | `fusi_studio.m` | Central graphical interface and workflow controller. |
 | Data loading | `loadFUSIData.m` | Loads `.mat`, `.nii`, and `.nii.gz` fUSI datasets. |
 | Path handling | `studio_resolve_paths.m`, `studio_mkdir.m` | Resolves dataset output folders and creates directories. |
