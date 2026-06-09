@@ -1,268 +1,291 @@
 function [newData, stats] = pca_denoise(dataIn, saveRoot, tag, opts)
-% PCA_DENOISE — interactive PCA removal (MATLAB 2017b + 2023b)
-% ==========================================================
-% - 25 PCs/page grid selector (dark theme)
-% - Left-click: toggle select (red border = removed)
-% - Right-click: deselect
-% - Clean minutes axis ticks + labels
-% - Logs apply/cancel reliably in fUSI Studio by calling opts.onApply/onCancel
-%   ONLY AFTER the selector closes (important for Studio log correctness)
-%
-% QC PNGs saved (in <saveRoot>/Preprocessing/pca_QC):
-%   1) PCA_selected_<tag>.png                       (variance proxy bar; removed dark)
-%   2) PCA_globalMean_before_after_<tag>.png        (minutes; dark blue + dark gray)
-%   3) PCA_meanImage_before_after_<tag>.png         (middle Z slice)
-%   4) PCA_grid_dark_pageXX_<tag>.png               (exact-look grid pages; removed marked)
-%
-% Inputs:
-%   dataIn: struct with .I (and optional .TR) OR raw array [Y X T] / [Y X Z T]
-%   saveRoot: studio.exportPath
-%   tag: e.g. ['pca_' datestr(now,'yyyymmdd_HHMMSS')]
-%   opts:
-%       .nCompMax (default 50)
-%       .maxDisplayPoints (default 2000)
-%       .chunkT (default 250)
-%       .centerMode = 'voxel' (default) or 'global'
-%       .verbose (default true)
-%       .onApply  = @(sel) ...   % called immediately AFTER selector closes with Apply
-%       .onCancel = @() ...      % called immediately AFTER selector closes with Cancel
-%       .logFcn   = @(msg) ...   % optional log for internal progress messages
+% PCA_DENOISE V12 — integrated all-slice / slice-specific recompute GUI
+% The first PCA/ICA popup only chooses method. This GUI handles slice scope.
 
 if nargin < 2 || isempty(saveRoot), saveRoot = pwd; end
 if nargin < 3 || isempty(tag), tag = datestr(now,'yyyymmdd_HHMMSS'); end
 if nargin < 4, opts = struct(); end
 
-% ---- defaults ----
 if ~isfield(opts,'nCompMax'),         opts.nCompMax = 50; end
 if ~isfield(opts,'maxDisplayPoints'), opts.maxDisplayPoints = 2000; end
 if ~isfield(opts,'chunkT'),           opts.chunkT = 250; end
-if ~isfield(opts,'centerMode'),       opts.centerMode = 'voxel'; end % 'voxel' or 'global'
+if ~isfield(opts,'centerMode'),       opts.centerMode = 'voxel'; end
 if ~isfield(opts,'verbose'),          opts.verbose = true; end
 if ~isfield(opts,'onApply'),          opts.onApply = []; end
 if ~isfield(opts,'onCancel'),         opts.onCancel = []; end
 if ~isfield(opts,'logFcn'),           opts.logFcn = []; end
 
-% ---- extract data + TR ----
 isStruct = isstruct(dataIn);
 if isStruct
     if ~isfield(dataIn,'I'), error('pca_denoise: input struct must contain .I'); end
-    I  = dataIn.I;
-    TR = 1;
-    if isfield(dataIn,'TR'), TR = double(dataIn.TR); end
+    I = dataIn.I;
+    TR = 1; if isfield(dataIn,'TR'), TR = double(dataIn.TR); end
     newData = dataIn;
 else
-    I = dataIn;
-    TR = 1;
-    newData = struct('I',I);
+    I = dataIn; TR = 1; newData = struct('I',I);
 end
 if ~isscalar(TR) || ~isfinite(TR) || TR <= 0, TR = 1; end
 
-% ---- force 4D [Y X Z T] ----
 sz = size(I);
+inputWas3D = false;
 if ndims(I) == 3
-    Y = sz(1); X = sz(2); T = sz(3);
-    Z = 1;
-    I4 = reshape(I, Y, X, 1, T);
+    Y0 = sz(1); X0 = sz(2); T0 = sz(3); Z0 = 1;
+    I4orig = reshape(I, Y0, X0, 1, T0);
+    inputWas3D = true;
 elseif ndims(I) == 4
-    Y = sz(1); X = sz(2); Z = sz(3); T = sz(4);
-    I4 = I;
+    Y0 = sz(1); X0 = sz(2); Z0 = sz(3); T0 = sz(4);
+    I4orig = I;
 else
     error('Data must be 3D [Y X T] or 4D [Y X Z T].');
 end
-V = Y*X*Z;
 
-Xvt = reshape(single(I4), [V, T]);
-
-% ---- global mean BEFORE (QC) ----
-gmean_before = mean(Xvt, 1);
-
-% ---- center ----
-switch lower(opts.centerMode)
-    case 'global'
-        mu = mean(Xvt(:));
-        Xc = Xvt - single(mu);
-        muVec = [];
-    otherwise % voxel
-        muVec = mean(Xvt, 2);
-        Xc = bsxfun(@minus, Xvt, muVec);
-        mu = [];
-end
-
-% ---- choose K ----
-K = min([opts.nCompMax, T-1, 200]);
-if K < 1
-    stats = emptyStats(tag);
-    stats.method = 'PCA (none)';
-    newData.I = I;
-    return;
-end
-
-if opts.verbose
-    fprintf('[PCA] V=%d, T=%d, computing top K=%d...\n', V, T, K);
-end
-
-% ==========================================================
-% PCA via svds on Xc' [T x V]
-% ==========================================================
-Xtv = double(Xc');  % [T x V]
-useFallback = false;
-
-try
-    [U,S,W] = svds(Xtv, K);       % U:[T x K], W:[V x K]
-catch
-    useFallback = true;
-end
-
-if useFallback
-    if opts.verbose, fprintf('[PCA] svds failed -> eigs fallback\n'); end
-    Ct = Xtv * Xtv';              % [T x T]
-    Ct = (Ct + Ct') * 0.5;
-    [U,L] = eigs(Ct, K, 'largestreal');
-    s = sqrt(max(diag(L),0));
-    S = diag(s);
-    W = (Xtv' * U);
-    for i = 1:K
-        if s(i) > 0
-            W(:,i) = W(:,i) ./ s(i);
-        end
-    end
-end
-
-sing = diag(S);
-[sing, ord] = sort(sing(:), 'descend');
-U = U(:, ord);
-W = W(:, ord);
-
-expl = sing.^2;
-expl = expl / max(eps, sum(expl));
-
-% ==========================================================
-% GUI selection (25/page)
-% IMPORTANT: selector does NOT call Studio log itself.
-% We call opts.onApply/opts.onCancel only AFTER selector closes.
-% ==========================================================
-[selected, applyFlag] = pca_selector_gui_grid(U, expl, TR, opts.maxDisplayPoints);
+[selected, applyFlag, st] = pca_v12_gui(I4orig, TR, opts, tag);
 
 stats = emptyStats(tag);
-stats.nComponents = K;
-stats.explainedPerComponent = expl(:)';
+stats.nComponents = 0;
+stats.explainedPerComponent = [];
 stats.selectedComponents = [];
 stats.percentExplainedRemoved = 0;
 stats.applied = false;
 stats.method = 'PCA (cancelled)';
 stats.qcGridFiles = {};
+stats.sliceScope = st.scopeInfo;
 
 if ~applyFlag
-    % user cancelled
-    if ~isempty(opts.onCancel) && isa(opts.onCancel,'function_handle')
-        try, opts.onCancel(); catch, end
-    end
+    if ~isempty(opts.onCancel) && isa(opts.onCancel,'function_handle'), try, opts.onCancel(); catch, end, end
     newData.I = I;
     return;
 end
 
+K = st.K;
 selected = unique(selected(:)');
 selected = selected(selected >= 1 & selected <= K);
 
-% NOW we can safely log/apply hook in Studio context
 if ~isempty(opts.onApply) && isa(opts.onApply,'function_handle')
     try, opts.onApply(selected); catch, end
 end
 
+stats.nComponents = K;
+stats.explainedPerComponent = st.expl(:)';
 stats.selectedComponents = selected;
-stats.percentExplainedRemoved = 100 * sum(expl(selected));
+stats.percentExplainedRemoved = 100 * sum(st.expl(selected));
 stats.applied = true;
-stats.method = 'PCA denoise (grid select)';
+stats.method = 'PCA denoise (V12 slice-aware)';
+stats.sliceScope = st.scopeInfo;
 
 if isempty(selected)
-    if ~isempty(opts.logFcn) && isa(opts.logFcn,'function_handle')
-        try, opts.logFcn('PCA applied: no PCs selected (no change).'); catch, end
-    end
     newData.I = I;
     return;
 end
 
-% ==========================================================
-% Remove selected PCs: Xc_clean = Xc - Wsel*Ssel*Usel'
-% chunked time
-% ==========================================================
-Wsel = double(W(:, selected));                 % [V x R]
-Ssel = diag(double(sing(selected)));           % [R x R]
-
-Xclean = Xc;                                   % [V x T] single
+Xclean = st.Xc;
+Wsel = double(st.W(:,selected));
+Ssel = diag(double(st.sing(selected)));
 chunkT = max(50, round(opts.chunkT));
 
-if opts.verbose
-    fprintf('[PCA] Removing %d PCs (%.2f%% variance proxy)...\n', numel(selected), stats.percentExplainedRemoved);
+for t0 = 1:chunkT:st.T
+    t1 = min(st.T, t0 + chunkT - 1);
+    Ut = double(st.U(t0:t1, selected));
+    recon = Wsel * (Ssel * Ut');
+    Xclean(:,t0:t1) = Xclean(:,t0:t1) - single(recon);
 end
 
-for t0 = 1:chunkT:T
-    t1 = min(T, t0 + chunkT - 1);
-    Ut = double(U(t0:t1, selected));          % [chunk x R]
-    A  = Ssel * Ut';                          % [R x chunk]
-    recon = Wsel * A;                         % [V x chunk]
-    Xclean(:, t0:t1) = Xclean(:, t0:t1) - single(recon);
-end
-
-% add mean back
 switch lower(opts.centerMode)
     case 'global'
-        Xout = Xclean + single(mu);
+        Xout = Xclean + single(st.mu);
     otherwise
-        Xout = bsxfun(@plus, Xclean, muVec);
+        Xout = bsxfun(@plus, Xclean, st.muVec);
 end
 
-gmean_after = mean(Xout, 1);
-
-Iout4 = reshape(Xout, [Y, X, Z, T]);
-if Z == 1
-    Iout = reshape(Iout4, [Y, X, T]);
+IworkOut4 = reshape(Xout, [st.Y st.X st.Z st.T]);
+if st.scopeInfo.sliceSpecific && Z0 > 1
+    Iout4 = I4orig;
+    zUse = st.scopeInfo.zIndex;
+    Iout4(:,:,zUse,:) = reshape(IworkOut4(:,:,1,:), [Y0 X0 1 T0]);
 else
-    Iout = Iout4;
+    Iout4 = IworkOut4;
 end
 
-newData.I = Iout;
-newData.preprocessing = 'PCA denoise (grid select)';
+if inputWas3D
+    newData.I = reshape(Iout4, [Y0 X0 T0]);
+else
+    newData.I = Iout4;
+end
+newData.preprocessing = 'PCA denoise (V12 slice-aware)';
+newData.pcaicaSliceScope = st.scopeInfo;
 
-% ==========================================================
-% QC save
-% ==========================================================
 stats.qcFile = '';
 stats.qcGlobalMeanFile = '';
 stats.qcMeanImageFile = '';
-stats.qcGridFiles = {};
 
-try
-    qcDir = fullfile(saveRoot, 'Preprocessing', 'pca_QC');
-    if ~exist(qcDir,'dir'), mkdir(qcDir); end
+    function st = computePCA(scopeInfo)
+        if scopeInfo.sliceSpecific && Z0 > 1
+            zUse = max(1,min(Z0,round(scopeInfo.zIndex)));
+            I4 = reshape(I4orig(:,:,zUse,:), [Y0 X0 1 T0]);
+            Y = Y0; X = X0; Z = 1; T = T0;
+        else
+            I4 = I4orig;
+            Y = Y0; X = X0; Z = Z0; T = T0;
+        end
+        V = Y*X*Z;
+        Xvt = reshape(single(I4), [V T]);
+        switch lower(opts.centerMode)
+            case 'global'
+                mu = mean(Xvt(:));
+                Xc = Xvt - single(mu);
+                muVec = [];
+            otherwise
+                muVec = mean(Xvt,2);
+                Xc = bsxfun(@minus, Xvt, muVec);
+                mu = [];
+        end
+        K = min([opts.nCompMax, T-1, 200]);
+        if K < 1, error('Not enough time points for PCA.'); end
+        Xtv = double(Xc');
+        useFallback = false;
+        try
+            [U,S,W] = svds(Xtv,K);
+        catch
+            useFallback = true;
+        end
+        if useFallback
+            Ct = Xtv * Xtv';
+            Ct = (Ct + Ct') * 0.5;
+            [U,L] = eigs(Ct,K,'largestreal');
+            s = sqrt(max(diag(L),0));
+            S = diag(s);
+            W = Xtv' * U;
+            for ii = 1:K
+                if s(ii) > 0, W(:,ii) = W(:,ii) ./ s(ii); end
+            end
+        end
+        sing = diag(S);
+        [sing,ord] = sort(sing(:),'descend');
+        U = U(:,ord); W = W(:,ord);
+        expl = sing.^2;
+        expl = expl ./ max(eps,sum(expl));
+        st = struct('U',U,'W',W,'sing',sing,'expl',expl,'Xc',Xc,'mu',mu,'muVec',muVec, ...
+            'Y',Y,'X',X,'Z',Z,'T',T,'K',K,'scopeInfo',scopeInfo);
+    end
 
-    qc1 = fullfile(qcDir, sprintf('PCA_selected_%s.png', tag));
-    make_qc_plot_selected(expl, selected, qc1); % (colors upgraded)
-    stats.qcFile = qc1;
+    function [selected, applyFlag, st] = pca_v12_gui(I4orig_unused, TR, opts_unused, tag_unused) %#ok<INUSD>
+        bgFig=[0.06 0.06 0.07]; bgAx=[0.09 0.09 0.10]; fg=[0.90 0.90 0.92]; fgDim=[0.70 0.70 0.74]; selRed=[1.00 0.25 0.25]; lineCol=[0.35 0.80 1];
+        selected=[]; applyFlag=false;
+        scopeInfo = struct('mode','all','zIndex',1,'nSlices',Z0,'sliceSpecific',false);
+        st = computePCA(scopeInfo);
+        K = st.K; T = st.T;
+        maxPts = opts.maxDisplayPoints;
+        idx = getIdx(T,maxPts);
+        tmin = ((0:T-1)*TR)/60; tmin = tmin(idx); tmax = max(tmin);
+        perPage=25; nPages=max(1,ceil(K/perPage)); page=1;
+        fig=figure('Name','PCA Components — slice-aware V12', 'Color',bgFig,'MenuBar','none','ToolBar','none','NumberTitle','off', 'Position',[60 40 1800 980]);
+        try, HUMoR_force_fullscreen_fig(fig); catch, end
+        gridX=0.03; gridY=0.08; gridW=0.66; gridH=0.86; rightX=0.71; rightY=0.08; rightW=0.27; rightH=0.90;
+        hdr=uicontrol('Parent',fig,'Style','text','Units','normalized','Position',[gridX 0.965 gridW 0.03],'String','','BackgroundColor',bgFig,'ForegroundColor',fg,'FontSize',13,'FontWeight','bold','HorizontalAlignment','left');
+        rightPanel=uipanel('Parent',fig,'Units','normalized','Position',[rightX rightY rightW rightH],'BackgroundColor',[0.08 0.08 0.09],'ForegroundColor',fg,'Title','Selection + Slice Scope','FontWeight','bold','FontSize',13);
+        uicontrol('Parent',rightPanel,'Style','text','Units','normalized','Position',[0.06 0.915 0.88 0.055],'String','PCA INPUT SCOPE', 'BackgroundColor',get(rightPanel,'BackgroundColor'),'ForegroundColor',[0.85 0.95 1.00],'FontWeight','bold','FontSize',14);
+        scopePopup=uicontrol('Parent',rightPanel,'Style','popupmenu','Units','normalized','Position',[0.06 0.855 0.88 0.055],'String',{'All slices together','Selected slice only'},'Value',1,'BackgroundColor',[0.16 0.16 0.18],'ForegroundColor',fg,'FontWeight','bold','FontSize',12,'Callback',@scopeChanged);
+        scopeText=uicontrol('Parent',rightPanel,'Style','text','Units','normalized','Position',[0.06 0.805 0.88 0.050],'String',sprintf('All slices 1-%d',Z0),'BackgroundColor',get(rightPanel,'BackgroundColor'),'ForegroundColor',[1.00 0.95 0.55],'FontWeight','bold','FontSize',13);
+        stepSmall=1/max(1,Z0-1);
+        scopeSlider=uicontrol('Parent',rightPanel,'Style','slider','Units','normalized','Position',[0.06 0.755 0.88 0.045],'Min',1,'Max',max(1,Z0),'Value',1,'SliderStep',[stepSmall min(1,stepSmall*2)],'Enable','off','Callback',@scopeChanged);
+        if Z0 <= 1, set(scopePopup,'Enable','off'); set(scopeSlider,'Enable','off'); set(scopeText,'String','2D / single-slice data'); end
+        axPrev=axes('Parent',rightPanel,'Units','normalized','Position',[0.10 0.535 0.84 0.165],'Color',bgAx,'XColor',fg,'YColor',fg); title(axPrev,'PC timecourse preview','Color',fg);
+        txtInfo=uicontrol('Parent',rightPanel,'Style','text','Units','normalized','Position',[0.08 0.470 0.84 0.045],'String','Selected: 0 PCs', 'BackgroundColor',get(rightPanel,'BackgroundColor'),'ForegroundColor',[0.85 0.95 1.00],'FontWeight','bold','FontSize',13);
+        lb=uicontrol('Parent',rightPanel,'Style','listbox','Units','normalized','Position',[0.08 0.225 0.84 0.225],'String',{'<none>'},'BackgroundColor',[0.16 0.16 0.18],'ForegroundColor',fg,'FontName','Courier New','FontSize',13);
+        uicontrol('Parent',rightPanel,'Style','pushbutton','Units','normalized','Position',[0.08 0.135 0.40 0.070],'String','Apply & Close','FontWeight','bold','FontSize',11,'BackgroundColor',[0.20 0.45 0.25],'ForegroundColor','w','Callback',@applyAndClose);
+        uicontrol('Parent',rightPanel,'Style','pushbutton','Units','normalized','Position',[0.52 0.135 0.40 0.070],'String','Cancel','FontWeight','bold','FontSize',11,'BackgroundColor',[0.65 0.20 0.20],'ForegroundColor','w','Callback',@cancelAndClose);
+        btnPrev=uicontrol('Parent',rightPanel,'Style','pushbutton','Units','normalized','Position',[0.08 0.040 0.25 0.070],'String','< Prev','FontWeight','bold','FontSize',11,'BackgroundColor',[0.12 0.34 0.95],'ForegroundColor','w','Callback',@prevPage);
+        btnNext=uicontrol('Parent',rightPanel,'Style','pushbutton','Units','normalized','Position',[0.38 0.040 0.25 0.070],'String','Next >','FontWeight','bold','FontSize',11,'BackgroundColor',[0.12 0.34 0.95],'ForegroundColor','w','Callback',@nextPage);
+        uicontrol('Parent',rightPanel,'Style','pushbutton','Units','normalized','Position',[0.68 0.040 0.24 0.070],'String','HELP','FontWeight','bold','FontSize',11,'BackgroundColor',[0.12 0.34 0.95],'ForegroundColor','w','Callback',@showHelp);
+        nRow=5; nCol=5; axGrid=gobjects(25,1); lnGrid=gobjects(25,1); pcLabel=gobjects(25,1); compIdx=nan(25,1); pad=0.008; cellW=gridW/nCol; cellH=gridH/nRow;
+        for ii=1:25
+            r=floor((ii-1)/nCol); c=mod((ii-1),nCol);
+            axGrid(ii)=axes('Parent',fig,'Units','normalized','Position',[gridX+c*cellW+pad gridY+(nRow-1-r)*cellH+pad cellW-2*pad cellH-2*pad],'Color',bgAx);
+            set(axGrid(ii),'Box','on','LineWidth',1,'XColor',fgDim*0.35,'YColor',fgDim*0.35,'YTick',[]); hold(axGrid(ii),'on');
+            lnGrid(ii)=plot(axGrid(ii),tmin,zeros(size(tmin)),'Color',lineCol,'LineWidth',1);
+            pcLabel(ii)=text(axGrid(ii),0.02,0.92,'','Units','normalized','Color',fg,'FontSize',10,'FontWeight','bold'); hold(axGrid(ii),'off');
+            set(axGrid(ii),'ButtonDownFcn',@(h,~)onCellClick(h)); set(lnGrid(ii),'ButtonDownFcn',@(h,~)onCellClick(h));
+        end
+        set(fig,'WindowKeyPressFcn',@onKey,'WindowScrollWheelFcn',@onScrollWheel,'CloseRequestFcn',@cancelAndClose);
+        renderPage(); previewComponent(1); uiwait(fig);
+        function scopeChanged(~,~)
+            if Z0 > 1 && get(scopePopup,'Value') == 2
+                z=round(get(scopeSlider,'Value')); z=max(1,min(Z0,z)); set(scopeSlider,'Value',z,'Enable','on');
+                scopeInfo=struct('mode','slice','zIndex',z,'nSlices',Z0,'sliceSpecific',true);
+                set(scopeText,'String',sprintf('Selected slice %d of %d — recomputing PCA...',z,Z0));
+            else
+                set(scopeSlider,'Enable','off'); scopeInfo=struct('mode','all','zIndex',1,'nSlices',Z0,'sliceSpecific',false);
+                set(scopeText,'String',sprintf('All slices 1-%d — recomputing PCA...',Z0));
+            end
+            drawnow; st=computePCA(scopeInfo); K=st.K; T=st.T; idx=getIdx(T,maxPts); tmin=((0:T-1)*TR)/60; tmin=tmin(idx); tmax=max(tmin); selected=[]; page=1; nPages=max(1,ceil(K/perPage)); renderPage(); previewComponent(1);
+            if scopeInfo.sliceSpecific, set(scopeText,'String',sprintf('Selected slice %d of %d',scopeInfo.zIndex,Z0)); else, set(scopeText,'String',sprintf('All slices 1-%d',Z0)); end
+        end
+        function renderPage()
+            firstPC=(page-1)*perPage+1; lastPC=min(K,page*perPage); set(hdr,'String',sprintf('PCs %d-%d of %d | %s',firstPC,lastPC,K,scopeLabel()));
+            set(btnPrev,'Enable',onoff(page>1)); set(btnNext,'Enable',onoff(page<nPages));
+            for jj=1:25
+                k=(page-1)*perPage+jj; compIdx(jj)=k;
+                if k<=K
+                    tc=st.U(:,k); tc=tc(idx); set(lnGrid(jj),'XData',tmin,'YData',tc,'Visible','on'); set(axGrid(jj),'Visible','on','XLim',[0 max(tmin)]);
+                    set(pcLabel(jj),'String',sprintf('PC%d %.2f%%',k,100*st.expl(k)));
+                    if any(selected==k), set(axGrid(jj),'XColor',selRed,'YColor',selRed,'LineWidth',2.2); set(pcLabel(jj),'Color',selRed); else, set(axGrid(jj),'XColor',fgDim*0.35,'YColor',fgDim*0.35,'LineWidth',1); set(pcLabel(jj),'Color',fg); end
+                else
+                    set(axGrid(jj),'Visible','off');
+                end
+            end
+            refreshSelectionUI(); drawnow;
+        end
+        function onCellClick(hObj)
+            axh=ancestor(hObj,'axes'); if isempty(axh) && strcmp(get(hObj,'Type'),'axes'), axh=hObj; end
+            ii=find(axGrid==axh,1); if isempty(ii), return; end
+            k=compIdx(ii); if ~isfinite(k)||k<1||k>K, return; end
+            if strcmp(get(fig,'SelectionType'),'alt'), selected(selected==k)=[]; else, if any(selected==k), selected(selected==k)=[]; else, selected(end+1)=k; end, end
+            selected=sort(unique(selected)); renderPage(); previewComponent(k);
+        end
+        function previewComponent(k)
+            if k<1||k>K, return; end; cla(axPrev); plot(axPrev,tmin,st.U(idx,k),'Color',lineCol,'LineWidth',1.4); grid(axPrev,'on'); set(axPrev,'Color',bgAx,'XColor',fg,'YColor',fg); title(axPrev,sprintf('PC%d | %s',k,scopeLabel()),'Color',fg);
+        end
+        function refreshSelectionUI()
+            if isempty(selected), set(lb,'String',{'<none>'}); else, set(lb,'String',arrayfun(@(x)sprintf('PC%-3d  (%.2f%%)',x,100*st.expl(x)),selected,'UniformOutput',false)); end
+            set(txtInfo,'String',sprintf('Selected: %d PCs | Removed %.2f%%',numel(selected),100*sum(st.expl(selected))));
+        end
+        function prevPage(~,~), if page>1, page=page-1; renderPage(); end, end
+        function nextPage(~,~), if page<nPages, page=page+1; renderPage(); end, end
+        function applyAndClose(~,~), applyFlag=true; if ishghandle(fig), uiresume(fig); delete(fig); end, end
+        function cancelAndClose(~,~), applyFlag=false; if ishghandle(fig), uiresume(fig); delete(fig); end, end
+        function onKey(~,evt)
+            if strcmp(evt.Key,'rightarrow'), nextPage();
+            elseif strcmp(evt.Key,'leftarrow'), prevPage();
+            elseif strcmp(evt.Key,'escape'), cancelAndClose();
+            end
+        end
+        function onScrollWheel(~,evt)
+            if Z0 <= 1, return; end
+            set(scopePopup,'Value',2);
+            z = round(get(scopeSlider,'Value'));
+            if evt.VerticalScrollCount > 0
+                z = z + 1;
+            else
+                z = z - 1;
+            end
+            z = max(1,min(Z0,z));
+            set(scopeSlider,'Value',z);
+            scopeChanged([],[]);
+        end
+        function showHelp(~,~), msgbox(sprintf('Use scope control at top-right to switch All slices vs Selected slice. Mouse wheel also changes slices and recomputes PCA for the selected slice.'),'PCA help','modal'); end
+        function s=scopeLabel(), if st.scopeInfo.sliceSpecific, s=sprintf('slice %d/%d',st.scopeInfo.zIndex,st.scopeInfo.nSlices); else, s=sprintf('all slices 1-%d',Z0); end, end
+    end
 
-    qc2 = fullfile(qcDir, sprintf('PCA_globalMean_before_after_%s.png', tag));
-    make_qc_globalmean_plot(gmean_before, gmean_after, TR, qc2); % (colors upgraded)
-    stats.qcGlobalMeanFile = qc2;
+    function idx = getIdx(T,maxPts)
+        if T > maxPts, idx = unique(round(linspace(1,T,maxPts))); else, idx = 1:T; end
+    end
 
-    qc3 = fullfile(qcDir, sprintf('PCA_meanImage_before_after_%s.png', tag));
-    make_qc_meanimage_plot(single(I4), single(Iout4), qc3);
-    stats.qcMeanImageFile = qc3;
-
-    % Exact-look dark grid pages (always save page 1, plus pages containing removed)
-    gridFiles = make_qc_grid_dark_exact(U, expl, TR, selected, qcDir, tag); % (colors upgraded)
-    stats.qcGridFiles = gridFiles;
-
-catch ME
-    if opts.verbose
-        fprintf('[PCA] QC save warning: %s\n', ME.message);
+    function s = onoff(tf)
+        if tf, s='on'; else, s='off'; end
     end
 end
 
-end
 
-% ======================================================================
-% PCA selector GUI (25/page grid)
-% ======================================================================
 function [selected, applyFlag] = pca_selector_gui_grid(U, expl, TR, maxPts)
 
 T = size(U,1);
@@ -284,6 +307,11 @@ xticks = niceMinuteTicks(tmax);
 
 selected = [];
 applyFlag = false;
+% HUMOR_PCA_SCOPE_GUI_V8
+if nargin < 5 || isempty(volSize), volSize = [1 1 1]; end
+if numel(volSize) < 3, volSize(3) = 1; end
+Zscope = max(1, round(volSize(3)));
+scopeInfo = struct('mode','all','zIndex',1,'nSlices',Zscope,'sliceSpecific',false);
 
 perPage = 25;
 nPages = max(1, ceil(K / perPage));
@@ -301,7 +329,7 @@ lineCol = [0.35 0.80 1];   % lightblue (more visible than light blue)
 
 fig = figure('Name','PCA Components — left click select, right click deselect', ...
     'Color',bgFig,'MenuBar','none','ToolBar','none','NumberTitle','off', ...
-    'Position',[160 90 1500 860]);
+    'Position',[60 40 1800 980]);
 % HUMoR_FORCE_FULLSCREEN_PATCH31
 try, HUMoR_force_fullscreen_fig(fig); catch, end
 
@@ -392,6 +420,8 @@ uicontrol('Parent',rightPanel,'Style','pushbutton','Units','normalized', ...
     'Position',[0.66 0.03 0.26 0.07], 'String','HELP', ...
     'FontWeight','bold','FontSize',12, 'BackgroundColor',[0.10 0.35 0.95], 'ForegroundColor','w', ...
     'Callback',@showHelp);
+
+
 
 % Build 5x5 axes
 nRow = 5; nCol = 5;
@@ -698,7 +728,6 @@ set(axPrev,'XLim',[0 tmax], 'XTick',xticks);
         'FontWeight','bold', ...
         'Callback',@(src,evt) delete(helpFig));
 end
-
     function onKey(~,evt)
         switch evt.Key
             case {'return','enter'}
@@ -713,6 +742,7 @@ end
     end
 
     function applyAndClose(~,~)
+
         applyFlag = true;
         try, uiresume(fig); catch, end
         try, delete(fig); catch, end

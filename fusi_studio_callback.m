@@ -828,9 +828,7 @@ function datasetDropdownCallback(src,~)
     if isfield(studio,'activeDatasetText') && isgraphics(studio.activeDatasetText)
         fullName = getDatasetDisplayName(studio, studio.activeDataset);
         showName = makeDropdownLabel(fullName);
-        set(studio.activeDatasetText, ...
-            'String',['DATASET: ' showName], ...
-            'TooltipString',['DATASET: ' fullName]);
+        set(studio.activeDatasetText,'String',['DATASET: ' showName],'TooltipString',['DATASET: ' fullName]);
     end
 end
 
@@ -838,42 +836,95 @@ end
 %  REFRESH DATASET DROPDOWN
 % =========================================================
 function refreshDatasetDropdown()
-
     studio = guidata(fig);
-    dd = findobj(fig,'Tag','datasetDropdown');
-
-    if isempty(dd) || ~ishghandle(dd)
-        return;
+    try
+        studio = HUMOR_add_preproc_lazy_datasets(studio);
+        studio = HUMOR_fix_studio_dataset_names(studio);
+        guidata(fig, studio);
+    catch ME_scan
+        try, addLog(['Preprocessing dropdown scan warning: ' ME_scan.message]); catch, end
     end
+
+    dd = findobj(fig,'Tag','datasetDropdown');
+    if isempty(dd) || ~ishghandle(dd), return; end
 
     keys = fieldnames(studio.datasets);
     if isempty(keys)
-        set(dd,'String',{'<none>'},'Value',1,'UserData',{{}});
+        set(dd,'String',{'<none>'},'Value',1,'UserData',{{}},'TooltipString','<none>');
         return;
     end
 
+    sortVals = zeros(numel(keys),1);
+    for i = 1:numel(keys)
+        sortVals(i) = i;
+        try
+            d = studio.datasets.(keys{i});
+            if isstruct(d) && isfield(d,'datasetSortTime') && ~isempty(d.datasetSortTime)
+                sortVals(i) = d.datasetSortTime;
+            elseif isstruct(d) && isfield(d,'savedFile') && exist(d.savedFile,'file') == 2
+                q = dir(d.savedFile); sortVals(i) = q.datenum;
+            elseif isstruct(d) && isfield(d,'lazyFile') && exist(d.lazyFile,'file') == 2
+                q = dir(d.lazyFile); sortVals(i) = q.datenum;
+            end
+        catch
+        end
+    end
+
+    [~,ord] = sort(sortVals,'ascend');
+    keys = keys(ord);
+    sortVals = sortVals(ord);
+
     labels = cell(size(keys));
     for i = 1:numel(keys)
-        k = keys{i};
-        labels{i} = getDatasetDisplayName(studio, k);
+        labels{i} = getDatasetDisplayName(studio, keys{i});
     end
 
-    set(dd,'String',labels,'UserData',keys);
+    % Always select latest analysis output. If only raw exists, select latest raw.
+    analysisExpr = 'frameRej|framerej|scrub|despike|despiking|despiked|motor|pca|ica|imreg|BPF|LPF|HPF|tsmooth|temporalSmooth|submean|submed|subsample|filter';
+    idx = [];
+    bestTime = -Inf;
+    for i = 1:numel(keys)
+        blob = [labels{i} '_' keys{i}];
+        try
+            d = studio.datasets.(keys{i});
+            if isstruct(d) && isfield(d,'preprocessing') && ~isempty(d.preprocessing)
+                blob = [blob '_' char(d.preprocessing)];
+            end
+            if isstruct(d) && isfield(d,'savedFile') && ~isempty(d.savedFile)
+                blob = [blob '_' char(d.savedFile)];
+            end
+            if isstruct(d) && isfield(d,'lazyFile') && ~isempty(d.lazyFile)
+                blob = [blob '_' char(d.lazyFile)];
+            end
+        catch
+        end
+        if ~isempty(regexpi(blob, analysisExpr, 'once'))
+            if sortVals(i) >= bestTime
+                bestTime = sortVals(i);
+                idx = i;
+            end
+        end
+    end
 
-    idx = find(strcmp(keys, studio.activeDataset), 1);
     if isempty(idx)
-        idx = 1;
-        studio.activeDataset = keys{1};
+        [~,idx] = max(sortVals);
     end
+    idx = max(1,min(numel(keys),idx));
+    studio.activeDataset = keys{idx};
 
-    set(dd,'Value',idx);
+    try
+        set(dd,'String',labels,'UserData',keys,'Value',idx,'TooltipString',labels{idx},'FontSize',10,'FontWeight','normal');
+    catch
+        set(dd,'String',labels,'UserData',keys,'Value',idx,'TooltipString',labels{idx});
+    end
 
     if isfield(studio,'activeDatasetText') && isgraphics(studio.activeDatasetText)
-        fullName = getDatasetDisplayName(studio, studio.activeDataset);
-        showName = makeDropdownLabel(fullName);
-        set(studio.activeDatasetText, ...
-            'String',['DATASET: ' showName], ...
-            'TooltipString',['DATASET: ' fullName]);
+        fullName = labels{idx};
+        try
+            set(studio.activeDatasetText,'String',['DATASET: ' fullName],'TooltipString',['DATASET: ' fullName],'FontSize',10);
+        catch
+            set(studio.activeDatasetText,'String',['DATASET: ' fullName],'TooltipString',['DATASET: ' fullName]);
+        end
     end
 
     guidata(fig, studio);
@@ -894,15 +945,124 @@ function data = getActiveData()
     data = studio.datasets.(selected);
 
     if isstruct(data) && isfield(data,'isLazy') && data.isLazy
-        addLog(['Loading dataset from disk: ' selected]);
+        try
+            loadLabel = getDatasetDisplayName(studio, selected);
+        catch
+            loadLabel = selected;
+        end
+        addLog(['Loading dataset from disk: ' loadLabel]);
         setProgramStatus(false);
         drawnow;
 
         try
             oldLazy = data;
-            m = matfile(oldLazy.lazyFile);
-            tmp = m.newData;
+            tmp = [];
+
+            try
+                m = matfile(oldLazy.lazyFile);
+                tmp = m.newData;
+            catch
+                S_lazy = load(oldLazy.lazyFile);
+                if isfield(S_lazy,'newData')
+                    tmp = S_lazy.newData;
+                elseif isfield(S_lazy,'data')
+                    tmp = S_lazy.data;
+                else
+                    [tmp,~] = loadFUSIData(oldLazy.lazyFile, []);
+                end
+            end
+
             data = tmp;
+            % HUMOR_V29_FORCE_LOADED_FULL_NAME
+            try
+                if isstruct(data)
+                    seedName = selected;
+                    if isfield(data,'HUMOR_fullDisplayName') && ~isempty(data.HUMOR_fullDisplayName), seedName = data.HUMOR_fullDisplayName; end
+                    if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull), seedName = data.displayNameFull; end
+                    if isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName), seedName = data.preprocDisplayName; end
+                    fullNameNow = HUMOR_display_name_from_sources(seedName,data,oldLazy.lazyFile);
+                    data.HUMOR_fullDisplayName = fullNameNow;
+                    data.displayNameFull = fullNameNow;
+                    data.preprocDisplayName = fullNameNow;
+                    studio.datasets.(selected).HUMOR_fullDisplayName = fullNameNow;
+                    studio.datasets.(selected).displayNameFull = fullNameNow;
+                    studio.datasets.(selected).preprocDisplayName = fullNameNow;
+                    guidata(fig,studio);
+                end
+            catch
+            end
+            % HUMOR_V28_FORCE_EXACT_LAZY_NAME
+            try
+                if isstruct(data)
+                    seedName = selected;
+                    if isfield(data,'HUMOR_fullDisplayName') && ~isempty(data.HUMOR_fullDisplayName)
+                        seedName = data.HUMOR_fullDisplayName;
+                    elseif isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
+                        seedName = data.displayNameFull;
+                    elseif isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName)
+                        seedName = data.preprocDisplayName;
+                    end
+                    fullNameNow = HUMOR_best_visible_dataset_name(seedName, data, oldLazy.lazyFile);
+                    data.HUMOR_fullDisplayName = fullNameNow;
+                    data.displayNameFull = fullNameNow;
+                    data.preprocDisplayName = fullNameNow;
+                    studio.datasets.(selected).HUMOR_fullDisplayName = fullNameNow;
+                    studio.datasets.(selected).displayNameFull = fullNameNow;
+                    studio.datasets.(selected).preprocDisplayName = fullNameNow;
+                    try, HUMOR_commit_full_display_name(oldLazy.lazyFile, data, fullNameNow); catch, end
+                    guidata(fig, studio);
+                end
+            catch
+            end
+            % HUMOR_V27_FORCE_FULL_LAZY_NAME
+            try
+                if isstruct(data)
+                    nameSeed = selected;
+                    if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
+                        nameSeed = data.displayNameFull;
+                    elseif isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName)
+                        nameSeed = data.preprocDisplayName;
+                    end
+                    fullNameNow = HUMOR_best_visible_dataset_name(nameSeed, data, oldLazy.lazyFile);
+                    data.displayNameFull = fullNameNow;
+                    data.preprocDisplayName = fullNameNow;
+                    studio.datasets.(selected).displayNameFull = fullNameNow;
+                    studio.datasets.(selected).preprocDisplayName = fullNameNow;
+                    studio.datasets.(selected).HUMOR_fullDisplayName = fullNameNow;
+                    try, HUMOR_commit_full_display_name(oldLazy.lazyFile, data, fullNameNow); catch, end
+                    guidata(fig, studio);
+                end
+            catch
+            end
+            % HUMOR_V26_FIX_LOADED_LAZY_NAME
+            try
+                if isstruct(data)
+                    if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
+                        nameSeed = data.displayNameFull;
+                    else
+                        nameSeed = selected;
+                    end
+                    data.displayNameFull = HUMOR_full_ordered_label_for_dataset(nameSeed, data, oldLazy.lazyFile);
+                    data.preprocDisplayName = data.displayNameFull;
+                    studio.datasets.(selected).displayNameFull = data.displayNameFull;
+                    studio.datasets.(selected).preprocDisplayName = data.displayNameFull;
+                    try, HUMOR_write_full_display_metadata(oldLazy.lazyFile, data); catch, end
+                    guidata(fig, studio);
+                end
+            catch
+            end
+            try
+                if isstruct(data)
+                    if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
+                        data.displayNameFull = HUMOR_fix_processing_name(data.displayNameFull, data, oldLazy.lazyFile);
+                    else
+                        data.displayNameFull = HUMOR_fix_processing_name(selected, data, oldLazy.lazyFile);
+                    end
+                    studio.datasets.(selected).displayNameFull = data.displayNameFull;
+                    guidata(fig, studio);
+                end
+            catch
+            end
 
             if ~isfield(data,'displayNameFull') || isempty(data.displayNameFull)
                 if isfield(oldLazy,'displayNameFull') && ~isempty(oldLazy.displayNameFull)
@@ -920,7 +1080,12 @@ function data = getActiveData()
             studio.datasets.(selected) = data;
             guidata(fig, studio);
 
-            addLog(['Dataset loaded: ' data.displayNameFull]);
+            try
+                loadedLabel = data.displayNameFull;
+            catch
+                loadedLabel = data.displayNameFull;
+            end
+            addLog(['Dataset loaded: ' loadedLabel]);
 
         catch ME
             addLog(['Lazy load ERROR: ' ME.message]);
@@ -1166,7 +1331,7 @@ function helpCallback(~,~)
         'ForegroundColor',fgColor, ...
         'HorizontalAlignment','left', ...
         'FontName','Arial', ...
-        'FontSize',14);
+        'FontSize',10);
 
     guide = {
 '==========================================================================='
@@ -1319,95 +1484,26 @@ end
 %% =========================================================
 %  SMALL HELPER
 % =========================================================
-function choice = showPcaIcaMethodDialog()
-
-    choice = '';
-
-    bg    = [0.06 0.06 0.07];
-    panel = [0.10 0.10 0.11];
-    fg    = [0.95 0.95 0.95];
-    fgDim = [0.86 0.86 0.89];
-
-    dlg = figure( ...
-        'Name','PCA / ICA', ...
-        'Color',bg, ...
-        'MenuBar','none', ...
-        'ToolBar','none', ...
-        'NumberTitle','off', ...
-        'Resize','off', ...
-        'Units','pixels', ...
-        'Position',[500 300 520 270], ...
-        'WindowStyle','modal', ...
-        'CloseRequestFcn',@onCancel);
-
-    try, movegui(dlg,'center'); catch, end
-
-    uipanel('Parent',dlg, ...
-        'Units','normalized', ...
-        'Position',[0.02 0.06 0.96 0.88], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',[0.35 0.35 0.35], ...
-        'BorderType','line');
-
-    uicontrol('Parent',dlg,'Style','text', ...
-        'Units','normalized','Position',[0.08 0.70 0.84 0.14], ...
-        'String','Choose decomposition mode', ...
-        'BackgroundColor',bg,'ForegroundColor',fg, ...
-        'FontSize',18,'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    uicontrol('Parent',dlg,'Style','text', ...
-        'Units','normalized','Position',[0.08 0.46 0.84 0.16], ...
-        'String',{ ...
-            'PCA = fast variance-based cleanup', ...
-            'ICA = source separation with IC review'}, ...
-        'BackgroundColor',bg,'ForegroundColor',fgDim, ...
-        'FontSize',12,'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    uicontrol('Parent',dlg,'Style','pushbutton', ...
-        'String','PCA', ...
-        'Units','normalized','Position',[0.08 0.12 0.24 0.18], ...
-        'FontWeight','bold','FontSize',14, ...
-        'BackgroundColor',[0.20 0.55 0.90], ...
-        'ForegroundColor','w', ...
-        'Callback',@onPCA);
-
-    uicontrol('Parent',dlg,'Style','pushbutton', ...
-        'String','ICA', ...
-        'Units','normalized','Position',[0.38 0.12 0.24 0.18], ...
-        'FontWeight','bold','FontSize',14, ...
-        'BackgroundColor',[0.18 0.72 0.32], ...
-        'ForegroundColor','w', ...
-        'Callback',@onICA);
-
-    uicontrol('Parent',dlg,'Style','pushbutton', ...
-        'String','Cancel', ...
-        'Units','normalized','Position',[0.68 0.12 0.24 0.18], ...
-        'FontWeight','bold','FontSize',14, ...
-        'BackgroundColor',[0.82 0.30 0.30], ...
-        'ForegroundColor','w', ...
-        'Callback',@onCancel);
-
-    try, HUMoR_popup_autofit_apply(dlg); catch, end
-    waitfor(dlg);
-
-    function onPCA(~,~)
-        choice = 'PCA';
-        if ishghandle(dlg), delete(dlg); end
-    end
-
-    function onICA(~,~)
-        choice = 'ICA';
-        if ishghandle(dlg), delete(dlg); end
-    end
-
-    function onCancel(~,~)
-        choice = 'Cancel';
-        if ishghandle(dlg), delete(dlg); end
-    end
+function choice = showPcaIcaMethodDialog(varargin)
+% V12: method-only chooser. Slice selection lives inside PCA/ICA GUI.
+choice = 'Cancel';
+bg=[0.06 0.06 0.07]; panel=[0.10 0.10 0.11]; fg=[0.95 0.95 0.95]; fgDim=[0.86 0.86 0.89];
+dlg = figure('Name','PCA / ICA', 'Color',bg, 'MenuBar','none', 'ToolBar','none', 'NumberTitle','off', 'Resize','off', 'Units','pixels', 'Position',[400 220 760 420], 'WindowStyle','modal', 'CloseRequestFcn',@onCancel);
+try, movegui(dlg,'center'); catch, end
+uipanel('Parent',dlg,'Units','normalized','Position',[0.02 0.06 0.96 0.88],'BackgroundColor',panel,'ForegroundColor',[0.35 0.35 0.35],'BorderType','line');
+uicontrol('Parent',dlg,'Style','text','Units','normalized','Position',[0.08 0.70 0.84 0.14],'String','Choose decomposition mode','BackgroundColor',bg,'ForegroundColor',fg,'FontSize',18,'FontWeight','bold','HorizontalAlignment','center');
+uicontrol('Parent',dlg,'Style','text','Units','normalized','Position',[0.08 0.46 0.84 0.16],'String',{'PCA = variance-based components','ICA = independent components'},'BackgroundColor',bg,'ForegroundColor',fgDim,'FontSize',10,'FontWeight','bold','HorizontalAlignment','center');
+uicontrol('Parent',dlg,'Style','pushbutton','String','PCA','Units','normalized','Position',[0.06 0.12 0.27 0.20],'FontWeight','bold','FontSize',16,'BackgroundColor',[0.20 0.55 0.90],'ForegroundColor','w','Callback',@onPCA);
+uicontrol('Parent',dlg,'Style','pushbutton','String','ICA','Units','normalized','Position',[0.365 0.12 0.27 0.20],'FontWeight','bold','FontSize',16,'BackgroundColor',[0.18 0.72 0.32],'ForegroundColor','w','Callback',@onICA);
+uicontrol('Parent',dlg,'Style','pushbutton','String','Cancel','Units','normalized','Position',[0.67 0.12 0.27 0.20],'FontWeight','bold','FontSize',16,'BackgroundColor',[0.82 0.30 0.30],'ForegroundColor','w','Callback',@onCancel);
+try, HUMoR_popup_autofit_apply(dlg); catch, end
+waitfor(dlg);
+    function onPCA(~,~), choice = 'PCA'; if ishghandle(dlg), delete(dlg); end, end
+    function onICA(~,~), choice = 'ICA'; if ishghandle(dlg), delete(dlg); end, end
+    function onCancel(~,~), choice = 'Cancel'; if ishghandle(dlg), delete(dlg); end, end
 end
-    function [TR, probeType, defaultTR, wasCancelled] = promptTRAfterLoad(data, meta)
+
+function [TR, probeType, defaultTR, wasCancelled] = promptTRAfterLoad(data, meta)
 
 % Legacy fallback only. The interactive TR choice is now handled by
 % studio_load_options_dark_dialog during dataset loading.
@@ -1462,140 +1558,63 @@ end
 %  DATASET NAME HELPERS
 % =========================================================
     function label = makeDropdownLabel(fullName)
-
-    ts = regexp(fullName, '_\d{8}_\d{6}', 'match');
-
-    if isempty(ts)
-        base = fullName;
-        lastTS = '';
-    else
-        lastTS = ts{end};
-        lastTS = lastTS(2:end);
-        base = regexprep(fullName, '_\d{8}_\d{6}', '');
+    try
+        label = HUMOR_display_name_from_sources(fullName, [], '');
+    catch
+        try, label = char(fullName); catch, label = 'dataset'; end
     end
-
-    % remove raw_ and FUS from display
-    base = regexprep(base,'^raw_','');
-    base = regexprep(base,'(^|_)FUS(_|$)','$1$2');
-
-    % keep old compatibility
-    base = strrep(base, '_gabriel_', '_imregdemons_');
-    base = strrep(base, '_frrej_', '_frameRej_');
-    base = strrep(base, '_temporal_', '_temp_');
-    base = strrep(base, '_temporalSmooth_', '_tempSmooth_');
-base = strrep(base, '_subsample_', '_subsample_');
-    base = strrep(base, '_scrub_', '_scrub_');
-    base = strrep(base, '_despike_', '_despike_');
-    base = strrep(base, '_filt_', '_filt_');
-    base = strrep(base, '_pca_', '_pca_');
-    base = strrep(base, '_motor_', '_motor_');
-    base = regexprep(base,'_nsub','_n');
-
-    % prettier PCA display: dropPC1-2 -> dropPC1/2
-    tok = regexp(base,'dropPC([0-9\-]+)','tokens','once');
-    if ~isempty(tok)
-        oldStr = ['dropPC' tok{1}];
-        newStr = ['dropPC' strrep(tok{1},'-','/')];
-        base = strrep(base, oldStr, newStr);
-    end
-
-    % prettier ICA display: dropIC1-2 -> dropIC1/2
-tok = regexp(base,'dropIC([0-9\-]+)','tokens','once');
-if ~isempty(tok)
-    oldStr = ['dropIC' tok{1}];
-    newStr = ['dropIC' strrep(tok{1},'-','/')];
-    base = strrep(base, oldStr, newStr);
-end
-
-
-    base = regexprep(base,'_+','_');
-    base = regexprep(base,'^_','');
-    base = regexprep(base,'_$','');
-
-    if isempty(lastTS)
-        label = base;
-    else
-        label = sprintf('%s (%s)', base, lastTS);
-    end
-
-    label = shortenMiddle(label, 45);
 end
 
 function name = getDatasetDisplayName(studio, key)
     name = key;
     try
         d = studio.datasets.(key);
-        if isstruct(d) && isfield(d,'displayNameFull') && ~isempty(d.displayNameFull)
-            name = d.displayNameFull;
+        matFile = '';
+        if isstruct(d)
+            if isfield(d,'lazyFile') && ~isempty(d.lazyFile), matFile = d.lazyFile; end
+            if isempty(matFile) && isfield(d,'savedFile') && ~isempty(d.savedFile), matFile = d.savedFile; end
+            if isfield(d,'HUMOR_fullDisplayName') && ~isempty(d.HUMOR_fullDisplayName)
+                name = d.HUMOR_fullDisplayName;
+            elseif isfield(d,'displayNameFull') && ~isempty(d.displayNameFull)
+                name = d.displayNameFull;
+            elseif isfield(d,'preprocDisplayName') && ~isempty(d.preprocDisplayName)
+                name = d.preprocDisplayName;
+            end
+            name = HUMOR_display_name_from_sources(name,d,matFile);
         end
     catch
-    end
-end
-
-function s = shortenMiddle(s, maxLen)
-
-    if nargin < 2 || isempty(maxLen)
-        maxLen = 85;
-    end
-
-    if length(s) <= maxLen
-        return;
-    end
-
-    nFront = ceil((maxLen - 3) / 2);
-    nBack = floor((maxLen - 3) / 2);
-    s = [s(1:nFront) '...' s(end-nBack+1:end)];
-end
-
-function name = cleanLoadedDatasetName(name)
-
-    name = regexprep(name,'^raw_','');
-    name = regexprep(name,'(^|_)FUS(_|$)','$1$2');
-    name = regexprep(name,'_+','_');
-    name = regexprep(name,'^_+','');
-    name = regexprep(name,'_+$','');
-
-    if isempty(name)
-        name = 'dataset';
+        name = key;
     end
 end
 
 function stem = getCurrentNamingStem(studio)
-
-    stem = '';
-
+    stem = 'dataset';
     try
         if isfield(studio,'activeDataset') && ~isempty(studio.activeDataset)
             stem = getDatasetDisplayName(studio, studio.activeDataset);
+        elseif isfield(studio,'loadedName') && ~isempty(studio.loadedName)
+            stem = studio.loadedName;
         end
     catch
     end
+    try, stem = HUMOR_full_ordered_label_for_dataset(stem, [], ''); catch, end
 
-    if isempty(stem) && isfield(studio,'loadedName') && ~isempty(studio.loadedName)
-        stem = studio.loadedName;
-    end
-
-    if isempty(stem)
-        stem = 'dataset';
-    end
-
-    % remove only trailing timestamp so chain stays:
-    % WT..._imregdemons_median_nsub100_20260317_123456
-    % -> WT..._imregdemons_median_nsub100
-    stem = regexprep(stem,'_\d{8}_\d{6}$','');
-
-    % remove raw_ and FUS
-    stem = regexprep(stem,'^raw_','');
-    stem = regexprep(stem,'(^|_)FUS(_|$)','$1$2');
-
+    % Clean base before creating the next operation name.
+    try, stem = char(stem); catch, stem = 'dataset'; end
+    stem = strrep(stem,'...','_');
+    stem = regexprep(stem,'_(?:19|20)\d{6}_\d{6}$','');
+    stem = regexprep(stem,'(^|_)raw$','','ignorecase');
+    stem = regexprep(stem,'_raw_(?=(frameRej|framerej|scrub|despike|motor|pca|ica|imreg|BPF|LPF|HPF|tsmooth|sub|filter))','_','ignorecase');
+    stem = regexprep(stem,'frame[_\-]?rej','frameRej','ignorecase');
+    stem = regexprep(stem,'framerej','frameRej','ignorecase');
+    stem = regexprep(stem,'despike_despike','despike','ignorecase');
+    stem = regexprep(stem,'[^A-Za-z0-9_\-\.]','_');
     stem = regexprep(stem,'_+','_');
-    stem = regexprep(stem,'^_+','');
-    stem = regexprep(stem,'_+$','');
-
-    if isempty(stem)
-        stem = 'dataset';
-    end
+    stem = regexprep(stem,'^_+|_+$','');
+    if isempty(stem), stem = 'dataset'; end
 end
+
+
 
 function s = numTag(x)
     s = num2str(x,'%.6g');
@@ -1723,7 +1742,7 @@ stepMotorUnderlayKind = 'histology';
         'NumberTitle','off', ...
         'Resize','off', ...
         'Units','pixels', ...
-        'Position',[40 20 1500 930], ...
+        'Position',[20 20 1760 1000], ...
         'WindowStyle','modal', ...
         'Visible','off', ...
         'CloseRequestFcn',@onCancel, ...
@@ -1771,7 +1790,7 @@ stepMotorUnderlayKind = 'histology';
         'BackgroundColor',panel3, ...
         'ForegroundColor',[0.45 1.00 0.62], ...
         'FontName','Arial', ...
-        'FontSize',14, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'HorizontalAlignment','left');
 
@@ -1783,7 +1802,7 @@ stepMotorUnderlayKind = 'histology';
         'BackgroundColor',panel3, ...
         'ForegroundColor',[0.72 0.86 1.00], ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'HorizontalAlignment','left');
 
@@ -1811,7 +1830,7 @@ stepMotorUnderlayKind = 'histology';
         'BackgroundColor',panel, ...
         'ForegroundColor',yellow, ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'HorizontalAlignment','left');
 
@@ -1860,7 +1879,7 @@ descriptions = { ...
             'BackgroundColor',panel, ...
             'ForegroundColor',fg, ...
             'FontName','Arial', ...
-            'FontSize',14, ...
+            'FontSize',10, ...
             'FontWeight','bold', ...
             'HorizontalAlignment','left', ...
             'UserData',ii);
@@ -1872,7 +1891,7 @@ descriptions = { ...
             'BackgroundColor',panel, ...
             'ForegroundColor',fgDim, ...
             'FontName','Arial', ...
-            'FontSize',11, ...
+            'FontSize',10, ...
             'HorizontalAlignment','left');
     end
 
@@ -1896,7 +1915,7 @@ descriptions = { ...
         'BackgroundColor',panel, ...
         'ForegroundColor',yellow, ...
         'FontName','Arial', ...
-        'FontSize',11, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'HorizontalAlignment','left');
 
@@ -1929,7 +1948,7 @@ descriptions = { ...
         'BackgroundColor',panel, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',13, ...
+        'FontSize',10, ...
         'FontWeight','bold');
 
     makeLabel(stylePanel,[0.705 0.470 0.130 0.060],'Strength',13,fg);
@@ -1954,7 +1973,7 @@ descriptions = { ...
         'BackgroundColor',blue, ...
         'ForegroundColor','w', ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'Callback',@onResetRecommendedDefaults);
 
@@ -1965,7 +1984,7 @@ descriptions = { ...
         'BackgroundColor',green, ...
         'ForegroundColor','w', ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'Callback',@onRecommendedPreset);
 
@@ -1976,7 +1995,7 @@ descriptions = { ...
         'BackgroundColor',panel, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',14, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'BorderType','line');
 
@@ -1987,7 +2006,7 @@ descriptions = { ...
     'BackgroundColor',panel, ...
     'ForegroundColor',fgDim, ...
     'FontName','Arial', ...
-    'FontSize',12, ...
+    'FontSize',10, ...
     'FontWeight','bold', ...
     'HorizontalAlignment','left');
 
@@ -2010,7 +2029,7 @@ hStepKind = uicontrol('Parent',filePanel,'Style','popupmenu', ...
     'BackgroundColor',panel2, ...
     'ForegroundColor','w', ...
     'FontName','Arial', ...
-    'FontSize',11, ...
+    'FontSize',10, ...
     'FontWeight','bold', ...
     'Callback',@onStepKindChanged);
 
@@ -2021,7 +2040,7 @@ uicontrol('Parent',filePanel,'Style','pushbutton', ...
     'BackgroundColor',blue, ...
     'ForegroundColor','w', ...
     'FontName','Arial', ...
-    'FontSize',12, ...
+    'FontSize',10, ...
     'FontWeight','bold', ...
     'Callback',@onManualLoadUnderlay);
 
@@ -2043,7 +2062,7 @@ uicontrol('Parent',filePanel,'Style','text', ...
         'BackgroundColor',[0.030 0.030 0.036], ...
         'ForegroundColor',[0.70 1.00 0.80], ...
         'FontName','Arial', ...
-        'FontSize',13, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'HorizontalAlignment','left');
 
@@ -2072,6 +2091,16 @@ uicontrol('Parent',filePanel,'Style','text', ...
     setStatusForChoice(defaultChoice);
 
     set(dlg,'Visible','on');
+% HUMOR_FINAL_POPUP_ALIGN_20260527
+drawnow;
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end
+% HUMOR_SCM_VIDEO_FINAL_BIG_POPUP_20260527
+drawnow;
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end
+% HUMOR_SCM_VIDEO_FONT_REFINEMENT_20260527
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end
+% HUMOR_SCM_VIDEO_BIG_UI_SAFE_20260527
+try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end
     try, HUMoR_popup_autofit_apply(dlg); catch, end
     waitfor(dlg);
 
@@ -2096,7 +2125,7 @@ uicontrol('Parent',filePanel,'Style','text', ...
             'BackgroundColor',panel2, ...
             'ForegroundColor',fg, ...
             'FontName','Arial', ...
-            'FontSize',14, ...
+            'FontSize',10, ...
             'FontWeight','bold', ...
             'HorizontalAlignment','center');
     end
@@ -4585,24 +4614,29 @@ end
 function startPath = studio_default_load_start_path(studio)
     startPath = '';
 
+    driveRoot = ['Z:' filesep];
+    preferredRaw = fullfile(driveRoot,'fUS','Project_PACAP_AVATAR_SC','RawData','MPI_Data');
+    fallbackRaw  = fullfile(driveRoot,'fUS','Project_PACAP_AVATAR_SC','RawData');
+
+    if exist(preferredRaw,'dir') == 7
+        startPath = preferredRaw;
+        return;
+    end
+
+    if exist(fallbackRaw,'dir') == 7
+        startPath = fallbackRaw;
+        return;
+    end
+
     try
-        if isstruct(studio) && isfield(studio,'loadedPath') && ~isempty(studio.loadedPath) && exist(studio.loadedPath,'dir')
+        if isstruct(studio) && isfield(studio,'loadedPath') && ~isempty(studio.loadedPath) && exist(studio.loadedPath,'dir') == 7
             startPath = studio.loadedPath;
+            return;
         end
     catch
-        startPath = '';
     end
 
-    if isempty(startPath) && ispc
-        winDefault = 'Z:\fUS\Project_PACAP_AVATAR_SC\RawData';
-        if exist(winDefault,'dir')
-            startPath = winDefault;
-        end
-    end
-
-    if isempty(startPath)
-        startPath = pwd;
-    end
+    startPath = pwd;
 end
 
 function [rawRoot, analysedRoot] = studio_auto_roots_from_input(inputPath)
@@ -4835,7 +4869,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',bg, ...
         'ForegroundColor',muted, ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'HorizontalAlignment','left');
 
     % Probe/TR panel
@@ -4854,7 +4888,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',panel, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',14, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'HorizontalAlignment','left');
 
@@ -4870,7 +4904,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',panel, ...
         'ForegroundColor',muted, ...
         'FontName','Arial', ...
-        'FontSize',11, ...
+        'FontSize',10, ...
         'HorizontalAlignment','left');
 
     hUseDefaultTR = uicontrol(dlg,'Style','radiobutton', ...
@@ -4881,7 +4915,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',panel, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'Callback',@onUseDefaultTR);
 
     hUseCustomTR = uicontrol(dlg,'Style','radiobutton', ...
@@ -4892,7 +4926,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',panel, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'Callback',@onUseCustomTR);
 
     hCustomTRms = uicontrol(dlg,'Style','edit', ...
@@ -4902,7 +4936,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',[0.24 0.24 0.27], ...
         'ForegroundColor',[0.85 0.85 0.85], ...
         'FontName','Arial', ...
-        'FontSize',13, ...
+        'FontSize',10, ...
         'HorizontalAlignment','center', ...
         'Enable','off');
 
@@ -4913,7 +4947,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',panel, ...
         'ForegroundColor',muted, ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'HorizontalAlignment','left');
 
     if ~isempty(fileTR) && isfinite(fileTR) && fileTR > 0
@@ -4948,7 +4982,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',panel, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',14, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'HorizontalAlignment','left');
 
@@ -4960,7 +4994,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',panel, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'Callback',@onAuto);
 
     hCustom = uicontrol(dlg,'Style','radiobutton', ...
@@ -4971,7 +5005,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',panel, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',12, ...
+        'FontSize',10, ...
         'Callback',@onCustom);
 
     uicontrol(dlg,'Style','text', ...
@@ -5040,7 +5074,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',blue, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',11, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'Enable','off', ...
         'Callback',@onBrowse);
@@ -5063,7 +5097,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',red, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',13, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'Callback',@onCancel);
 
@@ -5074,7 +5108,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
         'BackgroundColor',green, ...
         'ForegroundColor',fg, ...
         'FontName','Arial', ...
-        'FontSize',13, ...
+        'FontSize',10, ...
         'FontWeight','bold', ...
         'Callback',@onProceed);
 

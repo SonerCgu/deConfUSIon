@@ -1515,7 +1515,17 @@ end
     end
 
     function localBrowseFolder()
-        pth = uigetdir(pwd, 'Select raw folder with split MAT files');
+        startBrowseDir = strtrim(get(hFolder, 'String'));
+        if isempty(startBrowseDir) || exist(startBrowseDir, 'dir') ~= 7
+            try, startBrowseDir = defaults.rawFolder; catch, startBrowseDir = ''; end
+        end
+        if isempty(startBrowseDir) || exist(startBrowseDir, 'dir') ~= 7
+            try, startBrowseDir = fileparts(defaults.rawFolder); catch, startBrowseDir = ''; end
+        end
+        if isempty(startBrowseDir) || exist(startBrowseDir, 'dir') ~= 7
+            startBrowseDir = pwd;
+        end
+        pth = uigetdir(startBrowseDir, 'Select raw folder with split MAT files');
         if isequal(pth, 0)
             return;
         end

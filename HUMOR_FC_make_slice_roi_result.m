@@ -1,13 +1,12 @@
 function res = HUMOR_FC_make_slice_roi_result(s,subIdx,resIn,zSel)
 % True slice-specific ROI FC result.
-% Recomputes ROI time courses using only voxels from selected Z slice.
+% Recomputes ROI time courses from selected Z slice and preserves L/R labels.
 
 res = resIn;
 try
     if nargin < 4 || isempty(zSel), zSel = s.slice; end
     if isempty(resIn) || ~isstruct(resIn), return; end
     if ~isfield(s,'Z') || s.Z <= 1, return; end
-    if isfield(resIn,'sliceOnly') && isequal(resIn.sliceOnly,true), return; end
     if isfield(s,'sliceRegionOnly') && ~s.sliceRegionOnly, return; end
     if ~isfield(s,'subjects') || subIdx < 1 || subIdx > numel(s.subjects), return; end
 
@@ -55,13 +54,8 @@ try
 
     Izt = I4(:,:,z,idxT);
     D = reshape(double(Izt),Y*X,numel(idxT));
-
     atlasV = atlasS(:);
-    maskV = maskS(:);
-    labsAll = unique(atlasV(maskV & atlasV ~= 0));
-    labsAll = labsAll(:);
-    labsAll = labsAll(isfinite(labsAll) & labsAll ~= 0);
-    if isempty(labsAll), return; end
+    maskV  = maskS(:);
 
     minVox = 1;
     try
@@ -72,19 +66,69 @@ try
         minVox = 1;
     end
 
+    % Use original ROI labels/names whenever available so L/R modes work.
+    baseLabels = [];
+    baseNames  = {};
+    try, baseLabels = double(resIn.labels(:)); catch, end
+    try, baseNames = cellstr(resIn.names(:)); catch, end
+
+    labsSlice = unique(atlasV(maskV & atlasV ~= 0));
+    labsSlice = labsSlice(:);
+    labsSlice = labsSlice(isfinite(labsSlice) & labsSlice ~= 0);
+    if isempty(labsSlice), return; end
+
+    signedAtlas = any(labsSlice < 0);
+    signedBase  = any(baseLabels < 0);
+
+    outLabels = [];
+    if ~isempty(baseLabels)
+        absSlice = unique(abs(round(double(labsSlice(:)))));
+        for kk = 1:numel(absSlice)
+            aLab = absSlice(kk);
+            if signedAtlas
+                % If atlas itself is signed, keep exact side-specific labels.
+                exactLabs = unique(round(double(labsSlice(abs(round(double(labsSlice))) == aLab))));
+                for ee = 1:numel(exactLabs)
+                    ix = find(round(baseLabels) == exactLabs(ee),1,'first');
+                    if ~isempty(ix), outLabels(end+1,1) = baseLabels(ix); end %#ok<AGROW>
+                end
+            else
+                % Positive-only slice atlas: preserve all original L/R variants for this region.
+                ixAll = find(abs(round(baseLabels)) == aLab);
+                if ~isempty(ixAll)
+                    outLabels = [outLabels; baseLabels(ixAll(:))]; %#ok<AGROW>
+                else
+                    outLabels(end+1,1) = aLab; %#ok<AGROW>
+                end
+            end
+        end
+        outLabels = unique(outLabels,'stable');
+    else
+        outLabels = labsSlice;
+    end
+
     keepLabels = [];
     names = {};
     counts = [];
     meanTS = [];
 
-    for k = 1:numel(labsAll)
-        lab = round(double(labsAll(k)));
-        nm = localROIName(lab,s);
-        if localIsBackground(lab,nm), continue; end
-        pix = find(maskV & atlasV == lab);
+    for k = 1:numel(outLabels)
+        labOut = round(double(outLabels(k)));
+        if signedAtlas
+            pix = find(maskV & atlasV == labOut);
+            if isempty(pix)
+                pix = find(maskV & abs(atlasV) == abs(labOut));
+            end
+        else
+            pix = find(maskV & abs(atlasV) == abs(labOut));
+        end
         if numel(pix) < minVox, continue; end
+
+        nm = localROINameFromBase(labOut,baseLabels,baseNames,s);
+        if localIsBackground(labOut,nm), continue; end
+
         ts = mean(D(pix,:),1)';
-        keepLabels(end+1,1) = lab; %#ok<AGROW>
+        keepLabels(end+1,1) = labOut; %#ok<AGROW>
         counts(end+1,1) = numel(pix); %#ok<AGROW>
         names{end+1,1} = nm; %#ok<AGROW>
         meanTS(:,end+1) = ts; %#ok<AGROW>
@@ -105,14 +149,29 @@ try
     res.sliceOnly = true;
     res.sliceIndex = z;
     res.sliceLabel = sprintf('Z %d/%d',z,Z);
-    res.sourceNote = 'True slice-specific FC: ROI time courses recomputed from selected Z slice only.';
+    if signedBase && ~signedAtlas
+        res.sourceNote = sprintf('Slice-specific FC for Z %d/%d; L/R labels preserved from full ROI table.',z,Z);
+    else
+        res.sourceNote = sprintf('True slice-specific FC: ROI time courses recomputed from selected Z slice only (Z %d/%d).',z,Z);
+    end
 catch
     res = resIn;
 end
 end
 
-function name = localROIName(label,s)
+function name = localROINameFromBase(label,baseLabels,baseNames,s)
 name = sprintf('ROI_%g',label);
+try
+    if ~isempty(baseLabels) && ~isempty(baseNames)
+        ix = find(round(baseLabels) == round(double(label)),1,'first');
+        if isempty(ix), ix = find(abs(round(baseLabels)) == abs(round(double(label))),1,'first'); end
+        if ~isempty(ix) && ix <= numel(baseNames)
+            nm = strtrim(char(baseNames{ix}));
+            if ~isempty(nm), name = nm; return; end
+        end
+    end
+catch
+end
 try
     if isfield(s,'opts') && isfield(s.opts,'roiNameTable')
         T = s.opts.roiNameTable;
@@ -171,5 +230,4 @@ catch
     xx = round(linspace(1,size(A,2),X));
     B = A(yy,xx);
 end
-B = round(double(B));
 end
