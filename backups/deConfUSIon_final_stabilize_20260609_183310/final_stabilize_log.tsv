@@ -1,0 +1,5 @@
+action	status	source	destination	details
+PATCH_PREPARE_ATLAS	PATCHED	D:\Github\HUMOR-Analysis-Tool\deConfUSIon_prepare_atlas.m		
+PATCH_FC_JM_ORDER	PATCHED	D:\Github\HUMOR-Analysis-Tool\deConfUSIon_fc_jm_order.m		
+ARCHIVE_REPAIR_PATCH	MOVED	D:\Github\HUMOR-Analysis-Tool\deConfUSIon_dropdown_metadata_repair.m	D:\Github\HUMOR-Analysis-Tool\backups\deConfUSIon_final_stabilize_20260609_183310\archived_patch_clutter\deConfUSIon_dropdown_metadata_repair.m	
+SUMMARY	DONE			

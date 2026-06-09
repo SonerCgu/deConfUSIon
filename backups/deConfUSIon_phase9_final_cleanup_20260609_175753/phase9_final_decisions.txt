@@ -1,0 +1,15 @@
+deConfUSIon final cleanup decisions
+===================================
+
+run_fusi_studio.m: KEPT. Required to assemble fusi_studio_GUI.m + fusi_studio_callback.m into runtime.
+run_deConfUSIon.m: integrated into deConfUSIon.m and archived if no references remained.
+save_correct_colors.m: moved to atlas_tools as manual JM utility; not needed for automatic registration.
+readFileList.m: kept in root because deConfUSIon_prepare_atlas uses it.
+deConfUSIon_apply_rgb2acr.m: kept in root because automatic atlas preparation uses it.
+studio_load_options_dark_dialog_patch16.m: renamed to studio_load_options_dark_dialog.m.
+studio_resolve_paths.m: KEPT. Used by GroupAnalysis_Common and GroupAnalysis_FC.
+studio_mkdir.m: archived only if zero raw references remained.
+popup/timer/autofit helpers: KEPT. Risky to integrate because GUI/timer callbacks call them by name.
+FC/step-motor helpers: KEPT. Shared across FunctionalConnectivity and Studio/segmentation workflows.
+atlas_tools/rgb2acr.xlsx and list_selected_regions.txt: KEPT. Required for JM colors/order.
+atlas_tools/matlab_functions.rar: archived. Source package only, not runtime.

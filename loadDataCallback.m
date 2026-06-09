@@ -53,8 +53,8 @@ try
         datasetFolder = fullfile(analysedRoot,datasetName);
     end
 
-    if exist('studio_load_options_dark_dialog_patch16','file') == 2
-        [chosenTR,datasetFolder,cancelled,probeType,defaultTR] = studio_load_options_dark_dialog_patch16(chosenTR,datasetFolder,analysedRoot,datasetName,probeType,defaultTR,data,meta);
+    if exist('studio_load_options_dark_dialog','file') == 2
+        [chosenTR,datasetFolder,cancelled,probeType,defaultTR] = studio_load_options_dark_dialog(chosenTR,datasetFolder,analysedRoot,datasetName,probeType,defaultTR,data,meta);
         if cancelled
             localLog(fig,'Load cancelled during TR/output-folder selection.');
             localStatus(fig,true);

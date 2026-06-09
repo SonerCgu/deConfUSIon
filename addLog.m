@@ -1,5 +1,5 @@
 function addLog(msg)
-% addLog.m - fallback logger for HUMoR / fUSI Studio
+% addLog.m - fallback logger for deConfUSIon / fUSI Studio
 % MATLAB 2017b compatible.
 
 if nargin < 1
@@ -31,7 +31,7 @@ catch
 end
 
 try
-    figs = findall(0,'Type','figure','Name','HUMoR Analysis Tool');
+    figs = findall(0,'Type','figure','Name','deConfUSIon');
     if isempty(figs)
         figs = findall(0,'Type','figure');
     end

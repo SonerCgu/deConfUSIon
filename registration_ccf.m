@@ -1768,3 +1768,248 @@ end
 [p,n,~] = fileparts(out);
 out = fullfile(p,n);
 end
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from register_data.m on 09-Jun-2026 16:52:21
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+% Urban Lab - NERF empowered by imec, KU Leuven and VIB
+% Mace Lab  - Max Planck institute of Neurobiology
+% Authors:  G. MONTALDO, E. MACE
+% Review & test: C.BRUNNER, M. GRILLET
+% September 2020
+%
+% Interpolates and registers a volumetric data with the Allen Mouse Common Coordinate Framework using an affine transformation
+%
+% xreg=register_data(atlas, x, Transf)
+%   atlas, Allen Mouse Common Coordinate Framework provided in the allen_brain_atlas.mat file,
+%   x, fus-structure of type volume,
+%   Transf, transformation structure obtained with the registering function.
+%   xreg, a fus-structure of type volume with the registered data.
+%
+% Example: example03_correlation.m
+%%
+function ras=register_data(atlas,x,Transf)
+Dint=interpolate3D(atlas,x);
+T=affine3d(Transf.M);
+ref=imref3d(Transf.size);
+ras=imwarp(Dint.Data,T,'OutputView',ref);
+end
+
+
+
+
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated tiny helper from interpolate3D.m on 09-Jun-2026 16:59:39
+%% ------------------------------------------------------------------------
+
+function scanInt = interpolate3D(atlas, scan)
+% interpolate3D (ROBUST)
+% ------------------------------------------------------------
+% Paper-faithful intent:
+%   - Resample scan.Data to atlas.VoxelSize
+%   - Then flip/permute axes to match atlas orientation (same as paper code)
+%
+% Fixes:
+%   - Avoids meshgrid/meshgridvectors issues by using ndgrid + interpn
+%   - Sanitizes VoxelSize (handles NaN/Inf/<=0)
+%   - Guards empty/invalid target sizes
+%
+% MATLAB 2017b compatible
+% ------------------------------------------------------------
+
+% Basic checks
+if ~isstruct(scan) || ~isfield(scan,'Data') || isempty(scan.Data)
+    error('interpolate3D: scan must be a struct with non-empty field .Data');
+end
+if ~isstruct(atlas) || ~isfield(atlas,'VoxelSize') || isempty(atlas.VoxelSize)
+    error('interpolate3D: atlas must contain field .VoxelSize');
+end
+
+D = double(scan.Data);
+if ndims(D) == 2
+    D = reshape(D, size(D,1), size(D,2), 1);
+end
+
+% Ensure scan voxel size exists and is sane
+if ~isfield(scan,'VoxelSize') || isempty(scan.VoxelSize)
+    scan.VoxelSize = [1 1 1];
+end
+
+sv = sanitizeVoxelSize(scan.VoxelSize);
+av = sanitizeVoxelSize(atlas.VoxelSize);
+
+dz    = sv(1); dx    = sv(2); dy    = sv(3);
+dzint = av(1); dxint = av(2); dyint = av(3);
+
+[nz, nx, ny] = size(D);
+
+% Target sizes (guarded)
+n1x = round((nx-1) * dx / dxint) + 1;
+n1y = round((ny-1) * dy / dyint) + 1;
+n1z = round((nz-1) * dz / dzint) + 1;
+
+if ~isfinite(n1x) || n1x < 1, n1x = 1; end
+if ~isfinite(n1y) || n1y < 1, n1y = 1; end
+if ~isfinite(n1z) || n1z < 1, n1z = 1; end
+
+% Query coordinates in scan-index space (1-based)
+sx = dxint / dx; if ~isfinite(sx) || sx <= 0, sx = 1; end
+sy = dyint / dy; if ~isfinite(sy) || sy <= 0, sy = 1; end
+sz = dzint / dz; if ~isfinite(sz) || sz <= 0, sz = 1; end
+
+xq = (0:n1x-1) * sx + 1;   % corresponds to dim 2 (x)
+yq = (0:n1y-1) * sy + 1;   % corresponds to dim 3 (y)
+zq = (0:n1z-1) * sz + 1;   % corresponds to dim 1 (z)
+
+% Use ndgrid in (z,x,y) order to match D = [nz nx ny]
+[Zq, Xq, Yq] = ndgrid(zq, xq, yq);
+
+% Interpolate (outside -> 0)
+ai = interpn(D, Zq, Xq, Yq, 'linear', 0);
+
+% Paper axis manipulation: flip + permute
+ai = flip(ai,3);
+ai = flip(ai,2);
+ai = permute(ai,[3,1,2]);
+
+scanInt.Data = ai;
+scanInt.VoxelSize = av;
+
+end
+
+% ------------------------------------------------------------
+% Local helper: sanitize voxel size to [z x y] positive finite
+% ------------------------------------------------------------
+function v = sanitizeVoxelSize(vin)
+v = vin(:)';
+if numel(v) < 3
+    v = [v, ones(1, 3-numel(v))];
+end
+v = v(1:3);
+for k = 1:3
+    if ~isfinite(v(k)) || v(k) <= 0
+        v(k) = 1;
+    end
+end
+end
+
+
+%% ------------------------------------------------------------------------
+%% Integrated tiny helper from mapscan.m on 09-Jun-2026 16:59:40
+%% ------------------------------------------------------------------------
+
+% Urban Lab - NERF empowered by imec, KU Leuven and VIB
+% Mace Lab  - Max Planck institute of Neurobiology
+% Authors:  G. MONTALDO, E. MACE
+% Review & test: C.BRUNNER, M. GRILLET
+% September 2020
+
+%% auxiliary class to manage a 3D volume
+classdef mapscan < handle
+    
+    properties
+        D
+        nx
+        ny
+        nz
+        x0
+        y0
+        z0
+        cmap
+        caxis
+        method
+    end
+    
+    methods
+        function M=mapscan(data,cmap,method)
+            M.D=data;
+            [M.nx,M.ny,M.nz]=size(data);
+            M.x0=round(M.nx/2);
+            M.y0=round(M.ny/2);
+            M.z0=round(M.nz/2);
+            M.cmap= gray(128);
+            M.method='auto';
+            if nargin>1, M.cmap=cmap;  end
+            if nargin>2
+                M.method=method;
+                if strcmp(method,'fix')
+                    M.caxis=double([min(data(:)),max(data(:))]);
+                end
+            end
+        end
+        
+        function [ax,ay,az]=cuts(M)
+           if M.x0>0 && M.x0<=M.nx
+                ax=rgbfunc(double(squeeze(M.D(M.x0,:,:))),M);
+           else
+               ax=zeros(M.ny,M.nz,3);
+           end
+            
+           if M.y0>0 && M.y0<=M.ny
+                ay=rgbfunc(double(squeeze(M.D(:,M.y0,:))),M);
+           else
+               ay=zeros(M.nx,M.nz,3);
+           end
+            
+           if M.z0>0 && M.z0<=M.nz
+                az=rgbfunc(double(squeeze(M.D(:,:,M.z0))),M);
+           else
+               az=zeros(M.nx,M.ny,3);
+           end
+            
+        end
+        
+        function setData(M,data)
+            M.D=data;
+            M.nx=size(data,1);
+            M.ny=size(data,2);
+            M.nz=size(data,3);
+        end
+        
+    end
+    
+    
+    events
+        eventRefresh
+    end
+    
+end
+
+
+
+function b=rgbfunc(a,M)
+[nx,ny]=size(a);
+aa=a(:);
+method=M.method;
+cmap=M.cmap;
+
+if strcmp(method,'auto')
+    norm=max(aa)-min(aa);
+    aa=(aa-min(aa))/norm;
+    aa=uint16(round(aa(:)*(length(cmap)-1)+1));
+    aa(aa==0)=1;
+    b=cmap(aa,:);
+    b=reshape(b,nx,ny,3);
+elseif strcmp(method,'fix')
+    aa=(aa-M.caxis(1))/(M.caxis(2)-M.caxis(1));
+    aa=uint16(round(aa(:)*(length(cmap)-1)+1));
+    aa(aa<1)=1;
+    aa(aa>length(cmap))=length(cmap);
+    b=cmap(aa,:);
+    b=reshape(b,nx,ny,3);
+elseif strcmp(method,'index')
+    aa(aa==0)=1;
+    b=cmap(abs(aa),:);
+    b=reshape(b,nx,ny,3);
+else
+    error('mapscan unknown rgb method')
+end
+
+end
+
+

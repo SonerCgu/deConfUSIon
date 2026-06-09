@@ -242,7 +242,7 @@ if opts.burst
     title('BurstRatio histogram (brain)');
 
     saveas(fig,fullfile(pngDir,'QC_burst_ratio.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_burst_ratio.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_burst_ratio.png')); catch, end
     close(fig);
 
     fig = figure('Color','w','Position',[140 140 1100 380]);
@@ -254,7 +254,7 @@ if opts.burst
     ylabel('Burst coverage (fraction of brain voxels)');
     title('Burst coverage over time (fraction voxels > THbursterror*baseline)');
     saveas(fig,fullfile(pngDir,'QC_burst_coverage.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_burst_coverage.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_burst_coverage.png')); catch, end
     close(fig);
 
     burst.has = true;
@@ -287,13 +287,13 @@ if opts.frequency
     fig = figure('Color','w','Position',[120 120 900 420]);
     plotPSD(f, Pxx, [0 2], 'Frequency QC (0-2 Hz)');
     saveas(fig,fullfile(pngDir,'QC_frequency.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_frequency.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_frequency.png')); catch, end
     close(fig);
 
     fig = figure('Color','w','Position',[140 140 900 420]);
     plotPSD(f, Pxx, [0 0.1], 'Frequency QC (0-0.1 Hz)');
     saveas(fig,fullfile(pngDir,'QC_frequency_0p1Hz.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_frequency_0p1Hz.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_frequency_0p1Hz.png')); catch, end
     close(fig);
 end
 
@@ -375,7 +375,7 @@ if opts.spatial
     title(sprintf('tSNR histogram (masked)  THSNR=%.1f  ACCEPT=%d', opts.THSNR, acceptSNR));
 
     saveas(fig,fullfile(pngDir,'QC_spatial_tSNR.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_spatial_tSNR.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_spatial_tSNR.png')); catch, end
     close(fig);
 
     try
@@ -430,7 +430,7 @@ if opts.temporal
     grid on;
 
     saveas(fig,fullfile(pngDir,'QC_temporal.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_temporal.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_temporal.png')); catch, end
     close(fig);
 
     try
@@ -480,7 +480,7 @@ if opts.stability
     xlabel(axReject,'Volume','Color','k','FontWeight','bold');
     ylabel(axReject,'Frame status','Color','k','FontWeight','bold');
     title(axReject,'Rejected volumes over time','Color','k','FontWeight','bold');
-    HUMoR_style_rejected_qc_axis(gca);
+    deConfUSIon_style_rejected_qc_axis(gca);
     grid(axReject,'on');
     set(axReject,'Color','w','XColor','k','YColor','k','FontSize',11,'LineWidth',1.0,'Box','on');
 
@@ -507,7 +507,7 @@ if opts.stability
         'BackgroundColor',[1 1 1], ...
         'EdgeColor',[0 0 0]);
 
-    HUMoR_save_qc_png_white(fig, fullfile(pngDir,'QC_stability_trace.png'));
+    deConfUSIon_save_qc_png_white(fig, fullfile(pngDir,'QC_stability_trace.png'));
     close(fig);
 
     fig = figure('Color','w','Position',[240 240 900 420]);
@@ -521,7 +521,7 @@ if opts.stability
     xlabel('Normalized global intensity');
     ylabel('Count');
     saveas(fig,fullfile(pngDir,'QC_stability_hist.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_stability_hist.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_stability_hist.png')); catch, end
     close(fig);
 
     try
@@ -563,7 +563,7 @@ if opts.motion
     grid on;
 
     saveas(fig,fullfile(pngDir,'QC_motion_COM.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_motion_COM.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_motion_COM.png')); catch, end
     close(fig);
 
     try
@@ -635,7 +635,7 @@ if opts.cnr
     axis off;
 
     saveas(fig,fullfile(pngDir,'QC_CNR.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_CNR.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_CNR.png')); catch, end
     close(fig);
 
     try
@@ -685,7 +685,7 @@ if opts.commonmode
     axis off;
 
     saveas(fig,fullfile(pngDir,'QC_common_mode.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_common_mode.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_common_mode.png')); catch, end
     close(fig);
 
     try
@@ -761,7 +761,7 @@ if opts.outlierframes
     title(sprintf('Line profile histogram  sigmaLower=%.4f', sigmaLower));
 
     saveas(fig,fullfile(pngDir,'QC_outlier_lineframes.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_outlier_lineframes.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_outlier_lineframes.png')); catch, end
     close(fig);
 
     if opts.outlierReplace
@@ -793,7 +793,7 @@ if opts.outlierframes
         legend({'Original','Corrected'});
         title('Outlier correction preview: original vs corrected global mean');
         saveas(fig,fullfile(pngDir,'QC_outlier_correction_preview.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_outlier_correction_preview.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_outlier_correction_preview.png')); catch, end
         close(fig);
     end
 
@@ -914,7 +914,7 @@ if opts.reliability
     axis off;
 
     saveas(fig,fullfile(pngDir,'QC_reliability.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_reliability.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_reliability.png')); catch, end
     close(fig);
 
     fig = figure('Color','w','Position',[140 140 900 420]);
@@ -929,7 +929,7 @@ if opts.reliability
     ylabel('Count');
     title(sprintf('Reliability histogram (%s)', relSource));
     saveas(fig,fullfile(pngDir,'QC_reliability_hist.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_reliability_hist.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_reliability_hist.png')); catch, end
     close(fig);
 
     try
@@ -1013,7 +1013,7 @@ text(ax, 0.02, 0.92, txt, ...
 
 drawnow;
 saveas(fig,fullfile(pngDir,'QC_summary.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_summary.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_summary.png')); catch, end
 close(fig);
 
 try
@@ -1075,7 +1075,7 @@ if opts.pca
         title('PCA Explained Variance');
         grid on;
         saveas(figVar,fullfile(pngDir,'QC_pca_variance.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_pca_variance.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_pca_variance.png')); catch, end
         close(figVar);
 
         figGrid = figure('Color','w','Position',[100 100 1200 800]);
@@ -1094,7 +1094,7 @@ if opts.pca
             'FontWeight','bold','FontSize',12);
 
         saveas(figGrid,fullfile(pngDir,'QC_pca_components_grid.png'));
-    try, HUMoR_force_png_white_background(fullfile(pngDir,'QC_pca_components_grid.png')); catch, end
+    try, deConfUSIon_force_png_white_background(fullfile(pngDir,'QC_pca_components_grid.png')); catch, end
         close(figGrid);
 
         try
@@ -1841,3 +1841,222 @@ function [summaryTable, lowRegions] = summarizeReliabilityByAtlas(reliabilityMap
 end
 
 end
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from deConfUSIon_force_png_white_background.m on 09-Jun-2026 16:52:19
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function deConfUSIon_force_png_white_background(varargin)
+% Disabled. Previous alpha post-processing could turn PNGs fully white.
+% White background is now handled directly before print/save.
+return;
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from deConfUSIon_save_qc_png_white.m on 09-Jun-2026 16:52:19
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function deConfUSIon_save_qc_png_white(fig, outFile)
+% Save QC figure as true RGB PNG with white background.
+% Avoids MATLAB saveas/print transparency and dark-margin issues.
+
+if nargin < 1 || isempty(fig) || ~ishghandle(fig), return; end
+if nargin < 2 || isempty(outFile), return; end
+
+try
+    outDir = fileparts(outFile);
+    if ~isempty(outDir) && exist(outDir,'dir') ~= 7
+        mkdir(outDir);
+    end
+catch
+end
+
+isRejected = false;
+try
+    nm = lower(char(get(fig,'Name')));
+    if ~isempty(strfind(nm,'rejected')), isRejected = true; end
+catch
+end
+try
+    if ~isempty(strfind(lower(outFile),'rejected')), isRejected = true; end
+catch
+end
+
+% Make the actual visible figure white before screenshot export.
+try
+    figure(fig);
+    set(fig,'Visible','on');
+    set(fig,'Units','pixels');
+    scr = get(0,'ScreenSize');
+    W = min(1500, max(1200, scr(3)-180));
+    if isRejected
+        H = min(800, max(680, scr(4)-200));
+    else
+        H = min(760, max(650, scr(4)-200));
+    end
+    set(fig,'Position',[60 60 W H]);
+    set(fig,'Color',[1 1 1]);
+    set(fig,'InvertHardcopy','off');
+    set(fig,'PaperPositionMode','auto');
+catch
+end
+
+% Make all containers white.
+try
+    objs = findall(fig);
+    for i = 1:numel(objs)
+        h = objs(i);
+        try
+            if isprop(h,'BackgroundColor')
+                set(h,'BackgroundColor',[1 1 1]);
+            end
+        catch
+        end
+    end
+catch
+end
+
+% Style axes and labels.
+try
+    axs = findall(fig,'Type','axes');
+    for a = 1:numel(axs)
+        ax = axs(a);
+        try
+            set(ax,'Units','normalized');
+            set(ax,'Color',[1 1 1]);
+            set(ax,'XColor',[0 0 0],'YColor',[0 0 0],'ZColor',[0 0 0]);
+            set(ax,'GridColor',[0.75 0.75 0.75]);
+            set(ax,'FontSize',13,'FontWeight','bold','LineWidth',1.3,'Box','on');
+            set(get(ax,'XLabel'),'Color',[0 0 0],'FontWeight','bold','FontSize',15);
+            set(get(ax,'YLabel'),'Color',[0 0 0],'FontWeight','bold','FontSize',15);
+            set(get(ax,'Title'),'Color',[0 0 0],'FontWeight','bold','FontSize',17);
+            if isRejected
+                set(ax,'Position',[0.12 0.19 0.84 0.68]);
+                ylim(ax,[-0.15 1.15]);
+                set(ax,'YTick',[0 1],'YTickLabel',{'Accepted','Rejected'});
+                xlabel(ax,'Time (s)','Color',[0 0 0],'FontWeight','bold','FontSize',15);
+                ylabel(ax,'Frame status','Color',[0 0 0],'FontWeight','bold','FontSize',15);
+                title(ax,'Rejected volumes over time','Color',[0 0 0],'FontWeight','bold','FontSize',17);
+            end
+        catch
+        end
+    end
+catch
+end
+
+% Text/annotation objects black on white.
+try
+    objs = findall(fig);
+    for i = 1:numel(objs)
+        h = objs(i);
+        try
+            if isprop(h,'Color')
+                typ = '';
+                try, typ = lower(char(get(h,'Type'))); catch, end
+                if strcmp(typ,'text')
+                    set(h,'Color',[0 0 0]);
+                    set(h,'FontWeight','bold');
+                end
+            end
+            if isprop(h,'LineWidth')
+                lw = get(h,'LineWidth');
+                if isempty(lw) || lw < 1.8, set(h,'LineWidth',1.8); end
+            end
+            if isprop(h,'MarkerSize')
+                ms = get(h,'MarkerSize');
+                if isempty(ms) || ms < 5, set(h,'MarkerSize',5); end
+            end
+        catch
+        end
+    end
+catch
+end
+
+drawnow;
+pause(0.10);
+
+% Save actual RGB pixels. This removes transparency completely.
+try
+    fr = getframe(fig);
+    imwrite(fr.cdata,outFile,'png');
+catch
+    try
+        print(fig,outFile,'-dpng','-r150');
+    catch
+    end
+end
+end
+
+
+
+%% ------------------------------------------------------------------------
+%% Integrated helper from deConfUSIon_style_rejected_qc_axis.m on 09-Jun-2026 16:52:20
+%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
+%% ------------------------------------------------------------------------
+
+function deConfUSIon_style_rejected_qc_axis(ax)
+% Make rejected-volume QC axes readable in GUI and saved PNG.
+if nargin < 1 || isempty(ax) || ~ishghandle(ax)
+    ax = gca;
+end
+try
+    fig = ancestor(ax,'figure');
+    set(fig,'Color','w','InvertHardcopy','off');
+    set(fig,'PaperPositionMode','auto');
+    set(fig,'Units','pixels');
+    pos = get(fig,'Position');
+    if numel(pos) == 4
+        pos(3) = max(pos(3),1400);
+        pos(4) = max(pos(4),760);
+        set(fig,'Position',pos);
+    end
+catch
+end
+try
+    set(ax,'Units','normalized');
+    set(ax,'Position',[0.11 0.18 0.84 0.70]);
+    set(ax,'LooseInset',[0.06 0.06 0.04 0.06]);
+    set(ax,'Color','w');
+    set(ax,'XColor','k','YColor','k','ZColor','k');
+    set(ax,'GridColor',[0.72 0.72 0.72]);
+    set(ax,'FontSize',13,'FontWeight','bold','LineWidth',1.4,'Box','on');
+    ylim(ax,[-0.15 1.15]);
+    set(ax,'YTick',[0 1],'YTickLabel',{'Accepted','Rejected'});
+    xlabel(ax,'Time (s)','Color','k','FontSize',15,'FontWeight','bold');
+    ylabel(ax,'Frame status','Color','k','FontSize',15,'FontWeight','bold');
+    title(ax,'Rejected volumes over time','Color','k','FontSize',17,'FontWeight','bold');
+    grid(ax,'on');
+catch
+end
+try
+    hs = findall(ax);
+    for i = 1:numel(hs)
+        h = hs(i);
+        if isprop(h,'LineWidth')
+            try
+                lw = get(h,'LineWidth');
+                if isempty(lw) || lw < 2.0
+                    set(h,'LineWidth',2.0);
+                end
+            catch
+            end
+        end
+        if isprop(h,'MarkerSize')
+            try
+                ms = get(h,'MarkerSize');
+                if isempty(ms) || ms < 5
+                    set(h,'MarkerSize',5);
+                end
+            catch
+            end
+        end
+    end
+catch
+end
+drawnow;
+end
+

@@ -1,0 +1,290 @@
+//	CORTICAL PLATE
+MOp
+MOs
+SSp-bf 
+SSp-ll 
+SSp-n 
+SSp-tr 
+SSp-ul 
+SSp-un 
+SSp-m 
+SSs
+GU
+VISC
+AUDd 
+AUDp 
+AUDpo 
+AUDv
+ACAd
+ACAv
+VISli
+VISa
+VISal
+VISam
+VISl
+VISp(pl)
+VISp(al)
+VISp(am)
+VISp(pm)
+VISpm
+VISrl
+VISpl  // Posterolateral visual area
+VISpor // Postrhinal area
+%FRP1 FRP2/3 FRP5 FRP6a FRP6b // Frontal pole
+PL
+ILA
+ORB
+%AI  AIp AIv AId
+RSPagl
+RSPd
+RSPv
+TEa
+PERI
+ECT
+// 	OLFACTORY AREAS
+TTd
+TTv
+DP
+PIR
+%NLOT NLOT1 NLOT2 NLOT3 // name area = NLOT, Nucleus of the lateral olfactory tract
+COAa
+COApl
+COApm
+PAA
+TR
+//	HIPPOCAMPUS
+CA1d
+CA1i
+CA1v
+CA2d
+CA2i
+CA2v
+CA3d
+CA3i
+CA3v
+DGd
+DGi
+DGv
+FC
+IG
+ENTl
+ENTm
+PAR
+POST
+PRE
+SUB
+ProS
+HATA
+APr
+// 	CORTICAL SUBPLATE
+CLA
+EPd
+EPv
+LA
+BLAa
+BLAp
+BLAv
+BMAa
+BMAp
+PA
+//	STRIATUM
+MEA
+IA
+AAA
+CEAc
+CEAl
+CEAm
+CPcdl
+CPcdm
+CPcml
+CPcmm
+CPcv
+CPmdc
+CPmdl
+CPmdm
+CPmmc
+CPmml
+CPmmm
+CPmvc
+CPmvl
+CPmvm
+CPadm
+CPadl
+CPaml
+CPamm
+CPavl
+CPavm
+%LS LSv LSc LSr
+BA
+SF
+SH
+FS
+ACB
+OT
+//	PALLIDUM
+%PALc BST BAC
+GPe
+GPi
+MA
+SI
+MS
+NDB
+TRS
+// 	THALAMUS
+AD
+%AM AMd AMv
+AV
+IAD
+IAM
+LD
+IGL
+LGv
+IntG
+SubG
+CL
+CM
+PCN
+PF
+PIL
+RH
+Eth
+PO
+LP
+SGN
+POL
+IMD
+MD
+PR
+SMT
+RE
+PT
+PVT
+Xi
+RT
+%LGd LGd-co LGd-ip LGd-sh //Lateral geniculate, dorsal part
+%MG MGm MGv // Medial geniculate complex
+PP
+SPA
+%SPF SPFm SPFp // Subparafascicular nucleus
+PoT
+VAL
+VM
+%VP VPL VPLpc VPM VPMpc // ventral posterior nucleus of the thalamus
+%EPI LH MH // Epithalamus
+//	HYPOTHALAMUS
+%LZ LHA ZI PST PSTN STN TU PeF RCH LPO // Hypothalamic lateral zone
+ME // Median eminence
+%MEZ AHN LM Mmm Mmd Mml Mmme Mmp SUM TMd TMv PMd PH PMv VMH PVHd MPN // Hypothalamic medial zone
+%PVR ADP AVPV AVP DMH MPO MEPO PS PVp PVpo SFO PD SBPV SCH OV VLPO VMPO //Periventricular region
+%PVZ ASO ARH PVH PVa PVi SO // Periventricular zone
+// 	MIDBRAIN
+CLI
+DR
+IF
+%IPN IPC IPD IPL IPR IPRL // name area = IPN, Interpeduncular nucleus
+RL
+PPN
+SNc
+AT
+CUN
+DT
+%EW/MA3 EW MA3 //medial accessory oculomotor and edinger-westphal nucleus
+LT
+MT
+%MRN MRNal MRNam MRNpl MRNpm // Midbrain reticular nucleus
+RR
+III
+PN
+%Pa4/IV Pa4 IV //trochlear and paratrochlear nuclei
+%PAG PAGa PAGmd PAGml PAGmv PAGpd PAGpl PAGpv PRC ND INC Su3 // Periaqueductal gray
+%PRT APN MPT NOT NPC OP PPT RPF // Pretectal region
+RN
+SNr
+SCd(a)
+SCd(p)
+SCi(al)
+SCi(am)
+SCi(pl)
+SCs(al)
+SCs(am)
+SCs(pl)
+SCs(pm)
+VTA
+VTN
+ICc
+ICd
+ICe
+MEV
+NB
+SAG
+PBG
+SCO 
+//	HINDBRAIN
+// Medulla
+%CN DCO VCO //Cochlear nuclei
+GR
+GRN
+IRN
+%LRNm LRNp
+MARN
+%VNC LAV MV SPIV SUV // Vestibular nuclei
+NTS
+NTB
+SPVO
+VI
+VII
+PAS   
+PARN
+%MDRN MDRNv MDRNd
+x 
+y
+%PGRN PGRNd PGRNl // Paragigantocellular reticular nucleus
+PPY
+%PHY NR PRP // Perihypoglossal nuclei
+%NRaphe RM RO RPA // Nucleus Raphe Magnus, Obscurus and Pallidus
+ICB
+ACVII
+//	Pons
+LDT
+LC
+NI
+RPO
+B
+%DTN/PDTg DTN PDTg //dorsal and posterodorsal tegmental nucleus
+%I5/PC5 I5 PC5 //Intertrigeminal and Parvicellular motor 5 nucleus
+%P5/Acs5 P5 Acs5 // peritrigeminal and accessory trigeminal nucleus
+V
+PB //Parabrachial nucleus
+NLL
+PCG
+PG
+SG
+SUT
+TRN
+%SOC POR SOCl SOCm // Superior olivary complex
+PSV
+PRNc
+PRNr
+%SLC/SLD SLC SLD //subceruleus and sublaterodorsal nucleus
+// 	CEREBELLUM
+ANcr1
+ANcr2
+COPY
+FL
+PFL
+PRM
+SIM
+CENT2
+CENT3
+CUL4
+DEC
+FOTU
+LING
+NOD
+PYR
+UVU
+DN
+FN
+IP
+VeCB
+

@@ -2,7 +2,7 @@ function out = fusi_studio_callback(action)
 % fusi_studio_callback - callback/helper source part 2 of the split Studio
 %
 % This is a valid MATLAB file that stores one source chunk for the split
-% HUMoR / fUSI Studio. Run run_fusi_studio.m to assemble and launch.
+% deConfUSIon / fUSI Studio. Run run_fusi_studio.m to assemble and launch.
 
 if nargin == 0
     run_fusi_studio;
@@ -166,7 +166,7 @@ function B = fcStudioResize2D(A,Y,X)
 end
 
 function T = fcStudioReadRegionNames(fullFile)
-T = HUMOR_FC_read_region_names_file(fullFile);
+T = deConfUSIon_FC_read_region_names_file(fullFile);
 if isempty(T.labels)
     error('Could not parse region names from selected file.');
 end
@@ -838,8 +838,8 @@ end
 function refreshDatasetDropdown()
     studio = guidata(fig);
     try
-        studio = HUMOR_add_preproc_lazy_datasets(studio);
-        studio = HUMOR_fix_studio_dataset_names(studio);
+        studio = deConfUSIon_add_preproc_lazy_datasets(studio);
+        studio = deConfUSIon_fix_studio_dataset_names(studio);
         guidata(fig, studio);
     catch ME_scan
         try, addLog(['Preprocessing dropdown scan warning: ' ME_scan.message]); catch, end
@@ -980,7 +980,7 @@ function data = getActiveData()
                     if isfield(data,'HUMOR_fullDisplayName') && ~isempty(data.HUMOR_fullDisplayName), seedName = data.HUMOR_fullDisplayName; end
                     if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull), seedName = data.displayNameFull; end
                     if isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName), seedName = data.preprocDisplayName; end
-                    fullNameNow = HUMOR_display_name_from_sources(seedName,data,oldLazy.lazyFile);
+                    fullNameNow = deConfUSIon_display_name_from_sources(seedName,data,oldLazy.lazyFile);
                     data.HUMOR_fullDisplayName = fullNameNow;
                     data.displayNameFull = fullNameNow;
                     data.preprocDisplayName = fullNameNow;
@@ -1002,14 +1002,14 @@ function data = getActiveData()
                     elseif isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName)
                         seedName = data.preprocDisplayName;
                     end
-                    fullNameNow = HUMOR_best_visible_dataset_name(seedName, data, oldLazy.lazyFile);
+                    fullNameNow = deConfUSIon_best_visible_dataset_name(seedName, data, oldLazy.lazyFile);
                     data.HUMOR_fullDisplayName = fullNameNow;
                     data.displayNameFull = fullNameNow;
                     data.preprocDisplayName = fullNameNow;
                     studio.datasets.(selected).HUMOR_fullDisplayName = fullNameNow;
                     studio.datasets.(selected).displayNameFull = fullNameNow;
                     studio.datasets.(selected).preprocDisplayName = fullNameNow;
-                    try, HUMOR_commit_full_display_name(oldLazy.lazyFile, data, fullNameNow); catch, end
+                    try, deConfUSIon_commit_full_display_name(oldLazy.lazyFile, data, fullNameNow); catch, end
                     guidata(fig, studio);
                 end
             catch
@@ -1023,13 +1023,13 @@ function data = getActiveData()
                     elseif isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName)
                         nameSeed = data.preprocDisplayName;
                     end
-                    fullNameNow = HUMOR_best_visible_dataset_name(nameSeed, data, oldLazy.lazyFile);
+                    fullNameNow = deConfUSIon_best_visible_dataset_name(nameSeed, data, oldLazy.lazyFile);
                     data.displayNameFull = fullNameNow;
                     data.preprocDisplayName = fullNameNow;
                     studio.datasets.(selected).displayNameFull = fullNameNow;
                     studio.datasets.(selected).preprocDisplayName = fullNameNow;
                     studio.datasets.(selected).HUMOR_fullDisplayName = fullNameNow;
-                    try, HUMOR_commit_full_display_name(oldLazy.lazyFile, data, fullNameNow); catch, end
+                    try, deConfUSIon_commit_full_display_name(oldLazy.lazyFile, data, fullNameNow); catch, end
                     guidata(fig, studio);
                 end
             catch
@@ -1042,11 +1042,11 @@ function data = getActiveData()
                     else
                         nameSeed = selected;
                     end
-                    data.displayNameFull = HUMOR_full_ordered_label_for_dataset(nameSeed, data, oldLazy.lazyFile);
+                    data.displayNameFull = deConfUSIon_full_ordered_label_for_dataset(nameSeed, data, oldLazy.lazyFile);
                     data.preprocDisplayName = data.displayNameFull;
                     studio.datasets.(selected).displayNameFull = data.displayNameFull;
                     studio.datasets.(selected).preprocDisplayName = data.displayNameFull;
-                    try, HUMOR_write_full_display_metadata(oldLazy.lazyFile, data); catch, end
+                    try, deConfUSIon_write_full_display_metadata(oldLazy.lazyFile, data); catch, end
                     guidata(fig, studio);
                 end
             catch
@@ -1054,9 +1054,9 @@ function data = getActiveData()
             try
                 if isstruct(data)
                     if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
-                        data.displayNameFull = HUMOR_fix_processing_name(data.displayNameFull, data, oldLazy.lazyFile);
+                        data.displayNameFull = deConfUSIon_fix_processing_name(data.displayNameFull, data, oldLazy.lazyFile);
                     else
-                        data.displayNameFull = HUMOR_fix_processing_name(selected, data, oldLazy.lazyFile);
+                        data.displayNameFull = deConfUSIon_fix_processing_name(selected, data, oldLazy.lazyFile);
                     end
                     studio.datasets.(selected).displayNameFull = data.displayNameFull;
                     guidata(fig, studio);
@@ -1439,7 +1439,7 @@ end
 % =========================================================
 function s = buildFooterLabel()
     person = 'Soner Caner Cagun';
-    tool = 'HUMoR Analysis Tool';
+    tool = 'deConfUSIon';
     inst = 'Max-Planck Institute for Biological Cybernetics';
     dt = datestr(now,'yyyy-mm-dd HH:MM');
     s = sprintf('%s - %s - %s - %s', person, tool, inst, dt);
@@ -1496,7 +1496,7 @@ uicontrol('Parent',dlg,'Style','text','Units','normalized','Position',[0.08 0.46
 uicontrol('Parent',dlg,'Style','pushbutton','String','PCA','Units','normalized','Position',[0.06 0.12 0.27 0.20],'FontWeight','bold','FontSize',16,'BackgroundColor',[0.20 0.55 0.90],'ForegroundColor','w','Callback',@onPCA);
 uicontrol('Parent',dlg,'Style','pushbutton','String','ICA','Units','normalized','Position',[0.365 0.12 0.27 0.20],'FontWeight','bold','FontSize',16,'BackgroundColor',[0.18 0.72 0.32],'ForegroundColor','w','Callback',@onICA);
 uicontrol('Parent',dlg,'Style','pushbutton','String','Cancel','Units','normalized','Position',[0.67 0.12 0.27 0.20],'FontWeight','bold','FontSize',16,'BackgroundColor',[0.82 0.30 0.30],'ForegroundColor','w','Callback',@onCancel);
-try, HUMoR_popup_autofit_apply(dlg); catch, end
+try, deConfUSIon_popup_autofit_apply(dlg); catch, end
 waitfor(dlg);
     function onPCA(~,~), choice = 'PCA'; if ishghandle(dlg), delete(dlg); end, end
     function onICA(~,~), choice = 'ICA'; if ishghandle(dlg), delete(dlg); end, end
@@ -1559,7 +1559,7 @@ end
 % =========================================================
     function label = makeDropdownLabel(fullName)
     try
-        label = HUMOR_display_name_from_sources(fullName, [], '');
+        label = deConfUSIon_display_name_from_sources(fullName, [], '');
     catch
         try, label = char(fullName); catch, label = 'dataset'; end
     end
@@ -1580,7 +1580,7 @@ function name = getDatasetDisplayName(studio, key)
             elseif isfield(d,'preprocDisplayName') && ~isempty(d.preprocDisplayName)
                 name = d.preprocDisplayName;
             end
-            name = HUMOR_display_name_from_sources(name,d,matFile);
+            name = deConfUSIon_display_name_from_sources(name,d,matFile);
         end
     catch
         name = key;
@@ -1597,7 +1597,7 @@ function stem = getCurrentNamingStem(studio)
         end
     catch
     end
-    try, stem = HUMOR_full_ordered_label_for_dataset(stem, [], ''); catch, end
+    try, stem = deConfUSIon_full_ordered_label_for_dataset(stem, [], ''); catch, end
 
     % Clean base before creating the next operation name.
     try, stem = char(stem); catch, stem = 'dataset'; end
@@ -2093,15 +2093,15 @@ uicontrol('Parent',filePanel,'Style','text', ...
     set(dlg,'Visible','on');
 % HUMOR_FINAL_POPUP_ALIGN_20260527
 drawnow;
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end
 % HUMOR_SCM_VIDEO_FINAL_BIG_POPUP_20260527
 drawnow;
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end
 % HUMOR_SCM_VIDEO_FONT_REFINEMENT_20260527
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end
 % HUMOR_SCM_VIDEO_BIG_UI_SAFE_20260527
-try, HUMOR_fix_scm_video_dialog_fonts(dlg); catch, end
-    try, HUMoR_popup_autofit_apply(dlg); catch, end
+try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end
+    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
     waitfor(dlg);
 
     function h = makeLabel(parent,pos,str,fs,col)
@@ -5118,7 +5118,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
     end
 
     drawnow;
-    try, HUMoR_popup_autofit_apply(dlg); catch, end
+    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
     uiwait(dlg);
 
     if ishandle(dlg)

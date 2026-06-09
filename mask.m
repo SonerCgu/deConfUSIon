@@ -386,7 +386,7 @@ fig = figure( ...
     'DefaultUipanelFontName',UI.fontName, ...
     'DefaultUipanelFontSize',UI.fsPanel);
 % HUMoR_FORCE_FULLSCREEN_PATCH32
-try, HUMoR_force_fullscreen_fig(fig); catch, end
+try, deConfUSIon_force_fullscreen_fig(fig); catch, end
 
 
 try

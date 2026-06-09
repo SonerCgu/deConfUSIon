@@ -1,5 +1,5 @@
 function run_fusi_studio()
-% run_fusi_studio - clean launcher for split HUMoR / fUSI Studio.
+% run_fusi_studio - clean launcher for split deConfUSIon / fUSI Studio.
 % MATLAB 2017b + 2023b compatible.
 %
 % Source files kept in toolbox root:
@@ -15,6 +15,12 @@ if isempty(root) || exist(root,'dir') ~= 7
 end
 
 cd(root);
+
+try
+    atlasToolsDCU = fullfile(root,'atlas_tools');
+    if exist(atlasToolsDCU,'dir') == 7, addpath(atlasToolsDCU,'-begin'); end
+catch
+end
 
 try
     addpath(root,'-begin');
@@ -72,13 +78,13 @@ try
     part2 = fusi_studio_callback('source');
     runtimeCode = [part1 sprintf('\n') part2];
 
-    runtimeDir = fullfile(tempdir,'HUMOR_fUSI_Studio_runtime');
+    runtimeDir = fullfile(tempdir,'deConfUSIon_fUSI_Studio_runtime');
     if exist(runtimeDir,'dir') ~= 7
         mkdir(runtimeDir);
     end
     addpath(runtimeDir,'-begin');
 
-    % HUMOR_ICON_COPY_PATCH_20260518B
+    % deConfUSIon icon copy
     % Runtime lives in tempdir, so copy Icon.png beside fusi_studio_runtime.m.
     try
         iconSrc = fullfile(root,'Icon.png');
@@ -87,10 +93,10 @@ try
             copyfile(iconSrc, iconDst);
         end
     catch ME_iconcopy
-        warning('HUMoR:IconCopy', 'Could not copy Icon.png: %s', ME_iconcopy.message);
+        warning('deConfUSIon:IconCopy', 'Could not copy Icon.png: %s', ME_iconcopy.message);
     end
 
-    % HUMOR_ICON_COPY_PATCH_20260518
+    % deConfUSIon icon copy
     % The assembled fusi_studio_runtime.m lives in tempdir, so mfilename
     % inside the runtime points there. Copy Icon.png into the runtime folder.
     try
@@ -100,7 +106,7 @@ try
             copyfile(iconSrc, iconDst);
         end
     catch ME_iconcopy
-        warning('HUMoR:IconCopy', 'Could not copy Icon.png to runtime folder: %s', ME_iconcopy.message);
+        warning('deConfUSIon:IconCopy', 'Could not copy Icon.png to runtime folder: %s', ME_iconcopy.message);
     end
 
     runtimeFile = fullfile(runtimeDir,'fusi_studio_runtime.m');
@@ -124,23 +130,23 @@ try
         clear cleaner;
     end
 catch ME
-    error('HUMoR:SplitAssemble','Could not assemble fUSI Studio split files: %s', ME.message);
+    error('deConfUSIon:SplitAssemble','Could not assemble fUSI Studio split files: %s', ME.message);
 end
 
 % Start popup auto-fit helper if available.
 try
-    if exist('HUMoR_popup_autofit_timer','file') == 2
-        HUMoR_popup_autofit_timer('stop');
-        HUMoR_popup_autofit_timer('start');
+    if exist('deConfUSIon_popup_autofit_timer','file') == 2
+        deConfUSIon_popup_autofit_timer('stop');
+        deConfUSIon_popup_autofit_timer('start');
     end
 catch ME
     warning('HUMoR:PopupAutoFit', 'Could not start popup auto-fit timer: %s', ME.message);
 end
 
-fprintf('HUMoR / fUSI Studio root:\n%s\n\n', root);
+fprintf('deConfUSIon / fUSI Studio root:\n%s\n\n', root);
 
 % Launch assembled Studio runtime.
-try, HUMoR_popup_autofit_timer('start'); catch, end
+try, deConfUSIon_popup_autofit_timer('start'); catch, end
 rehash;
 clear fusi_studio_runtime;
 fusi_studio_runtime;

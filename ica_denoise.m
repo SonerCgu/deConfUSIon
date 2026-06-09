@@ -150,7 +150,7 @@ stats.qcFile = ''; stats.qcGlobalMeanFile = ''; stats.qcMeanImageFile = '';
         K=st.K; T=st.T; maxPts=opts.maxDisplayPoints; idx=getIdx(T,maxPts); tmin=((0:T-1)*TR)/60; tmin=tmin(idx);
         perPage=25; nPages=max(1,ceil(K/perPage)); page=1;
         fig=figure('Name','ICA Components — slice-aware V12', 'Color',bgFig,'MenuBar','none','ToolBar','none','NumberTitle','off', 'Position',[60 40 1800 980]);
-        try, HUMoR_force_fullscreen_fig(fig); catch, end
+        try, deConfUSIon_force_fullscreen_fig(fig); catch, end
         gridX=0.03; gridY=0.08; gridW=0.66; gridH=0.86; rightX=0.71; rightY=0.08; rightW=0.27; rightH=0.90;
         hdr=uicontrol('Parent',fig,'Style','text','Units','normalized','Position',[gridX 0.965 gridW 0.03],'String','','BackgroundColor',bgFig,'ForegroundColor',fg,'FontSize',13,'FontWeight','bold','HorizontalAlignment','left');
         rightPanel=uipanel('Parent',fig,'Units','normalized','Position',[rightX rightY rightW rightH],'BackgroundColor',[0.08 0.08 0.09],'ForegroundColor',fg,'Title','Selection + Slice Scope','FontWeight','bold','FontSize',13);
@@ -544,7 +544,7 @@ fig = figure('Name','ICA Components - left click select, right click deselect', 
     'Color',bgFig,'MenuBar','none','ToolBar','none','NumberTitle','off', ...
     'Position',[160 90 1580 900]);
 % HUMoR_FORCE_FULLSCREEN_PATCH31
-try, HUMoR_force_fullscreen_fig(fig); catch, end
+try, deConfUSIon_force_fullscreen_fig(fig); catch, end
 
 
 try, set(fig,'Renderer','opengl'); catch, end
