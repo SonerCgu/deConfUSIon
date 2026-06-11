@@ -1,16 +1,27 @@
 # deConfUSIon
 
-**deConfUSIon** is a MATLAB-based graphical toolbox for functional ultrasound imaging (fUSI) analysis. It supports data loading, quality control, preprocessing, percentage signal change (PSC) computation, signal-change-map (SCM) visualization, masking, atlas registration, segmentation, group analysis, and functional connectivity.
+**deConfUSIon** is a MATLAB-based graphical toolbox for functional ultrasound imaging (fUSI) analysis. It supports data loading, quality control, preprocessing, percentage signal change (PSC) computation, signal-change-map (SCM) visualization, masking, atlas registration, segmentation, functional connectivity, and group analysis - 11th of June 2026.
 
-This repository was previously named **HUMoR / HUMOR-Analysis-Tool**. The toolbox has now been renamed to **deConfUSIon**. Some internal metadata fields may still retain legacy names such as `HUMOR_fullDisplayName` for backward compatibility with old `.mat` files and saved preprocessing outputs. Do not remove those compatibility fields from saved datasets.
+This repository was previously developed as **HUMoR / HUMOR-Analysis-Tool**. The active launcher and current repository name are now **deConfUSIon**.
 
-> **Important:** This is research software. All outputs must be manually reviewed before interpretation, presentation, or publication. Raw movies, QC plots, preprocessing choices, baseline windows, masks, ROI traces, atlas registrations, group labels, and functional connectivity outputs should always be checked carefully.
+> **Research-use warning:** deConfUSIon is research software, not medical software. Always manually review raw movies, QC plots, preprocessing choices, baseline windows, masks, atlas registrations, ROI traces, FC outputs, group labels, and exported figures before interpreting or publishing results.
+
+---
+
+## User Manual PDF
+
+Open the current user manual directly from GitHub:
+
+- [View the deConfUSIon fUSI Studio User Manual PDF](docs/deConfUSion_fUSI_Studio_User_Manual_current_2026-06-09.pdf)
+- [Direct PDF download](https://github.com/SonerCgu/deConfUSIon/raw/main/docs/deConfUSion_fUSI_Studio_User_Manual_current_2026-06-09.pdf)
+
+The manual explains installation, expected data formats, QC, preprocessing, SCM visualization, masks, atlas registration, segmentation, functional connectivity, group analysis, output folders, and troubleshooting.
 
 ---
 
 ## Quick Start
 
-Open MATLAB, navigate to the repository folder, and run:
+In MATLAB:
 
 ```matlab
 cd('D:\Github\deConfUSIon')
@@ -19,24 +30,32 @@ deConfUSIon
 
 `deConfUSIon.m` is the recommended user-facing launcher.
 
-Internally, `deConfUSIon.m` calls `run_fusi_studio.m`. Keep `run_fusi_studio.m` in the repository because it assembles and starts the split GUI/runtime safely.
+`run_fusi_studio.m` must stay in the repository. It is the internal runtime launcher used by `deConfUSIon.m` to assemble and start the split GUI from `fusi_studio_GUI.m` and `fusi_studio_callback.m`.
 
 ---
 
-## Current Status
+## Current Code Status
 
-The toolbox is currently most complete for:
+The current source package contains approximately:
 
-- **2D probe / single-slice fUSI workflows**
-- **2D step-motor / multi-slice workflows**
-- **QC and preprocessing**
-- **SCM visualization**
-- **Mask editing**
-- **Atlas registration**
-- **Functional connectivity**
-- **Group analysis**
+- 80 root MATLAB runtime/helper files
+- 2 MATLAB utilities inside `atlas_tools`
+- 1 user manual PDF inside `docs`
+- atlas support files including `allen_brain_atlas.mat`, `rgb2acr.xlsx`, and `list_selected_regions.txt`
 
-The code has recently been cleaned and renamed from HUMoR/HUMOR to deConfUSIon. The active root folder now mainly contains runtime files, shared GUI helpers, atlas helpers, FC/step-motor helpers, and compatibility helpers needed for dropdown naming and saved preprocessing metadata.
+The current code is best suited for:
+
+- 2D probe / single-slice fUSI workflows
+- 2D step-motor / multi-slice workflows
+- QC and preprocessing
+- PSC and SCM visualization
+- mask editing
+- atlas registration
+- segmentation
+- functional connectivity
+- group analysis
+
+Step-motor and group-level FC workflows should still be validated carefully with representative datasets before publication.
 
 ---
 
@@ -48,29 +67,29 @@ Developed and tested mainly on:
 - MATLAB 2017b
 - MATLAB 2023b
 
-The code is written to remain compatible with older MATLAB syntax where possible. Some acquisition-related scripts use Windows-style serial ports such as `COM9`, `COM8`, or `COM14`; these must be adapted for other systems.
+The code is written to remain compatible with older MATLAB syntax where possible. Some acquisition-related files use Windows serial-port names such as `COM8`, `COM9`, or `COM14`; these must be adapted for other computers.
 
-Some export functions may depend on Windows-specific features, Microsoft PowerPoint, or ActiveX.
+Some export workflows may depend on Windows-specific features, Microsoft PowerPoint, or ActiveX.
 
 ---
 
-## Recommended Workflow
+## Recommended Analysis Workflow
 
-1. Start the toolbox with:
+1. Start the toolbox:
 
    ```matlab
    deConfUSIon
    ```
 
-2. Load fUSI data using **Load fUSI Data**.
+2. Load fUSI data with **Load fUSI Data**.
 
-3. Confirm probe type and TR.
+3. Confirm probe type, dimensions, TR, and total duration.
 
 4. Run **Full QC** before preprocessing.
 
-5. Review QC outputs.
+5. Review QC outputs and raw movie behavior.
 
-6. Apply preprocessing only when scientifically justified:
+6. Apply preprocessing only when justified:
    - frame rejection / interpolation
    - scrubbing
    - imregdemons correction
@@ -80,24 +99,24 @@ Some export functions may depend on Windows-specific features, Microsoft PowerPo
    - PCA / ICA denoising
    - despiking
 
-7. Inspect the active dataset in the dropdown after every preprocessing step.
+7. After each preprocessing step, check the active dataset dropdown.
 
-8. Use the Time-Course Viewer and SCM GUI to inspect dynamics and PSC maps.
+8. Use the Time-Course Viewer and SCM GUI to inspect PSC maps and signal dynamics.
 
-9. Use masks and atlas registration only after checking raw and preprocessed data quality.
+9. Use masks, segmentation, and atlas registration only after the dataset passes QC.
 
-10. Run Functional Connectivity and Group Analysis only after individual datasets pass QC.
+10. Run Functional Connectivity and Group Analysis only after individual datasets are validated.
 
-11. Export logs and outputs for reproducibility.
+11. Export logs, figures, and analysis outputs for reproducibility.
 
 ---
 
 ## Main Features
 
 - Load `.mat`, `.nii`, and `.nii.gz` fUSI datasets.
-- Support `[Y X T]` 2D probe data.
+- Support `[Y X T]` 2D single-slice data.
 - Support `[Y X Z T]` step-motor / multi-slice / 3D-like data.
-- Probe-type and TR confirmation during loading.
+- Confirm probe type and TR during loading.
 - Full QC diagnostics.
 - Frame rejection and interpolation.
 - Scrubbing and outlier handling.
@@ -112,53 +131,54 @@ Some export functions may depend on Windows-specific features, Microsoft PowerPo
 - Dynamic video inspection.
 - Mask editing.
 - 2D and 3D atlas registration workflows.
-- JM atlas color/order support through `atlas_tools`.
+- JM atlas color/order support.
 - Segmentation workflow.
-- ROI/seed/pair/graph functional connectivity.
-- Group-level ROI/map/FC workflows.
-- Export of figures, logs, bundles, and analysis outputs.
+- ROI, seed, pair, and graph functional connectivity.
+- Group-level ROI, map, and FC workflows.
+- Export of figures, logs, bundles, and reports.
 
 ---
 
 ## Core Runtime Files
 
-| File / Folder | Purpose | Keep? |
+| File / folder | Purpose | Keep? |
 |---|---|---|
 | `deConfUSIon.m` | Main user-facing launcher | Yes |
 | `run_fusi_studio.m` | Internal runtime launcher and GUI assembly | Yes |
 | `fusi_studio_GUI.m` | Main Studio GUI layout | Yes |
 | `fusi_studio_callback.m` | Main Studio callbacks | Yes |
-| `loadFUSIData.m` | Data loading | Yes |
+| `loadFUSIData.m` | Loads `.mat`, `.nii`, and `.nii.gz` data | Yes |
 | `qc_fusi.m` | Quality control | Yes |
 | `filtering.m` | Temporal filtering | Yes |
 | `motor.m` | Step-motor reconstruction | Yes |
 | `pca_denoise.m` | PCA denoising | Yes |
 | `ica_denoise.m` | ICA denoising | Yes |
-| `scrubbing.m` | Motion/global-signal scrubbing | Yes |
+| `scrubbing.m` | Scrubbing / outlier correction | Yes |
 | `imregdemons_preprocess.m` | Imregdemons preprocessing | Yes |
-| `fUSI_Live_Studio.m` | Time-course/movie viewer | Yes |
-| `SCM_gui.m` | SCM visualization | Yes |
-| `play_fusi_video_final.m` | Video/SCM visualization | Yes |
+| `fUSI_Live_Studio.m` | Time-course and movie viewer | Yes |
+| `SCM_gui.m` | Signal-change-map GUI | Yes |
+| `play_fusi_video_final.m` | Dynamic overlay/video GUI | Yes |
 | `mask.m` | Mask editor | Yes |
 | `coreg.m` | Atlas registration launcher | Yes |
 | `coreg_3d.m` | 3D atlas registration entry | Yes |
-| `coreg_coronal_2d.m` | 2D coronal registration entry | Yes |
-| `registration_ccf.m` | Manual atlas registration GUI | Yes |
-| `registration_coronal_2d.m` | 2D registration GUI | Yes |
+| `coreg_coronal_2d.m` | 2D coronal atlas registration entry | Yes |
+| `registration_ccf.m` | Manual 3D atlas registration GUI | Yes |
+| `registration_coronal_2d.m` | Manual 2D atlas registration GUI | Yes |
 | `Segmentation.m` | Segmentation workflow | Yes |
-| `FunctionalConnectivity.m` | Functional connectivity GUI/workflow | Yes |
+| `FunctionalConnectivity.m` | Functional connectivity workflow | Yes |
 | `GroupAnalysis*.m` | Group analysis modules | Yes |
 | `atlas_tools/` | JM atlas color/order files and manual utilities | Yes |
+| `docs/` | User manual PDF | Yes |
 
 ---
 
 ## Files That Should Stay External
 
-Some files are intentionally small and should **not** be integrated into large scripts.
+Some helper files are intentionally small and should not be merged into large GUI files, because MATLAB callbacks, timers, lazy-loading logic, or multiple modules may call them by name.
 
 ### GUI / timer / popup helpers
 
-Keep these external because MATLAB GUI callbacks/timers may call them by name:
+Keep these external:
 
 ```text
 deConfUSIon_popup_autofit_apply.m
@@ -169,7 +189,7 @@ deConfUSIon_force_fullscreen_fig.m
 
 ### Functional connectivity / step-motor shared helpers
 
-Keep these external because they are shared across FC, Studio, segmentation, and step-motor workflows:
+Keep these external:
 
 ```text
 deConfUSIon_FC_find_stepmotor_txt_names.m
@@ -178,11 +198,12 @@ deConfUSIon_FC_stepmotor_read_folder.m
 deConfUSIon_find_stepmotor_seg_fc_files.m
 deConfUSIon_FC_force_layout.m
 deConfUSIon_FC_remember_layout.m
+deConfUSIon_FC_make_slice_roi_result.m
 ```
 
 ### Dropdown / metadata compatibility helpers
 
-Keep these external because they are used by loading, saving, lazy preprocessing, and dataset dropdown refresh:
+Keep these external. They make saved preprocessing outputs appear correctly in the dataset dropdown:
 
 ```text
 deConfUSIon_fix_studio_dataset_names.m
@@ -190,8 +211,11 @@ deConfUSIon_write_full_display_metadata.m
 deConfUSIon_commit_full_display_name.m
 deConfUSIon_best_visible_dataset_name.m
 deConfUSIon_display_from_file_context.m
+deConfUSIon_display_name_from_sources.m
 deConfUSIon_is_bad_display_name.m
 ```
+
+Some metadata fields still contain legacy names such as `HUMOR_fullDisplayName`. Keep these compatibility fields so older `.mat` outputs continue to load.
 
 ---
 
@@ -199,7 +223,7 @@ deConfUSIon_is_bad_display_name.m
 
 Do **not** delete `atlas_tools`.
 
-It should contain files such as:
+Expected contents include:
 
 ```text
 atlas_tools/
@@ -208,8 +232,6 @@ atlas_tools/
   save_correct_colors.m
   deConfUSIon_reorder_FC_by_list.m
 ```
-
-The files `rgb2acr.xlsx` and `list_selected_regions.txt` are needed for JM atlas color/order support.
 
 Automatic atlas preparation uses:
 
@@ -220,9 +242,7 @@ readFileList.m
 deConfUSIon_fc_jm_order.m
 ```
 
-`save_correct_colors.m` is a manual utility and can stay inside `atlas_tools`.
-
-JM atlas preparation changes atlas color/order metadata. It does **not** change registration geometry. Always visually inspect registration overlays before trusting atlas labels.
+JM atlas preparation changes atlas color/order metadata. It does not change registration geometry. Always visually inspect registration overlays before trusting atlas labels.
 
 ---
 
@@ -230,7 +250,7 @@ JM atlas preparation changes atlas color/order metadata. It does **not** change 
 
 ### MATLAB `.mat`
 
-Preferred variable:
+Preferred image variable:
 
 ```matlab
 I
@@ -243,11 +263,11 @@ I = [Y X T]       % 2D single-slice data
 I = [Y X Z T]     % step-motor / multi-slice / 3D-style data
 ```
 
-Optional metadata can include TR, sampling rate, probe type, baseline windows, masks, stimulation/injection timing, and acquisition parameters.
+Optional metadata may include TR, sampling rate, time vector, probe type, baseline windows, masks, stimulation/injection timing, and acquisition parameters.
 
 ### NIfTI
 
-`.nii` and `.nii.gz` are supported, but orientation, TR, dimensions, and total duration must be checked after loading.
+`.nii` and `.nii.gz` files are supported. Always check orientation, dimensions, TR, and total duration after loading.
 
 ### Step-Motor / Split Data
 
@@ -259,20 +279,15 @@ slice2_t001.mat
 slice3_t001.mat
 ```
 
-Always verify:
-
-- number of slices
-- frames per slice
-- trimming
-- baseline frames
-- reconstructed dimensions
-- active dataset after reconstruction
+Always verify number of slices, frames per slice, trimming, baseline frames, reconstructed dimensions, and active dataset selection after reconstruction.
 
 ---
 
-## Recommended Output Structure
+## Output and Repository Hygiene
 
-Keep raw data separate from generated outputs.
+Keep raw data separate from generated outputs. Do not overwrite raw data.
+
+Recommended analysis-output structure:
 
 ```text
 RawData/
@@ -298,13 +313,7 @@ AnalysedData/
           Reports/
 ```
 
-Do not overwrite raw data. Each preprocessing step should create a new dataset version.
-
----
-
-## Repository Hygiene
-
-Do **not** commit generated analysis outputs, temporary backups, or animal/session data.
+Do not commit animal data, generated analysis outputs, or temporary backup folders to GitHub.
 
 Recommended `.gitignore` entries:
 
@@ -328,15 +337,19 @@ bakcups/
 *.mp4
 *.avi
 *.pptx
+*.asv
+*.tmp
+.DS_Store
+Thumbs.db
 ```
 
-Large atlas resources such as `allen_brain_atlas.mat` should ideally be stored through Git LFS, release assets, institutional storage, or separate download instructions.
+Large atlas resources such as `allen_brain_atlas.mat` may be better handled through Git LFS, release assets, or institutional storage if the repository becomes large.
 
 ---
 
 ## Backup Folder Policy
 
-During cleanup, the toolbox may contain a `backups/` folder. Keep it until full testing passes with:
+During development and cleanup, the repository may contain a `backups/` folder. Keep it until full testing passes with:
 
 - normal 2D data
 - 2D step-motor data
@@ -349,7 +362,7 @@ During cleanup, the toolbox may contain a `backups/` folder. Keep it until full 
 - functional connectivity
 - group analysis
 
-After testing, move or zip `backups/` outside the repository before committing.
+After testing, zip or move `backups/` outside the repository before committing.
 
 ---
 
@@ -357,7 +370,7 @@ After testing, move or zip `backups/` outside the repository before committing.
 
 ### A preprocessing output is saved but not visible in the dropdown
 
-Check that these files are present:
+Check:
 
 ```matlab
 which deConfUSIon_fix_studio_dataset_names
@@ -387,34 +400,31 @@ Check:
 which deConfUSIon_prepare_atlas
 which deConfUSIon_apply_rgb2acr
 which readFileList
+which deConfUSIon_fc_jm_order
 ```
 
-Also verify that:
+Also verify:
 
 ```text
 atlas_tools/rgb2acr.xlsx
 atlas_tools/list_selected_regions.txt
 ```
 
-exist.
-
 ### Direct `FunctionalConnectivity` call asks for data
 
-The FC GUI usually receives data from deConfUSIon Studio. If called directly, it may ask you to select a `.mat` file.
+Functional Connectivity usually receives data from deConfUSIon Studio. If called directly, select a valid `.mat` dataset when prompted.
 
 ---
 
 ## Development Notes
 
-The toolbox was originally developed as HUMoR / HUMOR-Analysis-Tool and was later renamed to deConfUSIon. Some compatibility logic remains so old datasets and metadata still load correctly.
-
 Before adding new modules:
 
 1. Keep runtime files in root unless there is a strong reason to move them.
-2. Keep shared GUI/helper functions external if they are used by callbacks.
-3. Avoid deleting small helper files solely because they are small.
-4. Add new generated outputs to `.gitignore`.
-5. Test with normal 2D and 2D step-motor data.
+2. Keep shared GUI/helper functions external if they are called by callbacks or multiple modules.
+3. Avoid deleting small helper files only because they are small.
+4. Add generated outputs to `.gitignore`.
+5. Test with both normal 2D and 2D step-motor data.
 
 ---
 
