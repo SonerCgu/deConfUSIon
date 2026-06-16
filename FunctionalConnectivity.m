@@ -1836,81 +1836,7 @@ end
 % HUMOR_FC_BOX4_CLEAN_FINAL_20260527_END
 % HUMOR_FC_MICRO_LAYOUT_FINAL_20260527
 try
-    %% ---------------- Seed Map display panel: no wrapped/cut labels ----------------
-    try
-        pSeedDisplayFinal = [];
-        pp = findall(pSeedView,'Type','uipanel');
-        for ip = 1:numel(pp)
-            ttl = '';
-            try, ttl = lower(char(get(pp(ip),'Title'))); catch, end
-            if ~isempty(strfind(ttl,'display controls')) || ~isempty(strfind(ttl,'seed-map display'))
-                pSeedDisplayFinal = pp(ip);
-                break;
-            end
-        end
-
-        if isempty(pSeedDisplayFinal) || ~ishandle(pSeedDisplayFinal)
-            pSeedDisplayFinal = uipanel('Parent',pSeedView,'Units','normalized', ...
-                'Position',[0.595 0.020 0.400 0.360], ...
-                'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
-                'Title','Display controls', ...
-                'FontName',C.font,'FontWeight','bold','FontSize',11);
-        end
-
-        set(pSeedDisplayFinal,'Parent',pSeedView,'Units','normalized', ...
-            'Position',[0.595 0.020 0.400 0.360], ...
-            'Title','Display controls','FontName',C.font,'FontWeight','bold','FontSize',11);
-
-        try, delete(findall(pSeedDisplayFinal,'Type','uicontrol','Style','text')); catch, end
-
-        % Row 1: Overlay / Z / Alpha. Labels are wide enough.
-        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
-            'Position',[0.030 0.735 0.145 0.145], ...
-            'String','Overlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
-            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
-        set(ddOverlay,'Parent',pSeedDisplayFinal,'Units','normalized', ...
-            'Position',[0.175 0.695 0.355 0.190],'FontSize',8.2);
-
-        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
-            'Position',[0.560 0.735 0.045 0.145], ...
-            'String','Z','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
-            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
-        set(edSliceBox,'Parent',pSeedDisplayFinal,'Units','normalized', ...
-            'Position',[0.600 0.690 0.075 0.195],'FontSize',8.2);
-
-        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
-            'Position',[0.700 0.735 0.120 0.145], ...
-            'String','Alpha','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
-            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
-        set(edSeedAlpha,'Parent',pSeedDisplayFinal,'Units','normalized', ...
-            'Position',[0.820 0.690 0.110 0.195],'FontSize',8.2);
-
-        % Row 2: Underlay on its own wide row.
-        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
-            'Position',[0.030 0.470 0.170 0.135], ...
-            'String','Underlay','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
-            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
-        set(ddUnderlayStyle,'Parent',pSeedDisplayFinal,'Units','normalized', ...
-            'Position',[0.205 0.430 0.685 0.180],'FontSize',8.2);
-
-        % Row 3: Gamma and Sharpness. Full words, no mid-word wrapping.
-        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
-            'Position',[0.030 0.195 0.140 0.125], ...
-            'String','Gamma','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
-            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
-        set(edUGamma,'Parent',pSeedDisplayFinal,'Units','normalized', ...
-            'Position',[0.170 0.155 0.125 0.180],'FontSize',8.2);
-
-        uicontrol('Parent',pSeedDisplayFinal,'Style','text','Units','normalized', ...
-            'Position',[0.455 0.195 0.210 0.125], ...
-            'String','Sharpness','BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
-            'FontName',C.font,'FontWeight','bold','FontSize',8.5,'HorizontalAlignment','left');
-        set(edUSharp,'Parent',pSeedDisplayFinal,'Units','normalized', ...
-            'Position',[0.675 0.155 0.125 0.180],'FontSize',8.2);
-    catch ME_seed_micro
-        try, fprintf('FC seed panel micro-layout warning: %s\n',ME_seed_micro.message); catch, end
-    end
-
+    % FC_EXPORT_GA_V3_FIX: seed display micro-layout was removed here because it ran before pSeedView existed.
     %% ---------------- Box 4: remove duplicate Pick/All and separate Apply/Use win ----------------
     try
         % Keep Pick/All only beside Labels; hide any old duplicates below Window.
@@ -3944,7 +3870,7 @@ end
     function onExportGroupAnalysis(~,~)
         s = guidata(fig);
         try
-            outFile = fc_export_group_analysis_bundle_interactive(s);
+            outFile = fc_export_group_analysis_bundle_auto_v4(s);
             if ~isempty(outFile)
                 setStatus(['Saved GroupAnalysis FC bundle: ' outFile],C.good);
             end
@@ -8029,6 +7955,8 @@ try
         rz = deConfUSIon_FC_make_slice_roi_result(ss,subIdx,resWhole,z);
         if isempty(rz) || ~isfield(rz,'M') || isempty(rz.M), continue; end
         if ~isfield(rz,'labels') || numel(rz.labels) < 2, continue; end
+        if ~isfield(rz,'sliceOnly') || ~rz.sliceOnly, continue; end  % FC_AUTO_V4_SLICE_GUARD
+        if ~isfield(rz,'sliceOnly') || ~rz.sliceOnly, continue; end  % GA_EXPORT_FIX: skip whole-brain fallback contamination
 
         n = n + 1;
         R = double(rz.M);
@@ -8446,3 +8374,816 @@ function tf = fc_noarg_candidate_ok_deconfusion(v)
         end
     end
 end
+
+% BEGIN_DECONFUSION_FC_EXPORT_GA_V3_STRUCTSAFE_20260616
+function outFile = fc_export_group_analysis_bundle_interactive_v3(s)
+% Struct-safe rich FC export for GroupAnalysis.
+% Avoids subscripted assignment between dissimilar structures.
+
+outFile = '';
+if nargin < 1 || ~isstruct(s)
+    error('Expected FunctionalConnectivity GUI state struct.');
+end
+
+coreErr = '';
+try
+    fcBundle = fc_make_group_bundle(s);
+catch ME_core
+    coreErr = ME_core.message;
+    fcBundle = fc_make_group_bundle_safe_v3(s,coreErr);
+end
+
+fcBundle.version = 'FC_GroupBundle_v3_structsafe_20260616';
+fcBundle.created = datestr(now,31);
+fcBundle.exporter = 'fc_export_group_analysis_bundle_interactive_v3';
+fcBundle.coreExportError = coreErr;
+fcBundle.note = ['R = Pearson r for display. Z = Fisher z for statistics. ' ...
+                 'Bundle contains ROI matrices, heatmap data, ROI timecourses, seed results, compare-ROI data, and sliceResults when available.'];
+
+fcBundle = fc_enrich_group_bundle_v3(fcBundle,s);
+
+tag = fc_safe_text_v3(fc_getc_v3(s,'tag',datestr(now,'yyyymmdd_HHMMSS')));
+saveRoot = fc_getc_v3(s,'saveRoot','');
+qcDir = fc_getc_v3(s,'qcDir','');
+
+startDir = '';
+if ~isempty(saveRoot) && exist(saveRoot,'dir') == 7
+    startDir = fullfile(saveRoot,'Connectivity','GroupBundles');
+    if exist(startDir,'dir') ~= 7
+        try, mkdir(startDir); catch, startDir = saveRoot; end
+    end
+end
+if isempty(startDir) && ~isempty(qcDir) && exist(qcDir,'dir') == 7
+    startDir = qcDir;
+end
+if isempty(startDir), startDir = pwd; end
+
+defaultName = ['FC_GroupBundle_' tag '.mat'];
+[f,p] = uiputfile('*.mat','Save FC GroupBundle for GroupAnalysis',fullfile(startDir,defaultName));
+if isequal(f,0) || isequal(p,0)
+    return;
+end
+
+outFile = fullfile(p,f);
+[pp,nn,ee] = fileparts(outFile);
+if isempty(ee), ee = '.mat'; end
+if isempty(strfind(nn,'FC_GroupBundle_'))
+    nn = ['FC_GroupBundle_' nn];
+end
+outFile = fullfile(pp,[nn ee]);
+
+save(outFile,'fcBundle','-v7.3');
+
+try
+    if ~isempty(saveRoot) && exist(saveRoot,'dir') == 7
+        autoDir = fullfile(saveRoot,'GroupAnalysis','Bundles','FC');
+        if exist(autoDir,'dir') ~= 7, mkdir(autoDir); end
+        autoFile = fullfile(autoDir,[nn ee]);
+        if ~strcmpi(autoFile,outFile)
+            save(autoFile,'fcBundle','-v7.3');
+        end
+    end
+catch
+end
+
+fprintf('\n[deConfUSIon FC] Exported struct-safe GroupAnalysis FC bundle:\n%s\n',outFile);
+end
+
+function fcBundle = fc_make_group_bundle_safe_v3(s,coreErr)
+fcBundle = struct();
+fcBundle.version = 'FC_GroupBundle_v3_safe_fallback_20260616';
+fcBundle.created = datestr(now,31);
+fcBundle.coreExportError = coreErr;
+fcBundle.tag = fc_getc_v3(s,'tag',datestr(now,'yyyymmdd_HHMMSS'));
+fcBundle.saveRoot = fc_getc_v3(s,'saveRoot','');
+fcBundle.qcDir = fc_getc_v3(s,'qcDir','');
+fcBundle.settings = fc_settings_v3(s);
+
+nSub = fc_getn_v3(s,'nSub',0);
+try
+    if nSub <= 0 && isfield(s,'subjects'), nSub = numel(s.subjects); end
+catch
+    nSub = 0;
+end
+
+tmpl = fc_subject_template_v3();
+fcBundle.subjects = repmat(tmpl,1,max(0,nSub));
+
+for i = 1:nSub
+    try
+        subj = s.subjects(i);
+    catch
+        subj = struct();
+    end
+
+    fcBundle.subjects(i).name = fc_getc_v3(subj,'name',sprintf('Subject_%02d',i));
+    fcBundle.subjects(i).group = fc_getc_v3(subj,'group','');
+    fcBundle.subjects(i).TR = fc_getn_v3(subj,'TR',NaN);
+    fcBundle.subjects(i).analysisDir = fc_getc_v3(subj,'analysisDir','');
+    fcBundle.subjects(i).isStepMotor3D = fc_getn_v3(s,'Z',1) > 1;
+    fcBundle.subjects(i).nSlices = fc_getn_v3(s,'Z',1);
+
+    res = fc_current_roi_result_v3(s,i);
+    if isempty(res) || ~isstruct(res) || ~isfield(res,'M') || isempty(res.M)
+        continue;
+    end
+
+    R = double(res.M);
+    Z = fc_r2z_v3(R);
+
+    fcBundle.subjects(i).hasROI = true;
+    fcBundle.subjects(i).epochName = fc_getc_v3(res,'epochName','');
+    fcBundle.subjects(i).timeIdx = fc_get_v3(res,'timeIdx',[]);
+    fcBundle.subjects(i).labels = double(fc_get_v3(res,'labels',[]));
+    fcBundle.subjects(i).labels = fcBundle.subjects(i).labels(:);
+    fcBundle.subjects(i).names = fc_cellstr_v3(fc_get_v3(res,'names',{}));
+    fcBundle.subjects(i).counts = double(fc_get_v3(res,'counts',[]));
+    fcBundle.subjects(i).meanTS = double(fc_get_v3(res,'meanTS',[]));
+    fcBundle.subjects(i).R = R;
+    fcBundle.subjects(i).M = R;
+    fcBundle.subjects(i).Z = Z;
+    fcBundle.subjects(i).statMatrix = Z;
+    fcBundle.subjects(i).displayMatrix = R;
+    fcBundle.subjects(i).displayZ = Z;
+    fcBundle.subjects(i).displayStatMatrix = Z;
+    fcBundle.subjects(i).displayLabels = fcBundle.subjects(i).labels;
+    fcBundle.subjects(i).displayNames = fcBundle.subjects(i).names;
+    fcBundle.subjects(i).heatmap = struct('R',R,'Z',Z,'labels',fcBundle.subjects(i).labels,'names',{fcBundle.subjects(i).names});
+    fcBundle.subjects(i).sliceResults = fc_slice_results_v3(s,i,res);
+end
+end
+
+function fcBundle = fc_enrich_group_bundle_v3(fcBundle,s)
+fcBundle.settings_v3 = fc_settings_v3(s);
+
+if ~isfield(fcBundle,'subjects')
+    fcBundle.subjects = struct([]);
+end
+
+nSub = numel(fcBundle.subjects);
+for i = 1:nSub
+    try
+        fcBundle.subjects(i).seedResults = fc_collect_seed_results_v3(s,i);
+    catch
+        fcBundle.subjects(i).seedResults = struct([]);
+    end
+
+    try
+        fcBundle.subjects(i).allEpochs = fc_collect_all_epochs_v3(s,i);
+    catch
+        fcBundle.subjects(i).allEpochs = struct([]);
+    end
+
+    try
+        if isfield(fcBundle.subjects(i),'R') && ~isempty(fcBundle.subjects(i).R)
+            if ~isfield(fcBundle.subjects(i),'Z') || isempty(fcBundle.subjects(i).Z)
+                fcBundle.subjects(i).Z = fc_r2z_v3(fcBundle.subjects(i).R);
+            end
+            fcBundle.subjects(i).heatmapInfo = struct('R',fcBundle.subjects(i).R,'Z',fcBundle.subjects(i).Z, ...
+                'labels',fcBundle.subjects(i).labels,'names',{fcBundle.subjects(i).names});
+            fcBundle.subjects(i).timecourseInfo = struct('meanTS',fcBundle.subjects(i).meanTS, ...
+                'timeIdx',fcBundle.subjects(i).timeIdx,'TR',fcBundle.subjects(i).TR);
+        end
+    catch
+    end
+
+    try
+        if (~isfield(fcBundle.subjects(i),'sliceResults') || isempty(fcBundle.subjects(i).sliceResults))
+            res = fc_current_roi_result_v3(s,i);
+            if ~isempty(res)
+                fcBundle.subjects(i).sliceResults = fc_slice_results_v3(s,i,res);
+            end
+        end
+    catch
+    end
+end
+end
+
+function settings = fc_settings_v3(s)
+settings = struct();
+settings.currentSubject = fc_getn_v3(s,'currentSubject',NaN);
+settings.currentEpoch = fc_getn_v3(s,'currentEpoch',NaN);
+settings.analysisStartSec = fc_getn_v3(s,'analysisStartSec',NaN);
+settings.analysisEndSec = fc_getn_v3(s,'analysisEndSec',NaN);
+settings.roiOrder = fc_getc_v3(s,'roiOrder','');
+settings.roiHemiMode = fc_getc_v3(s,'roiHemiMode','');
+settings.compareROI = fc_getn_v3(s,'compareROI',NaN);
+settings.seedX = fc_getn_v3(s,'seedX',NaN);
+settings.seedY = fc_getn_v3(s,'seedY',NaN);
+settings.seedZ = fc_getn_v3(s,'slice',NaN);
+settings.seedBoxSize = fc_getn_v3(s,'seedBoxSize',NaN);
+settings.useSliceOnly = fc_get_v3(s,'useSliceOnly',false);
+settings.note = 'Use Fisher Z for group statistics; Pearson R is for display.';
+end
+
+function tmpl = fc_subject_template_v3()
+tmpl = struct('name','','group','','TR',NaN,'analysisDir','','hasROI',false, ...
+    'epochName','','timeIdx',[],'labels',[],'names',{{}},'counts',[],'meanTS',[], ...
+    'R',[],'M',[],'Z',[],'statMatrix',[],'statSpace','Fisher z', ...
+    'displayMatrix',[],'displayZ',[],'displayStatMatrix',[],'displaySpace','Pearson r', ...
+    'displayLabels',[],'displayNames',{{}},'heatmap',struct(),'heatmapInfo',struct(), ...
+    'timecourseInfo',struct(),'isStepMotor3D',false,'nSlices',[],'sliceResults',struct([]), ...
+    'seedResults',struct([]),'allEpochs',struct([]));
+end
+
+function res = fc_current_roi_result_v3(s,i)
+res = [];
+try
+    C = s.roiResults;
+    ep = round(fc_getn_v3(s,'currentEpoch',1));
+    if iscell(C) && i <= size(C,1) && ep <= size(C,2)
+        res = C{i,ep};
+    end
+    if isempty(res) && iscell(C) && i <= size(C,1)
+        for e = 1:size(C,2)
+            if ~isempty(C{i,e})
+                res = C{i,e};
+                return;
+            end
+        end
+    end
+catch
+    res = [];
+end
+end
+
+function sliceResults = fc_slice_results_v3(s,i,res)
+sliceResults = struct([]);
+try
+    sliceResults = deConfUSIon_FC_build_slice_bundle(s,i,res);
+catch
+    sliceResults = struct([]);
+end
+end
+
+function out = fc_collect_seed_results_v3(s,i)
+tmpl = fc_seed_template_v3();
+out = tmpl([]);
+items = {};
+try
+    C = s.seedResults;
+    if ~iscell(C) || i > size(C,1), return; end
+    for e = 1:size(C,2)
+        sr = C{i,e};
+        if isempty(sr) || ~isstruct(sr), continue; end
+        rec = tmpl;
+        rec.epochIndex = e;
+        rec.epochName = fc_getc_v3(sr,'epochName',sprintf('epoch_%d',e));
+        rec.timeIdx = fc_get_v3(sr,'timeIdx',[]);
+        rec.TR = fc_getn_v3(sr,'TR',NaN);
+        rec.seedTS = double(fc_get_v3(sr,'seedTS',[]));
+        rec.seedMask = fc_get_v3(sr,'seedMask',[]);
+        rec.seedInfo = fc_get_v3(sr,'seedInfo',struct());
+        rec.rMap = single(fc_get_v3(sr,'rMap',[]));
+        zMap = fc_get_v3(sr,'zMap',[]);
+        if isempty(zMap) && ~isempty(rec.rMap), zMap = fc_r2z_v3(rec.rMap); end
+        rec.zMap = single(zMap);
+        rec.raw = sr;
+        items{end+1} = rec; %#ok<AGROW>
+    end
+    if ~isempty(items), out = [items{:}]; end
+catch
+    out = tmpl([]);
+end
+end
+
+function tmpl = fc_seed_template_v3()
+tmpl = struct('epochIndex',NaN,'epochName','','timeIdx',[],'TR',NaN, ...
+    'seedTS',[],'seedMask',[],'seedInfo',struct(),'rMap',[],'zMap',[], ...
+    'raw',struct(),'description','Seed FC: rMap=Pearson r, zMap=Fisher z, seedTS=seed timecourse.');
+end
+
+function out = fc_collect_all_epochs_v3(s,i)
+tmpl = struct('epochIndex',NaN,'epochName','','roi',struct(),'heatmap',struct(),'seed',struct());
+out = tmpl([]);
+items = {};
+nEp = 0;
+try, if iscell(s.roiResults), nEp = max(nEp,size(s.roiResults,2)); end, catch, end
+try, if iscell(s.seedResults), nEp = max(nEp,size(s.seedResults,2)); end, catch, end
+
+for e = 1:nEp
+    E = tmpl;
+    E.epochIndex = e;
+    E.epochName = sprintf('epoch_%d',e);
+    try
+        rr = s.roiResults{i,e};
+        if ~isempty(rr) && isstruct(rr) && isfield(rr,'M') && ~isempty(rr.M)
+            R = double(rr.M);
+            Z = fc_r2z_v3(R);
+            labels = double(fc_get_v3(rr,'labels',[])); labels = labels(:);
+            names = fc_cellstr_v3(fc_get_v3(rr,'names',{}));
+            E.epochName = fc_getc_v3(rr,'epochName',E.epochName);
+            E.roi = struct('labels',labels,'names',{names},'counts',double(fc_get_v3(rr,'counts',[])), ...
+                'meanTS',double(fc_get_v3(rr,'meanTS',[])),'timeIdx',fc_get_v3(rr,'timeIdx',[]),'R',R,'Z',Z);
+            E.heatmap = struct('R',R,'Z',Z,'labels',labels,'names',{names});
+        end
+    catch
+    end
+    try
+        sr = s.seedResults{i,e};
+        if ~isempty(sr) && isstruct(sr)
+            S = fc_seed_template_v3();
+            S.epochIndex = e;
+            S.epochName = fc_getc_v3(sr,'epochName',E.epochName);
+            S.timeIdx = fc_get_v3(sr,'timeIdx',[]);
+            S.TR = fc_getn_v3(sr,'TR',NaN);
+            S.seedTS = double(fc_get_v3(sr,'seedTS',[]));
+            S.seedMask = fc_get_v3(sr,'seedMask',[]);
+            S.seedInfo = fc_get_v3(sr,'seedInfo',struct());
+            S.rMap = single(fc_get_v3(sr,'rMap',[]));
+            zMap = fc_get_v3(sr,'zMap',[]);
+            if isempty(zMap) && ~isempty(S.rMap), zMap = fc_r2z_v3(S.rMap); end
+            S.zMap = single(zMap);
+            S.raw = sr;
+            E.seed = S;
+        end
+    catch
+    end
+    items{end+1} = E; %#ok<AGROW>
+end
+if ~isempty(items), out = [items{:}]; end
+end
+
+function Z = fc_r2z_v3(R)
+Z = double(R);
+Z = max(-0.999999,min(0.999999,Z));
+Z = atanh(Z);
+if ismatrix(Z) && size(Z,1) == size(Z,2)
+    Z(1:size(Z,1)+1:end) = 0;
+end
+end
+
+function v = fc_get_v3(x,fieldName,defaultValue)
+v = defaultValue;
+try
+    if isstruct(x) && isfield(x,fieldName) && ~isempty(x.(fieldName))
+        v = x.(fieldName);
+    end
+catch
+    v = defaultValue;
+end
+end
+
+function v = fc_getn_v3(x,fieldName,defaultValue)
+v = defaultValue;
+try
+    tmp = fc_get_v3(x,fieldName,defaultValue);
+    if isnumeric(tmp) || islogical(tmp)
+        v = double(tmp);
+    end
+catch
+    v = defaultValue;
+end
+end
+
+function c = fc_getc_v3(x,fieldName,defaultValue)
+c = defaultValue;
+try
+    tmp = fc_get_v3(x,fieldName,defaultValue);
+    if ischar(tmp)
+        c = tmp;
+    elseif iscell(tmp) && ~isempty(tmp)
+        c = char(tmp{1});
+    elseif isnumeric(tmp)
+        c = num2str(tmp);
+    end
+catch
+    c = defaultValue;
+end
+end
+
+function c = fc_cellstr_v3(x)
+if isempty(x), c = {}; return; end
+try
+    if iscell(x)
+        c = x(:);
+    else
+        c = cellstr(x);
+        c = c(:);
+    end
+catch
+    c = {};
+end
+end
+
+function s = fc_safe_text_v3(s)
+s = regexprep(char(s),'[^A-Za-z0-9_\-]','_');
+if isempty(s), s = datestr(now,'yyyymmdd_HHMMSS'); end
+end
+% END_DECONFUSION_FC_EXPORT_GA_V3_STRUCTSAFE_20260616
+
+% BEGIN_DECONFUSION_FC_EXPORT_GA_AUTO_V4_20260616
+function outFile = fc_export_group_analysis_bundle_auto_v4(s)
+% Auto-save FC bundle for GroupAnalysis without folder dialog.
+
+outFile = '';
+if nargin < 1 || ~isstruct(s)
+    error('Expected FunctionalConnectivity GUI state struct.');
+end
+
+% Build rich but struct-safe bundle.
+fcBundle = fc_auto_make_bundle_v4(s);
+
+% Determine scan root and output folder.
+scanRoot = fc_auto_scanroot_v4(s);
+outDir = fullfile(scanRoot,'GroupAnalysis','FunctionalConnectivity');
+if exist(outDir,'dir') ~= 7
+    mkdir(outDir);
+end
+
+tag = fc_safe_text_auto_v4(fc_getc_auto_v4(s,'tag',datestr(now,'yyyymmdd_HHMMSS')));
+ts = datestr(now,'yyyymmdd_HHMMSS');
+fileName = ['FC_GroupBundle_' tag '_' ts '.mat'];
+outFile = fullfile(outDir,fileName);
+
+fcBundle.exportFile = outFile;
+fcBundle.exportFolder = outDir;
+fcBundle.scanRoot = scanRoot;
+fcBundle.savedBy = 'fc_export_group_analysis_bundle_auto_v4';
+fcBundle.savedAt = datestr(now,31);
+
+save(outFile,'fcBundle','-v7.3');
+
+msg = sprintf('"%s" got saved at:\n\n%s',fileName,outDir);
+try
+    fc_small_saved_popup_auto_v4(msg);
+catch
+    fprintf('\n%s\n',msg);
+end
+
+fprintf('\n[deConfUSIon FC] GroupAnalysis export saved:\n%s\n',outFile);
+end
+
+function scanRoot = fc_auto_scanroot_v4(s)
+% Best guess of the respective scan folder.
+scanRoot = fc_getc_auto_v4(s,'saveRoot','');
+
+if isempty(scanRoot) || exist(scanRoot,'dir') ~= 7
+    try
+        cs = round(fc_getn_auto_v4(s,'currentSubject',1));
+        if isfield(s,'subjects') && cs >= 1 && cs <= numel(s.subjects)
+            scanRoot = fc_getc_auto_v4(s.subjects(cs),'saveRoot','');
+        end
+    catch
+    end
+end
+
+if isempty(scanRoot) || exist(scanRoot,'dir') ~= 7
+    try
+        cs = round(fc_getn_auto_v4(s,'currentSubject',1));
+        if isfield(s,'subjects') && cs >= 1 && cs <= numel(s.subjects)
+            scanRoot = fc_getc_auto_v4(s.subjects(cs),'analysisDir','');
+        end
+    catch
+    end
+end
+
+if isempty(scanRoot) || exist(scanRoot,'dir') ~= 7
+    scanRoot = fc_getc_auto_v4(s,'qcDir','');
+end
+
+if isempty(scanRoot) || exist(scanRoot,'dir') ~= 7
+    scanRoot = pwd;
+end
+
+% If candidate points to a known output subfolder, move one level up to scan root.
+[parent,last] = fileparts(scanRoot);
+lastLow = lower(strtrim(last));
+if strcmp(lastLow,'connectivity') || strcmp(lastLow,'functionalconnectivity') || ...
+        strcmp(lastLow,'functional connectivity') || strcmp(lastLow,'qc') || ...
+        strcmp(lastLow,'groupanalysis') || strcmp(lastLow,'group analysis')
+    scanRoot = parent;
+end
+end
+
+function fcBundle = fc_auto_make_bundle_v4(s)
+fcBundle = struct();
+fcBundle.version = 'FC_GroupBundle_auto_v4_20260616';
+fcBundle.created = datestr(now,31);
+fcBundle.note = ['Auto-saved FC GroupAnalysis bundle. R = Pearson correlation for display. ' ...
+                 'Z = Fisher z for group statistics. Includes ROI matrices, heatmap info, ' ...
+                 'ROI mean timecourses, seed results, compare ROI information, and sliceResults when available.'];
+fcBundle.settings = fc_settings_auto_v4(s);
+
+nSub = 0;
+try, nSub = numel(s.subjects); catch, nSub = 0; end
+tmpl = fc_subject_template_auto_v4();
+fcBundle.subjects = repmat(tmpl,1,max(0,nSub));
+
+for i = 1:nSub
+    try, subj = s.subjects(i); catch, subj = struct(); end
+
+    rec = tmpl;
+    rec.name = fc_getc_auto_v4(subj,'name',sprintf('Subject_%02d',i));
+    rec.group = fc_getc_auto_v4(subj,'group','');
+    rec.TR = fc_getn_auto_v4(subj,'TR',NaN);
+    rec.analysisDir = fc_getc_auto_v4(subj,'analysisDir','');
+    rec.isStepMotor3D = fc_getn_auto_v4(s,'Z',1) > 1;
+    rec.nSlices = fc_getn_auto_v4(s,'Z',1);
+
+    res = fc_current_roi_auto_v4(s,i);
+    if ~isempty(res) && isstruct(res) && isfield(res,'M') && ~isempty(res.M)
+        R = double(res.M);
+        Z = fc_r2z_auto_v4(R);
+        rec.hasROI = true;
+        rec.epochName = fc_getc_auto_v4(res,'epochName','');
+        rec.labels = double(fc_get_auto_v4(res,'labels',[])); rec.labels = rec.labels(:);
+        rec.names = fc_cellstr_auto_v4(fc_get_auto_v4(res,'names',{}));
+        rec.counts = double(fc_get_auto_v4(res,'counts',[])); rec.counts = rec.counts(:);
+        rec.meanTS = double(fc_get_auto_v4(res,'meanTS',[]));
+        rec.timeIdx = fc_get_auto_v4(res,'timeIdx',[]);
+        rec.R = R;
+        rec.M = R;
+        rec.Z = Z;
+        rec.statMatrix = Z;
+        rec.displayMatrix = R;
+        rec.displayZ = Z;
+        rec.displayStatMatrix = Z;
+        rec.displayLabels = rec.labels;
+        rec.displayNames = rec.names;
+        rec.heatmapInfo = struct('R',R,'Z',Z,'labels',rec.labels,'names',{rec.names}, ...
+            'description','Region-by-region FC heatmap. R=Pearson r, Z=Fisher z.');
+        rec.timecourseInfo = struct('meanTS',rec.meanTS,'timeIdx',rec.timeIdx,'TR',rec.TR, ...
+            'labels',rec.labels,'names',{rec.names});
+        rec.compareROI = fc_compare_roi_auto_v4(s,subj,rec.labels,rec.names,R,Z,rec.meanTS,rec.timeIdx,rec.TR);
+        rec.sliceResults = fc_slice_results_auto_v4(s,i,res);
+    end
+
+    rec.seedResults = fc_seed_results_auto_v4(s,i);
+    rec.allEpochs = fc_all_epochs_auto_v4(s,i);
+
+    fcBundle.subjects(i) = rec;
+end
+end
+
+function settings = fc_settings_auto_v4(s)
+settings = struct();
+settings.currentSubject = fc_getn_auto_v4(s,'currentSubject',NaN);
+settings.currentEpoch = fc_getn_auto_v4(s,'currentEpoch',NaN);
+settings.analysisStartSec = fc_getn_auto_v4(s,'analysisStartSec',NaN);
+settings.analysisEndSec = fc_getn_auto_v4(s,'analysisEndSec',NaN);
+settings.roiOrder = fc_getc_auto_v4(s,'roiOrder','');
+settings.roiHemiMode = fc_getc_auto_v4(s,'roiHemiMode','');
+settings.compareROI = fc_getn_auto_v4(s,'compareROI',NaN);
+settings.seedX = fc_getn_auto_v4(s,'seedX',NaN);
+settings.seedY = fc_getn_auto_v4(s,'seedY',NaN);
+settings.seedZ = fc_getn_auto_v4(s,'slice',NaN);
+settings.seedBoxSize = fc_getn_auto_v4(s,'seedBoxSize',NaN);
+settings.useSliceOnly = fc_get_auto_v4(s,'useSliceOnly',false);
+settings.note = 'Use Fisher Z for group statistics; use Pearson R for display.';
+end
+
+function tmpl = fc_subject_template_auto_v4()
+tmpl = struct('name','','group','','TR',NaN,'analysisDir','','hasROI',false, ...
+    'epochName','','labels',[],'names',{{}},'counts',[],'meanTS',[],'timeIdx',[], ...
+    'R',[],'M',[],'Z',[],'statMatrix',[],'statSpace','Fisher z', ...
+    'displayMatrix',[],'displayZ',[],'displayStatMatrix',[],'displaySpace','Pearson r', ...
+    'displayLabels',[],'displayNames',{{}},'heatmapInfo',struct(),'timecourseInfo',struct(), ...
+    'compareROI',struct(),'isStepMotor3D',false,'nSlices',[],'sliceResults',struct([]), ...
+    'seedResults',struct([]),'allEpochs',struct([]));
+end
+
+function res = fc_current_roi_auto_v4(s,i)
+res = [];
+try
+    C = s.roiResults;
+    ep = round(fc_getn_auto_v4(s,'currentEpoch',1));
+    if iscell(C) && i <= size(C,1) && ep <= size(C,2)
+        res = C{i,ep};
+    end
+    if isempty(res) && iscell(C) && i <= size(C,1)
+        for e = 1:size(C,2)
+            if ~isempty(C{i,e})
+                res = C{i,e};
+                return;
+            end
+        end
+    end
+catch
+    res = [];
+end
+end
+
+function sliceResults = fc_slice_results_auto_v4(s,i,res)
+sliceResults = struct([]);
+try
+    sliceResults = deConfUSIon_FC_build_slice_bundle(s,i,res);
+catch
+    sliceResults = struct([]);
+end
+end
+
+function seedOut = fc_seed_results_auto_v4(s,i)
+tmpl = fc_seed_template_auto_v4();
+seedOut = repmat(tmpl,1,0);
+try
+    C = s.seedResults;
+    if ~iscell(C) || i > size(C,1), return; end
+    n = 0;
+    for e = 1:size(C,2)
+        sr = C{i,e};
+        if isempty(sr) || ~isstruct(sr), continue; end
+        n = n + 1;
+        seedOut(n) = tmpl;
+        seedOut(n).epochIndex = e;
+        seedOut(n).epochName = fc_getc_auto_v4(sr,'epochName',sprintf('epoch_%d',e));
+        seedOut(n).timeIdx = fc_get_auto_v4(sr,'timeIdx',[]);
+        seedOut(n).TR = fc_getn_auto_v4(sr,'TR',NaN);
+        seedOut(n).seedTS = double(fc_get_auto_v4(sr,'seedTS',[]));
+        seedOut(n).seedMask = fc_get_auto_v4(sr,'seedMask',[]);
+        seedOut(n).seedInfo = fc_get_auto_v4(sr,'seedInfo',struct());
+        seedOut(n).rMap = single(fc_get_auto_v4(sr,'rMap',[]));
+        zMap = fc_get_auto_v4(sr,'zMap',[]);
+        if isempty(zMap) && ~isempty(seedOut(n).rMap), zMap = fc_r2z_auto_v4(seedOut(n).rMap); end
+        seedOut(n).zMap = single(zMap);
+    end
+catch
+    seedOut = repmat(tmpl,1,0);
+end
+end
+
+function tmpl = fc_seed_template_auto_v4()
+tmpl = struct('epochIndex',NaN,'epochName','','timeIdx',[],'TR',NaN, ...
+    'seedTS',[],'seedMask',[],'seedInfo',struct(),'rMap',[],'zMap',[], ...
+    'description','Seed FC: rMap=Pearson r, zMap=Fisher z, seedTS=seed timecourse.');
+end
+
+function epochs = fc_all_epochs_auto_v4(s,i)
+tmpl = struct('epochIndex',NaN,'epochName','','roi',struct(),'heatmap',struct(),'seed',struct());
+epochs = repmat(tmpl,1,0);
+nEp = 0;
+try, if iscell(s.roiResults), nEp = max(nEp,size(s.roiResults,2)); end, catch, end
+try, if iscell(s.seedResults), nEp = max(nEp,size(s.seedResults,2)); end, catch, end
+
+for e = 1:nEp
+    E = tmpl;
+    E.epochIndex = e;
+    E.epochName = sprintf('epoch_%d',e);
+    try
+        rr = s.roiResults{i,e};
+        if ~isempty(rr) && isstruct(rr) && isfield(rr,'M') && ~isempty(rr.M)
+            R = double(rr.M);
+            Z = fc_r2z_auto_v4(R);
+            labels = double(fc_get_auto_v4(rr,'labels',[])); labels = labels(:);
+            names = fc_cellstr_auto_v4(fc_get_auto_v4(rr,'names',{}));
+            E.epochName = fc_getc_auto_v4(rr,'epochName',E.epochName);
+            E.roi = struct('labels',labels,'names',{names},'counts',double(fc_get_auto_v4(rr,'counts',[])), ...
+                'meanTS',double(fc_get_auto_v4(rr,'meanTS',[])),'timeIdx',fc_get_auto_v4(rr,'timeIdx',[]),'R',R,'Z',Z);
+            E.heatmap = struct('R',R,'Z',Z,'labels',labels,'names',{names});
+        end
+    catch
+    end
+    try
+        sr = s.seedResults{i,e};
+        if ~isempty(sr) && isstruct(sr)
+            S = fc_seed_template_auto_v4();
+            S.epochIndex = e;
+            S.epochName = fc_getc_auto_v4(sr,'epochName',E.epochName);
+            S.timeIdx = fc_get_auto_v4(sr,'timeIdx',[]);
+            S.TR = fc_getn_auto_v4(sr,'TR',NaN);
+            S.seedTS = double(fc_get_auto_v4(sr,'seedTS',[]));
+            S.seedMask = fc_get_auto_v4(sr,'seedMask',[]);
+            S.seedInfo = fc_get_auto_v4(sr,'seedInfo',struct());
+            S.rMap = single(fc_get_auto_v4(sr,'rMap',[]));
+            zMap = fc_get_auto_v4(sr,'zMap',[]);
+            if isempty(zMap) && ~isempty(S.rMap), zMap = fc_r2z_auto_v4(S.rMap); end
+            S.zMap = single(zMap);
+            E.seed = S;
+        end
+    catch
+    end
+    epochs(end+1) = E; %#ok<AGROW>
+end
+end
+
+function C = fc_compare_roi_auto_v4(s,subj,labels,names,R,Z,meanTS,timeIdx,TR)
+C = struct();
+try
+    if isempty(labels) || isempty(R), return; end
+    idx = round(fc_getn_auto_v4(s,'compareROI',1));
+    idx = max(1,min(idx,numel(labels)));
+    C.selectedIndex = idx;
+    C.selectedLabel = labels(idx);
+    if numel(names) >= idx, C.selectedName = names{idx}; else, C.selectedName = sprintf('ROI_%g',labels(idx)); end
+    C.labels = labels(:);
+    C.names = names(:);
+    C.pearsonR = R(idx,:).';
+    C.fisherZ = Z(idx,:).';
+    C.meanTS = meanTS;
+    C.timeIdx = timeIdx;
+    if ~isempty(timeIdx) && isfinite(TR), C.timeSec = (double(timeIdx(:))-1).*double(TR); else, C.timeSec = []; end
+    atlas = fc_get_auto_v4(subj,'roiAtlas',[]);
+    if ~isempty(atlas)
+        mapR = zeros(size(atlas),'single');
+        mapZ = zeros(size(atlas),'single');
+        A = round(double(atlas));
+        for k = 1:numel(labels)
+            m = A == round(labels(k));
+            if ~any(m(:)), m = abs(A) == abs(round(labels(k))); end
+            mapR(m) = single(R(idx,k));
+            mapZ(m) = single(Z(idx,k));
+        end
+        C.overlayMapR = mapR;
+        C.overlayMapZ = mapZ;
+    end
+catch
+    C = struct();
+end
+end
+
+function Z = fc_r2z_auto_v4(R)
+Z = double(R);
+Z = max(-0.999999,min(0.999999,Z));
+Z = atanh(Z);
+if ismatrix(Z) && size(Z,1) == size(Z,2)
+    Z(1:size(Z,1)+1:end) = 0;
+end
+end
+
+function v = fc_get_auto_v4(x,fieldName,defaultValue)
+v = defaultValue;
+try
+    if isstruct(x) && isfield(x,fieldName) && ~isempty(x.(fieldName))
+        v = x.(fieldName);
+    end
+catch
+    v = defaultValue;
+end
+end
+
+function v = fc_getn_auto_v4(x,fieldName,defaultValue)
+v = defaultValue;
+try
+    tmp = fc_get_auto_v4(x,fieldName,defaultValue);
+    if isnumeric(tmp) || islogical(tmp), v = double(tmp); end
+catch
+    v = defaultValue;
+end
+end
+
+function c = fc_getc_auto_v4(x,fieldName,defaultValue)
+c = defaultValue;
+try
+    tmp = fc_get_auto_v4(x,fieldName,defaultValue);
+    if ischar(tmp)
+        c = tmp;
+    elseif iscell(tmp) && ~isempty(tmp)
+        c = char(tmp{1});
+    elseif isnumeric(tmp)
+        c = num2str(tmp);
+    end
+catch
+    c = defaultValue;
+end
+end
+
+function c = fc_cellstr_auto_v4(x)
+if isempty(x), c = {}; return; end
+try
+    if iscell(x)
+        c = x(:);
+    else
+        c = cellstr(x);
+        c = c(:);
+    end
+catch
+    c = {};
+end
+end
+
+function s = fc_safe_text_auto_v4(s)
+s = regexprep(char(s),'[^A-Za-z0-9_\-]','_');
+if isempty(s), s = datestr(now,'yyyymmdd_HHMMSS'); end
+end
+% END_DECONFUSION_FC_EXPORT_GA_AUTO_V4_20260616
+
+% BEGIN_DECONFUSION_FC_SMALL_POPUP_AUTO_V4_20260616
+function fc_small_saved_popup_auto_v4(msg)
+% Small plain notification popup: no blue icon, no OK button.
+try
+    scr = get(0,'ScreenSize');
+    w = 520; h = 120;
+    x = scr(3) - w - 60;
+    y = scr(4) - h - 120;
+    fig = figure('Name','FC export saved','NumberTitle','off', ...
+        'MenuBar','none','ToolBar','none','Resize','off', ...
+        'Color',[0.94 0.94 0.94],'Position',[x y w h], ...
+        'WindowStyle','normal','Visible','on');
+    uicontrol('Parent',fig,'Style','text','String',msg, ...
+        'Units','normalized','Position',[0.04 0.12 0.92 0.76], ...
+        'HorizontalAlignment','left','FontSize',10,'BackgroundColor',[0.94 0.94 0.94]);
+    drawnow;
+    t = timer('StartDelay',4,'TimerFcn',@(~,~)localClosePopup(fig));
+    start(t);
+catch
+    fprintf('\n%s\n',msg);
+end
+end
+
+function localClosePopup(fig)
+try
+    if ishghandle(fig), close(fig); end
+catch
+end
+end
+% END_DECONFUSION_FC_SMALL_POPUP_AUTO_V4_20260616

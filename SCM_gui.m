@@ -112,6 +112,9 @@ state.isColorUnderlay = false;
 state.regionLabelUnderlay = [];
 state.regionColorLUT = [];
 state.regionInfo = struct();
+state.atlasUnderlays = struct();
+state.atlasUnderlayChoice = 'normal';
+state.lastAtlasUnderlayBuildMessage = '';
 state.lastTcExportLabel = 'Target';
 state.singleScmExportBusy = false;
 state.lastSingleScmExportStampSec = -inf;
@@ -1312,6 +1315,15 @@ T = askAndApply2DWarpDirection(T, 'Single atlas warp');
 
 PSC = warpFunctionalSeriesToAtlas(origPSC, T);
 
+        state.atlasUnderlayChoice = askAtlasUnderlayChoiceLocal('single');
+        [state.atlasUnderlays, bgAuto, bgMsg, metaAuto] = buildAtlasUnderlayLibrarySingleLocal(tfFile, T, PSC, state.atlasUnderlayChoice);
+        if ~isempty(bgAuto)
+            bg = bgAuto;
+            applyUnderlayMeta(metaAuto, bg);
+            applyRecommendedUnderlayDisplayForModeLocal(state.atlasUnderlayChoice);
+            state.lastAtlasUnderlayBuildMessage = bgMsg;
+        end
+
         passedMask = [];
         passedMaskIsInclude = true;
 
@@ -1425,31 +1437,19 @@ regList = askAndApply2DWarpDirectionToRegList(regList, 'Step Motor atlas warp');
         state.stepMotorAtlasAtlasIdx = report.atlasIdx;
 
        % ---------------------------------------------------------
-% Build FIXED atlas/histology underlay.
-%
-% Do NOT open another file selector here.
-% The user already selected the Step Motor Registration2D folder.
-% ---------------------------------------------------------
-[bgNew, bgMsg] = buildStepMotorFixedAtlasUnderlayOnly(report.usedRegList, report.outSize, bg);
-
-% If no fixed atlas/histology image was found inside the Reg2D MAT files,
-% try to keep the already-loaded underlay if it matches atlas output size.
-if isempty(bgNew)
-    [bgNew, bgMsg] = keepAlreadyLoadedAtlasUnderlayIfPossible(bg, report.outSize, report.nUsed);
-end
-
-% Last fallback:
-% Do NOT use a blank black canvas.
-% If fixed histology is not saved in the Reg2D files, use the warped
-% functional contrast as a temporary diagnostic underlay.
+% Build ALL atlas underlay choices for Step Motor atlas-space SCM.
+% The displayed underlay is user-selected, but all modes are saved later.
+state.atlasUnderlayChoice = askAtlasUnderlayChoiceLocal('step-motor');
+[state.atlasUnderlays, bgNew, bgMsg, metaNew] = buildAtlasUnderlayLibraryStepMotorLocal(report.usedRegList, report.outSize, PSCnew, bg, state.atlasUnderlayChoice);
 if isempty(bgNew)
     bgNew = makeFunctionalContrastFallbackUnderlay(PSCnew);
-    bgMsg = 'functional contrast fallback; fixed histology was not saved in Reg2D files';
+    bgMsg = 'functional contrast fallback; no atlas underlay was readable';
+    metaNew = defaultUnderlayMeta();
 end
-
 bg = bgNew;
-
-forceStepMotorAtlasGrayUnderlay();
+applyUnderlayMeta(metaNew, bg);
+applyRecommendedUnderlayDisplayForModeLocal(state.atlasUnderlayChoice);
+state.lastAtlasUnderlayBuildMessage = bgMsg;
         try
             set(btnWarpAtlas, 'String', 'STEP MOTOR ATLAS-WARPED');
         catch
@@ -2336,7 +2336,7 @@ function exportForGroupAnalysisCB(~,~)
         sigma = str2double(getStr(ebSigma)); if ~isfinite(sigma), sigma = 1; end
         thr = str2double(getStr(ebThr)); if ~isfinite(thr), thr = 0; end
         stamp = datestr(now,'yyyymmdd_HHMMSS');
-        outFile = fullfile(Pexp.bundleDir, sprintf('SCM_GroupExport_%s_%s_%s_%s.mat', Pexp.animalID, Pexp.session, Pexp.scanID, stamp));
+        outFile = makeShortGroupBundleOutFileLocal(Pexp, stamp);
         G = struct();
         G.kind = 'SCM_GROUP_EXPORT'; G.version = '1.0'; G.created = datestr(now,'yyyy-mm-dd HH:MM:SS');
         G.fileLabel = fileLabel; G.loadedFile = safeParFieldLocal('loadedFile'); G.loadedPath = safeParFieldLocal('loadedPath'); G.exportPath = safeParFieldLocal('exportPath');
@@ -2358,12 +2358,19 @@ end
 G.display.exportStyle = 'SCM_gui_6tile_black_editable_ppt';
         G.TR = TR; G.tsec = tsec; G.tmin = tmin; G.nY = nY; G.nX = nX; G.nZ = nZ; G.nT = nT;
         G.pscAtlas4D = PSC; G.scmMapSignedAtlas = state.lastSignedMap; G.scmMapDisplayAtlas = get(hOV,'CData'); G.alphaAtlas = get(hOV,'AlphaData');
-        G.underlayAtlas = bg; G.underlayInfo = struct();
+        ensureAtlasUnderlayLibraryForExportLocal();
+        G.underlayAtlas = bg;
+        G.underlays = state.atlasUnderlays;
+        G.underlaySelectedMode = state.atlasUnderlayChoice;
+        G.underlayBuildMessage = state.lastAtlasUnderlayBuildMessage;
+        G.underlayInfo = struct();
+        G.underlayInfo.availableModes = fieldnames(state.atlasUnderlays);
+        G.underlayInfo.selectedMode = state.atlasUnderlayChoice;
         G.underlayInfo.isColorUnderlay = logical(state.isColorUnderlay);
         G.underlayInfo.regionLabelUnderlay = state.regionLabelUnderlay;
         G.underlayInfo.regionInfo = state.regionInfo;
         G.mask2DCurrentSlice = mask2D; G.maskAtlas = passedMask; G.maskIsInclude = passedMaskIsInclude; G.injectionSide = '?';
-        save(outFile, 'G', '-v7.3');
+        [outFile, saveReport] = safeSaveScmGroupBundleLocal(outFile, G);
         set(info1,'String',['Group bundle saved: ' shortenPath(outFile,85)], 'TooltipString', outFile);
         msgbox(sprintf('Saved GroupAnalysis bundle:\n%s', outFile), 'SCM group export');
     catch ME
@@ -2371,6 +2378,796 @@ G.display.exportStyle = 'SCM_gui_6tile_black_editable_ppt';
     end
 end
 
+
+%% PATCH_SCM_ATLAS_UNDERLAY_LIBRARY_V1
+function modeName = askAtlasUnderlayChoiceLocal(contextName)
+    modeName = 'normal';
+    try
+        labels = { ...
+            'Normal / functional underlay (recommended)', ...
+            'Histology atlas', ...
+            'Vascular atlas', ...
+            'Regions atlas'};
+        vals = {'normal','histology','vascular','regions'};
+        defIdx = 1;
+        try
+            if isfield(state,'atlasUnderlayChoice') && ~isempty(state.atlasUnderlayChoice)
+                hit = find(strcmpi(vals, char(state.atlasUnderlayChoice)), 1);
+                if ~isempty(hit), defIdx = hit; end
+            end
+        catch
+            defIdx = 1;
+        end
+        prompt = {'Choose the atlas underlay to display after warping:', '', ...
+            'All available underlays will also be saved into the SCM GroupAnalysis bundle.'};
+        if nargin >= 1 && ~isempty(contextName)
+            prompt{1} = sprintf('Choose the atlas underlay to display after %s atlas warp:', char(contextName));
+        end
+        [idx,tf] = listdlg('PromptString',prompt, 'SelectionMode','single', ...
+            'ListString',labels, 'InitialValue',defIdx, 'ListSize',[620 245], 'Name','SCM atlas underlay');
+        if tf && ~isempty(idx), modeName = vals{idx(1)}; end
+    catch
+        modeName = 'normal';
+    end
+end
+
+function [lib, bgOut, msgOut, metaOut] = buildAtlasUnderlayLibrarySingleLocal(tfFile, T, PSCatlas, selectedMode)
+    lib = emptyAtlasUnderlayLibraryLocal();
+    metaNormal = defaultUnderlayMeta();
+    Udefault = makeFunctionalContrastFallbackUnderlay(PSCatlas);
+    lib.normal = packAtlasUnderlayEntryLocal('normal', Udefault, 'normal functional atlas-space underlay', metaNormal);
+
+    outSize2 = currentOutputSizeFromDataLocal(PSCatlas);
+    modes = {'histology','vascular','regions'};
+    for ii = 1:numel(modes)
+        modeName = modes{ii};
+        [U,msg,meta] = readAtlasUnderlayModeFromRegFileLocal(tfFile, T, outSize2, modeName);
+        if ~isempty(U)
+            lib.(modeName) = packAtlasUnderlayEntryLocal(modeName, U, msg, meta);
+        else
+            lib.(modeName) = packAtlasUnderlayEntryLocal(modeName, [], ['not found: ' modeName], metaForAtlasModeLocal(modeName));
+        end
+    end
+
+    [bgOut, metaOut, msgOut, selectedMode] = selectUnderlayFromLibraryLocal(lib, selectedMode);
+    state.atlasUnderlayChoice = selectedMode;
+end
+
+function [lib, bgOut, msgOut, metaOut] = buildAtlasUnderlayLibraryStepMotorLocal(usedRegList, outSize2, PSCatlas, currentUnderlay, selectedMode)
+    lib = emptyAtlasUnderlayLibraryLocal();
+
+    metaNormal = defaultUnderlayMeta();
+    Unormal = [];
+    try
+        if underlayMatchesTargetDims(currentUnderlay, round(outSize2(1)), round(outSize2(2)), getAtlasStackDepthLocal(PSCatlas))
+            Unormal = double(currentUnderlay);
+        end
+    catch
+        Unormal = [];
+    end
+    if isempty(Unormal)
+        Unormal = makeFunctionalContrastFallbackUnderlay(PSCatlas);
+    end
+    lib.normal = packAtlasUnderlayEntryLocal('normal', Unormal, 'normal functional atlas-space underlay', metaNormal);
+
+    modes = {'histology','vascular','regions'};
+    for ii = 1:numel(modes)
+        modeName = modes{ii};
+        [U,msg,meta] = buildStepMotorAtlasUnderlayByModeLocal(usedRegList, outSize2, modeName);
+        if ~isempty(U)
+            lib.(modeName) = packAtlasUnderlayEntryLocal(modeName, U, msg, meta);
+        else
+            lib.(modeName) = packAtlasUnderlayEntryLocal(modeName, [], ['not found: ' modeName], metaForAtlasModeLocal(modeName));
+        end
+    end
+
+    [bgOut, metaOut, msgOut, selectedMode] = selectUnderlayFromLibraryLocal(lib, selectedMode);
+    state.atlasUnderlayChoice = selectedMode;
+end
+
+function [Uatlas, msg, meta] = buildStepMotorAtlasUnderlayByModeLocal(usedRegList, outSize2, modeName)
+    Uatlas = [];
+    msg = ['not found: ' modeName];
+    meta = metaForAtlasModeLocal(modeName);
+
+    if isempty(usedRegList) || isempty(outSize2) || numel(outSize2) < 2
+        return;
+    end
+
+    yy = round(double(outSize2(1)));
+    xx = round(double(outSize2(2)));
+    nUse = numel(usedRegList);
+    if yy < 1 || xx < 1 || nUse < 1, return; end
+
+    Utmp = zeros(yy, xx, nUse, 'single');
+    got = false(1,nUse);
+
+    for rr = 1:nUse
+        try
+            T = usedRegList(rr).T;
+            [Uplane,~,metaPlane] = readAtlasUnderlayModeFromRegFileLocal(usedRegList(rr).file, T, [yy xx], modeName);
+            if isempty(Uplane), continue; end
+            Uplane = fitPlaneToSizeLocal(Uplane, yy, xx);
+            Uplane(~isfinite(Uplane)) = 0;
+            if hasUsableUnderlaySignal(Uplane) || strcmpi(modeName,'regions')
+                Utmp(:,:,rr) = single(Uplane);
+                got(rr) = true;
+                meta = metaPlane;
+            end
+        catch
+        end
+    end
+
+    if ~any(got)
+        return;
+    end
+
+    Utmp = fillMissingUnderlayPlanesLocal(Utmp, got);
+    Uatlas = double(Utmp);
+    if all(got)
+        msg = sprintf('used %s atlas underlays from all %d Registration2D files', modeName, nUse);
+    else
+        msg = sprintf('used %s atlas underlays from %d/%d Registration2D files; missing planes were filled', modeName, nnz(got), nUse);
+    end
+end
+
+function [U, msg, meta] = readAtlasUnderlayModeFromRegFileLocal(matFile, T, outSize2, modeName)
+    U = [];
+    msg = ['not found: ' modeName];
+    meta = metaForAtlasModeLocal(modeName);
+
+    if isempty(matFile) || exist(matFile,'file') ~= 2
+        return;
+    end
+
+    try
+        S = load(matFile);
+    catch
+        return;
+    end
+
+    [U,msg] = extractModeUnderlayFromStructLocal(S, T, outSize2, modeName, matFile);
+    if ~isempty(U), return; end
+
+    extFile = findExternalAtlasUnderlayFileLocal(matFile, modeName, T);
+    if ~isempty(extFile)
+        try
+            S2 = load(extFile);
+            [U,msg] = extractModeUnderlayFromStructLocal(S2, T, outSize2, modeName, extFile);
+        catch
+            U = [];
+        end
+    end
+end
+
+function [U, msg] = extractModeUnderlayFromStructLocal(S, T, outSize2, modeName, sourceLabel)
+    U = [];
+    msg = ['not found: ' modeName];
+
+    fields = getAtlasModeFieldsLocal(modeName, T);
+    sources = {S};
+    wrappers = {'Reg2D','Transf','RegOut','Registration2D'};
+    for ww = 1:numel(wrappers)
+        if isfield(S,wrappers{ww}) && isstruct(S.(wrappers{ww}))
+            sources{end+1} = S.(wrappers{ww}); %#ok<AGROW>
+        end
+    end
+
+    for ss = 1:numel(sources)
+        R = sources{ss};
+        for ff = 1:numel(fields)
+            fn = fields{ff};
+            if isstruct(R) && isfield(R,fn)
+                U = acceptAtlasModeCandidateLocal(R.(fn), T, outSize2, modeName);
+                if ~isempty(U)
+                    msg = sprintf('used %s from %s field %s', modeName, shortenPath(sourceLabel,70), fn);
+                    return;
+                end
+            end
+        end
+    end
+end
+
+function fields = getAtlasModeFieldsLocal(modeName, T)
+    modeName = lower(char(modeName));
+    switch modeName
+        case 'histology'
+            fields = {'histologyImage','histologyUnderlay','histologyFixed','histology','atlasHistology','atlasUnderlayHistology'};
+        case 'vascular'
+            fields = {'vascularImage','vascularUnderlay','vascularFixed','vascular','atlasVascular','atlasUnderlayVascular'};
+        case 'regions'
+            fields = {'atlasRegionLabels2D','atlasRegionLabelsLR2D','regionsImage','regionsUnderlay','regionsFixed','regions','regionLabels','labelMap','atlasLabels','annotation'};
+        otherwise
+            fields = {};
+    end
+
+    try
+        if isfield(T,'atlasMode') && strcmpi(char(T.atlasMode), modeName)
+            fields = [fields {'fixedImage','fixedUnderlay','targetImage','targetUnderlay','atlasUnderlay','atlasUnderlayRGB'}];
+        end
+    catch
+    end
+
+    if strcmpi(modeName,'regions')
+        fields = [fields {'atlasUnderlay'}];
+    end
+end
+
+function U = acceptAtlasModeCandidateLocal(v, T, outSize2, modeName)
+    U = [];
+    if isempty(v), return; end
+
+    if isstruct(v)
+        subFields = getAtlasModeFieldsLocal(modeName, T);
+        subFields = [subFields {'Data','data','image','img','I','underlay'}];
+        for ii = 1:numel(subFields)
+            if isfield(v,subFields{ii})
+                U = acceptAtlasModeCandidateLocal(v.(subFields{ii}), T, outSize2, modeName);
+                if ~isempty(U), return; end
+            end
+        end
+        return;
+    end
+
+    if ~(isnumeric(v) || islogical(v)), return; end
+    A = squeeze(double(v));
+    if isempty(A) || ndims(A) < 2, return; end
+    if size(A,1) < 16 || size(A,2) < 16, return; end
+    if size(A,1) ~= outSize2(1) || size(A,2) ~= outSize2(2), return; end
+
+    if ndims(A) == 2
+        U = A;
+        return;
+    end
+
+    if ndims(A) == 3
+        if size(A,3) == 3
+            if strcmpi(modeName,'regions')
+                U = rgbToGrayLocal(A);
+            else
+                U = rgbToGrayLocal(A);
+            end
+            return;
+        end
+        zPick = round(size(A,3)/2);
+        try
+            if isfield(T,'atlasSliceIndex') && ~isempty(T.atlasSliceIndex) && isfinite(T.atlasSliceIndex)
+                zPick = round(T.atlasSliceIndex);
+            end
+        catch
+        end
+        zPick = max(1,min(size(A,3),zPick));
+        U = A(:,:,zPick);
+        return;
+    end
+
+    if ndims(A) == 4
+        if size(A,3) == 3
+            zPick = 1;
+            try
+                if isfield(T,'atlasSliceIndex') && ~isempty(T.atlasSliceIndex) && isfinite(T.atlasSliceIndex)
+                    zPick = round(T.atlasSliceIndex);
+                end
+            catch
+            end
+            zPick = max(1,min(size(A,4),zPick));
+            U = rgbToGrayLocal(squeeze(A(:,:,:,zPick)));
+            return;
+        elseif size(A,4) == 3
+            zPick = round(size(A,3)/2);
+            try
+                if isfield(T,'atlasSliceIndex') && ~isempty(T.atlasSliceIndex) && isfinite(T.atlasSliceIndex)
+                    zPick = round(T.atlasSliceIndex);
+                end
+            catch
+            end
+            zPick = max(1,min(size(A,3),zPick));
+            U = rgbToGrayLocal(squeeze(A(:,:,zPick,:)));
+            return;
+        end
+    end
+end
+
+function extFile = findExternalAtlasUnderlayFileLocal(matFile, modeName, T)
+    extFile = '';
+    try
+        [folder0,~,~] = fileparts(matFile);
+        if isempty(folder0) || exist(folder0,'dir') ~= 7, return; end
+        atlasIdx = NaN;
+        if isfield(T,'atlasSliceIndex') && ~isempty(T.atlasSliceIndex) && isfinite(T.atlasSliceIndex)
+            atlasIdx = round(T.atlasSliceIndex);
+        end
+        cand = {};
+        if isfinite(atlasIdx)
+            cand{end+1} = fullfile(folder0, sprintf('AtlasUnderlay_%s_slice%03d.mat', lower(modeName), atlasIdx)); %#ok<AGROW>
+            cand{end+1} = fullfile(folder0, sprintf('*%s*slice%03d*.mat', lower(modeName), atlasIdx)); %#ok<AGROW>
+        end
+        cand{end+1} = fullfile(folder0, sprintf('*%s*.mat', lower(modeName))); %#ok<AGROW>
+        for ii = 1:numel(cand)
+            d0 = dir(cand{ii});
+            if ~isempty(d0)
+                extFile = fullfile(d0(1).folder, d0(1).name);
+                return;
+            end
+        end
+    catch
+        extFile = '';
+    end
+end
+
+function Utmp = fillMissingUnderlayPlanesLocal(Utmp, got)
+    if all(got), return; end
+    nUse = numel(got);
+    firstGood = find(got,1,'first');
+    if isempty(firstGood), return; end
+    lastGood = firstGood;
+    for rr = 1:nUse
+        if got(rr)
+            lastGood = rr;
+        else
+            nextGood = find(got & (1:nUse) >= rr, 1, 'first');
+            if isempty(nextGood), nextGood = lastGood; end
+            if rr > lastGood
+                useIdx = lastGood;
+            else
+                useIdx = nextGood;
+            end
+            Utmp(:,:,rr) = Utmp(:,:,useIdx);
+        end
+    end
+end
+
+function meta = metaForAtlasModeLocal(modeName)
+    meta = defaultUnderlayMeta();
+    try, meta.atlasMode = lower(char(modeName)); catch, meta.atlasMode = ''; end
+    if strcmpi(modeName,'regions')
+        meta.isColor = true;
+    end
+end
+
+function E = packAtlasUnderlayEntryLocal(modeName, U, msg, meta)
+    if nargin < 4 || isempty(meta), meta = metaForAtlasModeLocal(modeName); end
+    E = struct();
+    E.mode = modeName;
+    E.data = U;
+    E.ok = ~isempty(U);
+    E.message = msg;
+    E.meta = meta;
+end
+
+function lib = emptyAtlasUnderlayLibraryLocal()
+    lib = struct();
+    names = {'normal','histology','vascular','regions'};
+    for ii = 1:numel(names)
+        lib.(names{ii}) = packAtlasUnderlayEntryLocal(names{ii}, [], 'not built', metaForAtlasModeLocal(names{ii}));
+    end
+end
+
+function [bgOut, metaOut, msgOut, selectedMode] = selectUnderlayFromLibraryLocal(lib, selectedMode)
+    if nargin < 2 || isempty(selectedMode), selectedMode = 'normal'; end
+    selectedMode = lower(char(selectedMode));
+    if ~isfield(lib, selectedMode) || ~lib.(selectedMode).ok
+        if isfield(lib,'normal') && lib.normal.ok
+            selectedMode = 'normal';
+        else
+            names = fieldnames(lib);
+            for ii = 1:numel(names)
+                if isfield(lib.(names{ii}),'ok') && lib.(names{ii}).ok
+                    selectedMode = names{ii};
+                    break;
+                end
+            end
+        end
+    end
+    E = lib.(selectedMode);
+    bgOut = E.data;
+    metaOut = E.meta;
+    msgOut = sprintf('%s selected; %s', selectedMode, E.message);
+end
+
+function outSize2 = currentOutputSizeFromDataLocal(X)
+    outSize2 = [nY nX];
+    try
+        outSize2 = [size(X,1) size(X,2)];
+    catch
+    end
+end
+
+function zz = getAtlasStackDepthLocal(X)
+    zz = 1;
+    try
+        if ndims(X) == 4
+            zz = size(X,3);
+        elseif ndims(X) == 3 && nZ > 1
+            zz = size(X,3);
+        end
+    catch
+        zz = 1;
+    end
+end
+
+function applyRecommendedUnderlayDisplayForModeLocal(modeName)
+    try
+        modeName = lower(char(modeName));
+    catch
+        modeName = 'normal';
+    end
+
+    switch modeName
+        case 'normal'
+            uState.mode = 3;
+            uState.brightness = -0.04;
+            uState.contrast = 1.10;
+            uState.gamma = 0.95;
+        case {'histology','vascular'}
+            uState.mode = 2;
+            uState.brightness = 0;
+            uState.contrast = 1;
+            uState.gamma = 1;
+        case 'regions'
+            uState.mode = 2;
+            uState.brightness = 0;
+            uState.contrast = 1;
+            uState.gamma = 1;
+    end
+
+    try
+        set(popUnder, 'Value', uState.mode);
+        set(slBri, 'Value', uState.brightness);
+        set(slCon, 'Value', uState.contrast);
+        set(slGam, 'Value', uState.gamma);
+        set(txtBri, 'String', sprintf('%.2f', uState.brightness));
+        set(txtCon, 'String', sprintf('%.2f', uState.contrast));
+        set(txtGam, 'String', sprintf('%.2f', uState.gamma));
+        updateUnderlayControlsEnable();
+    catch
+    end
+end
+
+function ensureAtlasUnderlayLibraryForExportLocal()
+    try
+        hasLib = isfield(state,'atlasUnderlays') && isstruct(state.atlasUnderlays) && ...
+            isfield(state.atlasUnderlays,'normal') && isfield(state.atlasUnderlays.normal,'ok') && state.atlasUnderlays.normal.ok;
+    catch
+        hasLib = false;
+    end
+
+    if hasLib
+        return;
+    end
+
+    lib = emptyAtlasUnderlayLibraryLocal();
+    try
+        if ~isempty(bg)
+            lib.normal = packAtlasUnderlayEntryLocal('normal', bg, 'current SCM underlay fallback', defaultUnderlayMeta());
+        else
+            lib.normal = packAtlasUnderlayEntryLocal('normal', makeFunctionalContrastFallbackUnderlay(PSC), 'functional fallback', defaultUnderlayMeta());
+        end
+    catch
+    end
+
+    state.atlasUnderlays = lib;
+    if ~isfield(state,'atlasUnderlayChoice') || isempty(state.atlasUnderlayChoice)
+        state.atlasUnderlayChoice = 'normal';
+    end
+    if ~isfield(state,'lastAtlasUnderlayBuildMessage')
+        state.lastAtlasUnderlayBuildMessage = 'fallback library built during export';
+    end
+end
+
+function [outFileFinal, saveReport] = safeSaveScmGroupBundleLocal(outFile, G)
+% PATCH_SCM_SAFE_SAVE_V2
+    wantedOutFile = outFile;
+    outFileFinal = outFile;
+    saveReport = '';
+    try
+        if nargin < 2 || isempty(G)
+            error('Bundle variable G is empty.');
+        end
+
+        [wantedDir,wantedName,wantedExt] = fileparts(wantedOutFile);
+        if isempty(wantedExt), wantedExt = '.mat'; end
+        if isempty(wantedName), wantedName = ['SCM_GroupExport_' datestr(now,'yyyymmdd_HHMMSS')]; end
+        if isempty(wantedDir), wantedDir = pwd; end
+
+        outCandidates = {};
+        outCandidates{end+1} = fullfile(wantedDir, [wantedName wantedExt]);
+
+        try
+            scmDir = fileparts(mfilename('fullpath'));
+            if ~isempty(scmDir)
+                outCandidates{end+1} = fullfile(scmDir, 'SCM_GroupAnalysis_Exports', [wantedName wantedExt]);
+            end
+        catch
+        end
+
+        try
+            up = userpath;
+            if ~isempty(up)
+                if iscell(up), up = up{1}; end
+                semi = strfind(up, pathsep);
+                if ~isempty(semi), up = up(1:semi(1)-1); end
+                if ~isempty(up)
+                    outCandidates{end+1} = fullfile(up, 'deConfUSIon_SCM_GroupExports', [wantedName wantedExt]);
+                end
+            end
+        catch
+        end
+
+        outCandidates{end+1} = fullfile(tempdir, 'deConfUSIon_SCM_GroupExports', [wantedName wantedExt]);
+
+        Gfull = sanitizeBundleForMatSaveLocal(G);
+        Gsingle = convertLargeBundleArraysToSingleLocal(Gfull);
+        Gslim = makeEmergencySlimBundleLocal(Gsingle);
+
+        payloads = {Gfull, Gsingle, Gslim};
+        payloadLabels = {'FULL', 'FULL_SINGLE_ARRAYS', 'EMERGENCY_SLIM_NO_4D_PSC'};
+        allErrors = {}; 
+
+        for pp = 1:numel(payloads)
+            Gtry = payloads{pp};
+            try
+                if ~isfield(Gtry,'saveInfo') || ~isstruct(Gtry.saveInfo)
+                    Gtry.saveInfo = struct();
+                end
+                Gtry.saveInfo.saver = 'SCM_gui safeSaveScmGroupBundleLocal V2';
+                Gtry.saveInfo.payloadMode = payloadLabels{pp};
+                Gtry.saveInfo.requestedOutFile = wantedOutFile;
+                Gtry.saveInfo.savedAt = datestr(now,'yyyy-mm-dd HH:MM:SS');
+            catch
+            end
+
+            for cc = 1:numel(outCandidates)
+                destFile = outCandidates{cc};
+                try
+                    [ok,msg2,actualDest] = tryOneScmBundleSaveLocal(destFile, Gtry, payloadLabels{pp});
+                    if ok
+                        outFileFinal = actualDest;
+                        if strcmp(actualDest, wantedOutFile) && strcmp(payloadLabels{pp},'FULL')
+                            saveReport = sprintf('SCM bundle saved successfully: %s', actualDest);
+                        else
+                            saveReport = sprintf(['SCM bundle saved with fallback.' char(10) ...
+                                'Requested: %s' char(10) ...
+                                'Actual:    %s' char(10) ...
+                                'Mode:      %s' char(10) ...
+                                'Reason:    %s'], wantedOutFile, actualDest, payloadLabels{pp}, msg2);
+                        end
+                        fprintf('\n[SCM EXPORT]\n%s\n', saveReport);
+                        if ~strcmp(payloadLabels{pp},'FULL')
+                            try, warndlg(saveReport, 'SCM group export fallback'); catch, end
+                        end
+                        return;
+                    else
+                        allErrors{end+1} = sprintf('%s -> %s', destFile, msg2); %#ok<AGROW>
+                    end
+                catch MEtry
+                    allErrors{end+1} = sprintf('%s -> %s', destFile, MEtry.message); %#ok<AGROW>
+                end
+            end
+        end
+
+        errTxt = sprintf('%s\n', allErrors{:});
+        error(['Could not save SCM GroupAnalysis bundle after all fallback attempts.' char(10) char(10) errTxt]);
+    catch ME
+        error(['Could not save SCM GroupAnalysis bundle.' char(10) ME.message]);
+    end
+end
+
+function [ok,msg,actualDest] = tryOneScmBundleSaveLocal(destFile, G, payloadLabel)
+    ok = false;
+    msg = '';
+    actualDest = destFile;
+    tmpFile = '';
+    try
+        [destDir,destName,destExt] = fileparts(destFile);
+        if isempty(destExt), destExt = '.mat'; end
+        if isempty(destDir), destDir = pwd; end
+        if exist(destDir,'dir') ~= 7
+            mkdir(destDir);
+        end
+
+        if ~isWritableFolderScmLocal(destDir)
+            msg = 'destination folder is not writable';
+            return;
+        end
+
+        actualDest = uniqueMatFileNameScmLocal(fullfile(destDir,[destName destExt]));
+        tmpDir = fullfile(tempdir, 'deConfUSIon_SCM_tmp');
+        if exist(tmpDir,'dir') ~= 7, mkdir(tmpDir); end
+        tmpFile = fullfile(tmpDir, sprintf('__SCM_tmp_%s_%06d.mat', datestr(now,'yyyymmdd_HHMMSS_FFF'), randi(999999)));
+
+        saveWorked = false;
+        saveMsg = '';
+        try
+            save(tmpFile, 'G', '-v7.3', '-nocompression');
+            saveWorked = true;
+        catch ME1
+            saveMsg = ME1.message;
+            try
+                save(tmpFile, 'G', '-v7.3');
+                saveWorked = true;
+            catch ME2
+                saveMsg = [saveMsg ' | normal -v7.3: ' ME2.message];
+            end
+        end
+
+        if ~saveWorked
+            msg = ['MATLAB could not write temp MAT: ' saveMsg];
+            try, if exist(tmpFile,'file')==2, delete(tmpFile); end, catch, end
+            return;
+        end
+
+        info = whos('-file', tmpFile, 'G');
+        if isempty(info)
+            msg = 'temp MAT written but variable G could not be verified';
+            try, delete(tmpFile); catch, end
+            return;
+        end
+
+        [okCopy,copyMsg] = copyfile(tmpFile, actualDest, 'f');
+        if ~okCopy
+            msg = ['copy to destination failed: ' copyMsg];
+            try, delete(tmpFile); catch, end
+            return;
+        end
+
+        info2 = whos('-file', actualDest, 'G');
+        if isempty(info2)
+            msg = 'final MAT copied but variable G could not be verified';
+            try, delete(tmpFile); catch, end
+            return;
+        end
+
+        ok = true;
+        msg = ['saved using payload ' payloadLabel];
+        try, delete(tmpFile); catch, end
+    catch ME
+        msg = ME.message;
+        try, if ~isempty(tmpFile) && exist(tmpFile,'file')==2, delete(tmpFile); end, catch, end
+    end
+end
+
+function tf = isWritableFolderScmLocal(folderName)
+    tf = false;
+    try
+        if exist(folderName,'dir') ~= 7, mkdir(folderName); end
+        testFile = fullfile(folderName, ['__write_test_' datestr(now,'yyyymmdd_HHMMSS_FFF') '.tmp']);
+        fid = fopen(testFile,'w');
+        if fid < 0, return; end
+        fprintf(fid,'test');
+        fclose(fid);
+        delete(testFile);
+        tf = true;
+    catch
+        tf = false;
+    end
+end
+
+function f2 = uniqueMatFileNameScmLocal(f1)
+    f2 = f1;
+    try
+        [p,n,e] = fileparts(f1);
+        if isempty(e), e = '.mat'; end
+        k = 1;
+        while exist(f2,'file') == 2
+            f2 = fullfile(p, sprintf('%s_%02d%s', n, k, e));
+            k = k + 1;
+            if k > 999, break; end
+        end
+    catch
+        f2 = f1;
+    end
+end
+
+function G2 = sanitizeBundleForMatSaveLocal(G1)
+    G2 = sanitizeOneValueForMatSaveLocal(G1, 0);
+end
+
+function v = sanitizeOneValueForMatSaveLocal(v, depth)
+    if nargin < 2, depth = 0; end
+    if depth > 12
+        return;
+    end
+    try
+        if isa(v,'function_handle')
+            v = func2str(v);
+            return;
+        end
+    catch
+    end
+    try
+        if isgraphics(v)
+            v = [];
+            return;
+        end
+    catch
+    end
+    if isstruct(v)
+        fn = fieldnames(v);
+        for ii = 1:numel(v)
+            for jj = 1:numel(fn)
+                try
+                    v(ii).(fn{jj}) = sanitizeOneValueForMatSaveLocal(v(ii).(fn{jj}), depth+1);
+                catch
+                    try, v(ii).(fn{jj}) = []; catch, end
+                end
+            end
+        end
+    elseif iscell(v)
+        for ii = 1:numel(v)
+            try
+                v{ii} = sanitizeOneValueForMatSaveLocal(v{ii}, depth+1);
+            catch
+                v{ii} = [];
+            end
+        end
+    else
+        try
+            if isobject(v)
+                v = [];
+            end
+        catch
+        end
+    end
+end
+
+function G2 = convertLargeBundleArraysToSingleLocal(G1)
+    G2 = G1;
+    try, G2.pscAtlas4D = convertNumericToSingleIfLargeLocal(G2.pscAtlas4D); catch, end
+    try, G2.scmMapSignedAtlas = convertNumericToSingleIfLargeLocal(G2.scmMapSignedAtlas); catch, end
+    try, G2.scmMapDisplayAtlas = convertNumericToSingleIfLargeLocal(G2.scmMapDisplayAtlas); catch, end
+    try, G2.alphaAtlas = convertNumericToSingleIfLargeLocal(G2.alphaAtlas); catch, end
+    try, G2.underlayAtlas = convertNumericToSingleIfLargeLocal(G2.underlayAtlas); catch, end
+    try
+        if isfield(G2,'underlays') && isstruct(G2.underlays)
+            f = fieldnames(G2.underlays);
+            for ii = 1:numel(f)
+                try
+                    if isfield(G2.underlays.(f{ii}),'data')
+                        G2.underlays.(f{ii}).data = convertNumericToSingleIfLargeLocal(G2.underlays.(f{ii}).data);
+                    end
+                catch
+                end
+            end
+        end
+    catch
+    end
+    try
+        if ~isfield(G2,'saveInfo') || ~isstruct(G2.saveInfo), G2.saveInfo = struct(); end
+        G2.saveInfo.note = 'Large double arrays may have been converted to single precision after full save failed.';
+    catch
+    end
+end
+
+function A = convertNumericToSingleIfLargeLocal(A)
+    try
+        if isnumeric(A) && isa(A,'double') && numel(A) > 1e5
+            A = single(A);
+        end
+    catch
+    end
+end
+
+function G2 = makeEmergencySlimBundleLocal(G1)
+    G2 = G1;
+    try
+        if isfield(G2,'pscAtlas4D')
+            G2.pscAtlas4D_originalSize = size(G2.pscAtlas4D);
+            G2.pscAtlas4D_originalClass = class(G2.pscAtlas4D);
+            try
+                G2.pscAtlas4D_meanPreview = single(mean(G2.pscAtlas4D, ndims(G2.pscAtlas4D), 'omitnan'));
+            catch
+                try, G2.pscAtlas4D_meanPreview = single(mean(G2.pscAtlas4D, ndims(G2.pscAtlas4D))); catch, end
+            end
+            G2.pscAtlas4D = [];
+        end
+        if ~isfield(G2,'saveInfo') || ~isstruct(G2.saveInfo), G2.saveInfo = struct(); end
+        G2.saveInfo.warning = 'Emergency slim bundle: full 4D PSC was removed because MATLAB could not write the complete bundle.';
+    catch
+    end
+end
+
+%% END_PATCH_SCM_ATLAS_UNDERLAY_LIBRARY_V1
 
 function openGroupBundleCB(~,~)
     startPath = getGroupBundleOpenStartPathLocal();
@@ -2748,14 +3545,12 @@ end
 
 function startPath = getGroupBundleOpenStartPathLocal()
     try
-        root = getDatasetRootForSelectors();
-        root = guessAnalysedRoot(root);
+        root = getCentralAnalysedRootForGroupBundlesLocal(getDatasetRootForSelectors());
 
         cand = { ...
             fullfile(root,'GroupAnalysis','Bundles','SCM'), ...
             fullfile(root,'GroupAnalysis','Bundles'), ...
             fullfile(root,'SCM'), ...
-            fullfile(root,'Bundles'), ...
             root, ...
             getStartPath(), ...
             pwd};
@@ -6333,11 +7128,54 @@ function P = getSimpleExportPaths()
 end
 
 function Pexp = getGroupBundleExportPathsLocal()
-    base = getDatasetRootForSelectors(); analysedRoot = guessAnalysedRoot(base); meta = deriveGroupBundleMetaLocal();
-    bundleRoot = fullfile(analysedRoot,'GroupAnalysis','Bundles','SCM');
+    % Clean SCM GroupAnalysis export location.
+    % Important for step-motor data: do NOT save bundles deep inside the
+    % current scan/split-motor folder. Instead, save centrally under:
+    %   <Project>\AnalysedData\GroupAnalysis\Bundles\SCM\<subjectKey>
+    base = getDatasetRootForSelectors();
+    analysedRoot = getCentralAnalysedRootForGroupBundlesLocal(base);
+    meta = deriveGroupBundleMetaLocal();
+
+    bundleRoot = fullfile(analysedRoot, 'GroupAnalysis', 'Bundles', 'SCM');
     subjectKey = sanitizeName(sprintf('%s_%s_%s', meta.animalID, meta.session, meta.scanID));
-    Pexp = struct('root',analysedRoot,'bundleRoot',bundleRoot,'bundleDir',fullfile(bundleRoot,subjectKey), ...
-        'subjectKey',subjectKey,'animalID',meta.animalID,'session',meta.session,'scanID',meta.scanID);
+    if isempty(subjectKey)
+        subjectKey = ['SCM_Subject_' datestr(now,'yyyymmdd_HHMMSS')];
+    end
+
+    Pexp = struct();
+    Pexp.root = analysedRoot;
+    Pexp.bundleRoot = bundleRoot;
+    Pexp.bundleDir = fullfile(bundleRoot, subjectKey);
+    Pexp.subjectKey = subjectKey;
+    Pexp.animalID = meta.animalID;
+    Pexp.session = meta.session;
+    Pexp.scanID = meta.scanID;
+end
+
+function analysedRoot = getCentralAnalysedRootForGroupBundlesLocal(p0)
+    analysedRoot = guessAnalysedRoot(p0);
+    try
+        s = char(analysedRoot);
+        tok = regexp(s, '^(.*?[\\/]+AnalysedData)([\\/].*)?$', 'tokens', 'once');
+        if ~isempty(tok)
+            analysedRoot = tok{1};
+            return;
+        end
+    catch
+    end
+end
+
+function outFile = makeShortGroupBundleOutFileLocal(Pexp, stamp)
+    % Short filename avoids Windows/MATLAB long-path save errors.
+    try
+        key = sanitizeName(Pexp.subjectKey);
+    catch
+        key = 'SCM_Subject';
+    end
+    if isempty(key)
+        key = 'SCM_Subject';
+    end
+    outFile = fullfile(Pexp.bundleDir, sprintf('SCM_%s_%s.mat', key, stamp));
 end
 
 function meta = deriveGroupBundleMetaLocal()

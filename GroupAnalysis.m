@@ -261,6 +261,9 @@ S.mapLoadedOverlayMask = [];
 S.rowPacapSide        = cell(0,1);
 S.mapRefPacapSide     = 'Left';
 S.mapPreviewRow       = NaN;
+S.mapCurrentSlice     = NaN;   % GA_STEPMOTOR_GROUPMAP_SCROLL_PATCH_V1
+S.mapCurrentSliceMax  = NaN;
+S.mapPolarity         = 'Positive only';
 
 S.mapThreshold       = 0;
 S.mapCaxis           = [0 100];
@@ -641,6 +644,13 @@ S.hMapCaxis = uicontrol(pMapDisp,'Style','edit','String',sprintf('%g %g',S.mapCa
     'Units','normalized','Position',[0.71 0.06 0.14 0.18], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
 
+S.hMapPolarity = uicontrol(pMapDisp,'Style','popupmenu', ...
+    'String',{'Positive only','Negative only','Positive + Negative'}, ...
+    'Units','normalized','Position',[0.865 0.06 0.12 0.18], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'TooltipString','SCM sign display: positive blackbody, negative winter', ...
+    'Callback',@onMapDisplayChanged);
+
 pMapPrev = uipanel(pMAPBG,'Units','normalized','Position',[0.02 0.115 0.96 0.725], ...
     'Title','Preview','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
 
@@ -672,6 +682,17 @@ S.hMapRefSide = uicontrol(pMapPrev,'Style','popupmenu', ...
     'Units','normalized','Position',[0.75 0.938 0.11 0.050], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w', ...
     'Callback',@onMapDisplayChanged);
+
+uicontrol(pMapPrev,'Style','text','String','Slice:', ...
+    'Units','normalized','Position',[0.875 0.945 0.055 0.040], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapSliceText = uicontrol(pMapPrev,'Style','edit','String','-', ...
+    'Units','normalized','Position',[0.930 0.938 0.055 0.050], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'TooltipString','Current step-motor slice. You can also use mouse wheel on Group Maps preview.', ...
+    'Callback',@onMapSliceEdit);
 
 S.axMap1 = axes('Parent',pMapPrev,'Units','normalized','Position',[0.03 0.13 0.58 0.78]);
 axis(S.axMap1,'off');
@@ -723,7 +744,7 @@ S.hMapSig1 = uicontrol(S.hMapSideBox,'Style','edit','String',num2str(S.mapGlobal
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
 
 S.hMapUnderlayMode = uicontrol(S.hMapSideBox,'Style','popupmenu', ...
-    'String',{'Bundle underlay','Loaded custom underlay'}, ...
+    'String',{'Bundle underlay','Bundle normal','Bundle histology','Bundle vascular','Bundle regions','Loaded custom underlay'}, ...
     'Units','normalized','Position',[0.12 0.11 0.76 0.07], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w', ...
     'Callback',@onMapDisplayChanged);
@@ -1009,6 +1030,7 @@ end
 %%% INITIALIZE
 %%% =====================================================================
 guidata(hFig,S);
+try, set(hFig,'WindowScrollWheelFcn',@onMapScrollWheel); catch, end
 updateManualTabs();
 refreshTable();
 clearPreview();
@@ -1440,8 +1462,10 @@ drawnow;
         S0 = guidata(hFig);
         S0 = readMapSettingsFromUI(S0);
         guidata(hFig,S0);
-        if isfield(S0,'lastMAP') && ~isempty(fieldnames(S0.lastMAP))
+        if isfield(S0,'lastMAP') && isstruct(S0.lastMAP) && ~isempty(fieldnames(S0.lastMAP))
             updateMapTabPreview();
+        elseif isfield(S0,'mapPreviewRow') && isfinite(S0.mapPreviewRow)
+            previewBundleRow(S0.mapPreviewRow);
         end
     end
 
@@ -1489,6 +1513,120 @@ drawnow;
         end
     end
 
+    function onMapSliceEdit(src,~)
+        S0 = guidata(hFig);
+        s = '';
+        try, s = get(src,'String'); catch, end
+        v = sscanf(strrep(s,'/',' '),'%f');
+        if isempty(v) || ~isfinite(v(1)), return; end
+        S0.mapCurrentSlice = round(v(1));
+        if ~isfield(S0,'mapCurrentSliceMax') || ~isfinite(S0.mapCurrentSliceMax)
+            S0.mapCurrentSliceMax = max(1,S0.mapCurrentSlice);
+        end
+        S0.mapCurrentSlice = max(1,min(S0.mapCurrentSliceMax,S0.mapCurrentSlice));
+        guidata(hFig,S0);
+        redrawMapAfterSliceChangeLocal();
+    end
+
+    function onMapScrollWheel(~,evt)
+        S0 = guidata(hFig);
+        try
+            if ~isfield(S0,'activeTab') || ~strcmpi(S0.activeTab,'MAP')
+                if ~isfield(S0,'mode') || isempty(strfind(lower(S0.mode),'map'))
+                    return;
+                end
+            end
+        catch
+            return;
+        end
+
+        r = [];
+        try
+            if isfield(S0,'mapPreviewRow') && isfinite(S0.mapPreviewRow)
+                r = S0.mapPreviewRow;
+            end
+        catch
+            r = [];
+        end
+        if isempty(r)
+            try
+                rows = findBundleDisplayRowsLocal(S0);
+                if ~isempty(rows), r = rows(1); end
+            catch
+            end
+        end
+        if isempty(r), return; end
+
+        S0 = ensureMapSliceStateForRowLocal(S0,r);
+        nZ = 1;
+        try, nZ = max(1,round(S0.mapCurrentSliceMax)); catch, end
+        if nZ <= 1
+            updateMapSliceTextLocal(S0);
+            guidata(hFig,S0);
+            return;
+        end
+
+        step = 1;
+        try
+            if evt.VerticalScrollCount < 0, step = -1; else, step = 1; end
+        catch
+            step = 1;
+        end
+        S0.mapCurrentSlice = max(1,min(nZ,round(S0.mapCurrentSlice + step)));
+        updateMapSliceTextLocal(S0);
+        guidata(hFig,S0);
+        redrawMapAfterSliceChangeLocal();
+    end
+
+    function redrawMapAfterSliceChangeLocal()
+        S0 = guidata(hFig);
+        updateMapSliceTextLocal(S0);
+        try
+            if isfield(S0,'lastMAP') && isstruct(S0.lastMAP) && ~isempty(fieldnames(S0.lastMAP))
+                onComputeGroupMaps([],[]);
+            elseif isfield(S0,'mapPreviewRow') && isfinite(S0.mapPreviewRow)
+                previewBundleRow(S0.mapPreviewRow);
+            end
+        catch ME_scroll
+            try, GA_printErrorLocal(ME_scroll,'GroupAnalysis map slice scroll'); catch, end
+            setStatusText(['Slice redraw failed: ' ME_scroll.message]);
+        end
+    end
+
+    function S0 = ensureMapSliceStateForRowLocal(S0,r)
+        if isempty(r) || r < 1 || r > size(S0.subj,1), return; end
+        bf = '';
+        try, bf = strtrimSafe(S0.subj{r,8}); catch, end
+        if isempty(bf) || exist(bf,'file') ~= 2, return; end
+        try
+            [G,cacheOut] = callMap('getCachedGroupBundle',S0.cache,bf);
+            S0.cache = cacheOut;
+            nZ = inferMapSliceCountFromBundleLocal(G);
+            if ~isfinite(nZ) || nZ < 1, nZ = 1; end
+            S0.mapCurrentSliceMax = nZ;
+            if ~isfield(S0,'mapCurrentSlice') || ~isfinite(S0.mapCurrentSlice) || S0.mapCurrentSlice < 1 || S0.mapCurrentSlice > nZ
+                S0.mapCurrentSlice = defaultMapSliceFromBundleLocal(G,nZ);
+            end
+            S0.mapCurrentSlice = max(1,min(nZ,round(S0.mapCurrentSlice)));
+            updateMapSliceTextLocal(S0);
+        catch
+        end
+    end
+
+    function updateMapSliceTextLocal(S0)
+        try
+            if isfield(S0,'hMapSliceText') && ishghandle(S0.hMapSliceText)
+                if isfield(S0,'mapCurrentSliceMax') && isfinite(S0.mapCurrentSliceMax) && S0.mapCurrentSliceMax > 1
+                    set(S0.hMapSliceText,'String',sprintf('%d/%d',round(S0.mapCurrentSlice),round(S0.mapCurrentSliceMax)));
+                elseif isfield(S0,'mapCurrentSlice') && isfinite(S0.mapCurrentSlice)
+                    set(S0.hMapSliceText,'String',sprintf('%d/1',round(S0.mapCurrentSlice)));
+                else
+                    set(S0.hMapSliceText,'String','-');
+                end
+            end
+        catch
+        end
+    end
     function onPreviewSelectedBundle(~,~)
         S0 = guidata(hFig);
         r = [];
@@ -1537,6 +1675,10 @@ drawnow;
         S0 = guidata(hFig);
         S0 = readMapSettingsFromUI(S0);
         [mapIdx,missingIdx] = findActiveBundleRowsLocal(S0);
+        if ~isempty(mapIdx)
+            S0 = ensureMapSliceStateForRowLocal(S0,mapIdx(1));
+            guidata(hFig,S0);
+        end
         if isempty(mapIdx)
             errordlg('No valid bundle rows found. Use Add Bundles first.','Group Maps');
             return;
@@ -1572,45 +1714,34 @@ S0.activeTab = 'MAP';
     end
 
     function onExportGroupMapData(~,~)
-        S0 = guidata(hFig);
-        [mapIdx,~] = findActiveBundleRowsLocal(S0);
-        if isempty(mapIdx)
-            errordlg('No valid bundle rows available.','Export Group Data for Video');
-            return;
-        end
-        startDir = getSmartBrowseDir(S0);
-        defName = ['GA_GroupVideoExport_' datestr(now,'yyyymmdd_HHMMSS') '.mat'];
-        [f,p] = uiputfile({'*.mat','MAT-file (*.mat)'}, ...
-            'Save Group Analysis Video Export',fullfile(startDir,defName));
-        if isequal(f,0), return; end
-        outFile = fullfile(p,f);
         try
-            E = callMap('buildGroupAnalysisVideoExportGA',S0,mapIdx);
-            GA = E;
-            underlay2D = E.underlay2D;
-            brainImage = E.underlay2D;
-            overlay2D = E.overlay2D;
-            groupMap2D = E.groupMap2D;
-            functional4D = E.functional4D;
-            psc4D = E.psc4D;
-            save(outFile,'E','GA','underlay2D','brainImage','overlay2D','groupMap2D','functional4D','psc4D','-v7.3');
-            setStatusText(['Group video bundle saved: ' outFile]);
+            setStatusText('Exporting multi-slice GA video bundle...');
+            outFile = localGA_motorExportIntegratedV6('video',hFig);
+            if isempty(outFile)
+                setStatusText('Group video export cancelled.');
+            else
+                setStatusText(['Group video bundle saved: ' outFile]);
+            end
         catch ME
-            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            try, GA_printErrorLocal(ME,'onExportGroupMapData integrated V6'); catch, end
+            setStatusText(['Group video export failed: ' ME.message]);
             errordlg(ME.message,'Export Group Data for Video');
         end
     end
 
     function onExportGroupMapDataSCM(~,~)
         try
-            GA_exportGroupAnalysisPPTBundleFix_20260511(hFig,false);
-        catch ME
-            try
-                GA_scm_print_error(ME, 'onExportGroupMapDataSCM');
-            catch
-                disp(ME.message);
+            setStatusText('Exporting multi-slice SCM data bundle...');
+            outFile = localGA_motorExportIntegratedV6('scm',hFig);
+            if isempty(outFile)
+                setStatusText('Export Data SCM cancelled.');
+            else
+                setStatusText(['SCM data export saved: ' outFile]);
             end
-            errordlg(ME.message, 'Export Data SCM failed');
+        catch ME
+            try, GA_scm_print_error(ME,'onExportGroupMapDataSCM integrated V6'); catch, disp(ME.message); end
+            setStatusText(['Export Data SCM failed: ' ME.message]);
+            errordlg(ME.message,'Export Data SCM failed');
         end
     end
 
@@ -1637,14 +1768,17 @@ S0.activeTab = 'MAP';
 
     function onExportGroupMapPPT(~,~)
         try
-            GA_exportGroupAnalysisPPTBundleFix_20260511(hFig,true);
-        catch ME
-            try
-                GA_scm_print_error(ME, 'onExportGroupMapPPT');
-            catch
-                disp(ME.message);
+            setStatusText('Exporting multi-slice SCM PowerPoint...');
+            outFile = localGA_motorExportIntegratedV6('ppt',hFig);
+            if isempty(outFile)
+                setStatusText('Export PPT cancelled.');
+            else
+                setStatusText(['Group SCM PPT saved: ' outFile]);
             end
-            errordlg(ME.message, 'Export Group Map PPT failed');
+        catch ME
+            try, GA_scm_print_error(ME,'onExportGroupMapPPT integrated V6'); catch, disp(ME.message); end
+            setStatusText(['Export PPT failed: ' ME.message]);
+            errordlg(ME.message,'Export Group Map PPT failed');
         end
     end
 
@@ -2301,6 +2435,8 @@ drawnow;
         try
             [G,cacheOut] = callMap('getCachedGroupBundle',S0.cache,bf);
             S0.cache = cacheOut;
+            S0 = ensureMapSliceStateForRowLocal(S0,r);
+            guidata(hFig,S0);
             [mapNow,~] = callMap('buildPreviewMapFromBundle',S0,G);
             underlayNow = callMap('resolvePreviewUnderlay',S0,G,mapNow);
             D = struct();
@@ -3349,6 +3485,11 @@ try
     S.mapFlipMode = items{get(S.hMapFlipMode,'Value')};
 catch
 end
+try
+    items = get(S.hMapPolarity,'String');
+    S.mapPolarity = items{get(S.hMapPolarity,'Value')};
+catch
+end
 try, S.mapModMin = safeNum(get(S.hMapModMin,'String'),S.mapModMin); catch, end
 try, S.mapModMax = safeNum(get(S.hMapModMax,'String'),S.mapModMax); catch, end
 try, S.mapSigma = safeNum(get(S.hMapSigma,'String'),S.mapSigma); catch, end
@@ -3374,8 +3515,85 @@ try
     S.mapRefPacapSide = items{get(S.hMapRefSide,'Value')};
 catch
 end
-S.mapAlphaModOn = true;
+try
+    if isfield(S,'hMapAlphaMod') && ishghandle(S.hMapAlphaMod)
+        S.mapAlphaModOn = logical(get(S.hMapAlphaMod,'Value'));
+    else
+        S.mapAlphaModOn = true;
+    end
+catch
+    S.mapAlphaModOn = true;
+end
 S.mapThreshold = 0;
+end
+
+function nZ = inferMapSliceCountFromBundleLocal(G)
+nZ = 1;
+try
+    if isfield(G,'pscAtlas4D') && ~isempty(G.pscAtlas4D) && isnumeric(G.pscAtlas4D)
+        X = G.pscAtlas4D;
+        if ndims(X) == 4
+            nZ = max(nZ,size(X,3));
+        end
+    end
+catch
+end
+try
+    flds = {'underlayAtlas','underlay2D','scmMapSignedAtlas','scmMapDisplayAtlas'};
+    for ii = 1:numel(flds)
+        if isfield(G,flds{ii}) && ~isempty(G.(flds{ii})) && isnumeric(G.(flds{ii}))
+            A = G.(flds{ii});
+            if ndims(A) == 3 && size(A,3) ~= 3
+                nZ = max(nZ,size(A,3));
+            elseif ndims(A) == 4
+                nZ = max(nZ,size(A,3));
+            end
+        end
+    end
+catch
+end
+try
+    if isfield(G,'underlays') && isstruct(G.underlays)
+        fn = fieldnames(G.underlays);
+        for ii = 1:numel(fn)
+            E = G.underlays.(fn{ii});
+            if isstruct(E) && isfield(E,'data'), A = E.data; else, A = E; end
+            if isnumeric(A) || islogical(A)
+                if ndims(A) == 3 && size(A,3) ~= 3
+                    nZ = max(nZ,size(A,3));
+                elseif ndims(A) == 4
+                    nZ = max(nZ,size(A,3));
+                end
+            end
+        end
+    end
+catch
+end
+try
+    if isfield(G,'nSlices') && isfinite(double(G.nSlices(1)))
+        nZ = max(nZ,round(double(G.nSlices(1))));
+    end
+catch
+end
+nZ = max(1,round(nZ));
+end
+
+function z = defaultMapSliceFromBundleLocal(G,nZ)
+z = round(max(1,nZ)/2);
+try
+    names = {'currentSlice','sliceIdx','zIndex','atlasSliceIndex'};
+    for ii = 1:numel(names)
+        if isfield(G,names{ii}) && ~isempty(G.(names{ii}))
+            zz = round(double(G.(names{ii})(1)));
+            if isfinite(zz) && zz >= 1 && zz <= nZ
+                z = zz;
+                return;
+            end
+        end
+    end
+catch
+end
+z = max(1,min(nZ,round(z)));
 end
 
 function D = buildCurrentMapDisplayLocal(S)
@@ -3398,13 +3616,15 @@ function Rm = makeMapRenderStructLocal(S)
 Rm = struct();
 Rm.threshold = 0;
 Rm.caxis = S.mapCaxis;
-Rm.alphaModOn = true;
+try, Rm.negCaxis = S.mapNegCaxis; catch, Rm.negCaxis = [-max(abs(Rm.caxis)) 0]; end
+try, Rm.alphaModOn = logical(S.mapAlphaModOn); catch, Rm.alphaModOn = true; end
 Rm.modMin = S.mapModMin;
 Rm.modMax = S.mapModMax;
 Rm.blackBody = S.mapBlackBody;
 Rm.colormapName = S.mapColormap;
+try, Rm.polarity = S.mapPolarity; catch, Rm.polarity = 'Positive only'; end
 Rm.flipUDPreview = false; % GA orientation fix: do not force upside-down flip
-Rm.alphaPercent = 100;
+try, Rm.alphaPercent = double(S.mapAlphaPercent); catch, Rm.alphaPercent = 100; end
 Rm.overlayMask = [];
 try
     if isfield(S,'mapLoadedOverlayMask') && ~isempty(S.mapLoadedOverlayMask)
@@ -5471,6 +5691,13 @@ shadeA = max(0,min(0.75,shadeA));
 end
 
 
+function GA_exportGroupAnalysisPPTBundleFix_20260511(hFig, makePPT)
+% Compatibility wrapper for older Group Maps Export Data SCM / PPT callbacks.
+% Keeps old button callbacks working after the exporter was renamed.
+if nargin < 2 || isempty(makePPT), makePPT = false; end
+GA_exportGroupMeanSCMBundle_Interactive(hFig, makePPT);
+end
+
 function GA_exportGroupMeanSCMBundle_Interactive(hFig, makePPT)
 % Export Group Maps result either as an SCM-compatible MAT bundle or as PPT.
 if nargin < 2 || isempty(makePPT), makePPT = false; end
@@ -5571,11 +5798,13 @@ D.render.modMin = 10;
 D.render.modMax = 20;
 D.render.threshold = 0;
 D.render.colormapName = 'blackbdy_iso';
+D.render.polarity = 'Positive only';
 try, if isfield(S,'mapCaxis'), D.render.caxis = S.mapCaxis; end, catch, end
 try, if isfield(S,'mapModMin'), D.render.modMin = S.mapModMin; end, catch, end
 try, if isfield(S,'mapModMax'), D.render.modMax = S.mapModMax; end, catch, end
 try, if isfield(S,'mapThreshold'), D.render.threshold = S.mapThreshold; end, catch, end
 try, if isfield(S,'mapColormap'), D.render.colormapName = S.mapColormap; end, catch, end
+try, if isfield(S,'mapPolarity'), D.render.polarity = S.mapPolarity; end, catch, end
 G = struct();
 G.created = datestr(now);
 G.source = 'GroupAnalysis group mean SCM bundle';
@@ -5595,6 +5824,9 @@ G.bg = U;
 G.TR = 1;
 G.tMin = 0;
 G.atlasSliceIndex = 1;
+try, if isfield(S,'mapCurrentSlice') && isfinite(S.mapCurrentSlice), G.atlasSliceIndex = round(S.mapCurrentSlice); end, catch, end
+try, if isfield(S,'mapCurrentSlice') && isfinite(S.mapCurrentSlice), G.currentSlice = round(S.mapCurrentSlice); end, catch, end
+try, if isfield(S,'mapCurrentSliceMax') && isfinite(S.mapCurrentSliceMax), G.nSlices = round(S.mapCurrentSliceMax); end, catch, end
 G.pscAtlas4D = reshape(M,[size(M,1) size(M,2) 1 1]);
 G.functional4D = reshape(U(:,:,1),[size(U,1) size(U,2) 1 1]);
 G.render = D.render;
@@ -7533,3 +7765,1259 @@ catch
 end
 end
 
+
+
+%% LOCAL_GA_MOTOR_EXPORT_INTEGRATED_V6
+function outFile = localGA_motorExportIntegratedV6(action,hFig,varargin)
+% Integrated multi-slice step-motor GroupAnalysis exporter.
+% No external helper files required.
+if nargin < 1 || isempty(action), action = 'scm'; end
+if nargin < 2 || isempty(hFig) || ~ishghandle(hFig)
+    try, hFig = gcf; catch, hFig = []; end
+end
+if isempty(hFig) || ~ishghandle(hFig)
+    error('Invalid GroupAnalysis figure handle.');
+end
+switch lower(strtrim(char(action)))
+    case {'video','exportvideo'}
+        outFile = localGA_exportVideoBundleV6(hFig);
+    case {'scm','data','exportscm'}
+        outFile = localGA_exportSCMBundleV6(hFig,false);
+    case {'ppt','powerpoint','exportppt'}
+        outFile = localGA_exportSCMBundleV6(hFig,true);
+    otherwise
+        error('Unsupported export action: %s', action);
+end
+end
+
+function outFile = localGA_exportVideoBundleV6(hFig)
+S = guidata(hFig);
+[rows,bfs] = localGA_collectBundlesV6(S);
+if isempty(bfs)
+    error('No active SCM bundle rows found. Add SCM bundles and keep rows enabled.');
+end
+startDir = localGA_smartStartDirV6(S,bfs{1});
+defName = ['GA_MotorVideo_AllSlices_' datestr(now,'yyyymmdd_HHMMSS') '.mat'];
+[f,p] = uiputfile({'*.mat','MAT-file (*.mat)'}, 'Save multi-slice GroupAnalysis video bundle', fullfile(startDir,defName));
+if isequal(f,0), outFile = ''; return; end
+outFile = fullfile(p,f);
+opts = localGA_readDisplayOptsV6(S);
+opts.underlayMode = 'selected';
+[G,E] = localGA_buildGroupBundleV6(S,rows,bfs,opts,[]);
+E.kind = 'GA_GROUP_VIDEO_EXPORT';
+E.exportPurpose = 'multi-slice video';
+E.note = 'Open in Video GUI using LOAD GA VIDEO BUNDLE. Contains all step-motor slices as [Y X Z T].';
+GA = E; %#ok<NASGU>
+psc4D = E.psc4D; %#ok<NASGU>
+functional4D = E.functional4D; %#ok<NASGU>
+underlay2D = E.underlay2D; %#ok<NASGU>
+brainImage = E.brainImage; %#ok<NASGU>
+groupMap2D = E.groupMap2D; %#ok<NASGU>
+overlay2D = E.overlay2D; %#ok<NASGU>
+save(outFile,'E','GA','G','psc4D','functional4D','underlay2D','brainImage','groupMap2D','overlay2D','-v7.3');
+msgbox(sprintf('Saved multi-slice GA video bundle:\n\n%s\n\nSlices: %d\nFrames: %d\nSubjects: %d',outFile,E.nSlices,E.nFrames,numel(rows)), 'Group video export');
+fprintf('\n[GA motor video export] Saved:\n%s\n',outFile);
+end
+
+function outFile = localGA_exportSCMBundleV6(hFig,makePPT)
+S = guidata(hFig);
+[rows,bfs] = localGA_collectBundlesV6(S);
+if isempty(bfs)
+    error('No active SCM bundle rows found. Add SCM bundles and keep rows enabled.');
+end
+startDir = localGA_smartStartDirV6(S,bfs{1});
+opts = localGA_readDisplayOptsV6(S);
+if makePPT
+    opts = localGA_askPPTOptionsV6(S,bfs{1},opts);
+    try, opts.hFig = hFig; catch, end
+    if isempty(opts), outFile = ''; return; end
+    defName = ['GA_MotorSCM_AllSlices_' datestr(now,'yyyymmdd_HHMMSS') '.pptx'];
+    [f,p] = uiputfile({'*.pptx','PowerPoint (*.pptx)'}, 'Save multi-slice SCM PowerPoint', fullfile(startDir,defName));
+    if isequal(f,0), outFile = ''; return; end
+    outFile = fullfile(p,f);
+    [G,E] = localGA_buildGroupBundleV6(S,rows,bfs,opts,opts.slices);
+    [pngDir,nSlides,nTiles] = localGA_writeMotorPPTV6(outFile,G,E,opts);
+    matFile = fullfile(fileparts(outFile), [localGA_stripExtV6(localGA_localNameV6(outFile)) '_SCM_bundle.mat']);
+    GA = E; %#ok<NASGU>
+    save(matFile,'G','E','GA','opts','-v7.3');
+    msgbox(sprintf('Saved multi-slice SCM PPT:\n\n%s\n\nSaved source PNGs in:\n%s\n\nSlides: %d\nBrain PNG tiles: %d\nSCM bundle:\n%s',outFile,pngDir,nSlides,nTiles,matFile), 'Group PPT export');
+    fprintf('\n[GA motor PPT export] Saved PPT:\n%s\nPNG folder:\n%s\nMAT bundle:\n%s\n',outFile,pngDir,matFile);
+else
+    defName = ['GA_MotorSCM_AllSlices_' datestr(now,'yyyymmdd_HHMMSS') '.mat'];
+    [f,p] = uiputfile({'*.mat','MAT-file (*.mat)'}, 'Save multi-slice SCM-compatible group bundle', fullfile(startDir,defName));
+    if isequal(f,0), outFile = ''; return; end
+    outFile = fullfile(p,f);
+    [G,E] = localGA_buildGroupBundleV6(S,rows,bfs,opts,[]);
+    GA = E; %#ok<NASGU>
+    pscAtlas4D = G.pscAtlas4D; %#ok<NASGU>
+    functional4D = E.functional4D; %#ok<NASGU>
+    underlayAtlas = G.underlayAtlas; %#ok<NASGU>
+    underlay2D = E.underlay2D; %#ok<NASGU>
+    brainImage = E.brainImage; %#ok<NASGU>
+    scmMapSignedAtlas = G.scmMapSignedAtlas; %#ok<NASGU>
+    groupMap2D = E.groupMap2D; %#ok<NASGU>
+    overlay2D = E.overlay2D; %#ok<NASGU>
+    save(outFile,'G','E','GA','pscAtlas4D','functional4D','underlayAtlas','underlay2D','brainImage','scmMapSignedAtlas','groupMap2D','overlay2D','-v7.3');
+    msgbox(sprintf('Saved multi-slice SCM group bundle:\n\n%s\n\nSlices: %d\nFrames: %d\nSubjects: %d',outFile,G.nSlices,G.nFrames,numel(rows)), 'Export Data SCM');
+    fprintf('\n[GA motor SCM data export] Saved:\n%s\n',outFile);
+end
+end
+
+function opts = localGA_askPPTOptionsV6(S,firstBundle,opts)
+% SCM-style motor PPT options for GroupAnalysis.
+% Uses GroupAnalysis GUI settings for caxis/alpha/modulation/polarity.
+try
+    G0 = localGA_loadBundleV6(firstBundle);
+    X0 = localGA_normalizePSCV6(localGA_getPSCFieldV6(G0));
+    nZ = size(X0,3);
+    nT = size(X0,4);
+    TR = localGA_getTRV6(G0);
+    totalSec = max(0,(nT-1)*TR);
+catch
+    nZ = 1; nT = 1; TR = 1; totalSec = 0;
+end
+
+curZ = 1;
+try
+    if isfield(S,'mapCurrentSlice') && isfinite(S.mapCurrentSlice)
+        curZ = round(S.mapCurrentSlice);
+    end
+catch
+end
+curZ = max(1,min(nZ,curZ));
+
+choice = questdlg('Which step-motor slices should be exported to PPT?', ...
+    'SCM-style motor PPT export', ...
+    'All slices', 'Current slice only', 'Custom list', 'All slices');
+if isempty(choice), opts = []; return; end
+
+switch choice
+    case 'All slices'
+        slices = 1:nZ;
+    case 'Current slice only'
+        slices = curZ;
+    otherwise
+        a0 = inputdlg({'Slice list, e.g. 1:4 or 1 3 4:'}, ...
+            'Custom slice list', 1, {sprintf('1:%d',nZ)});
+        if isempty(a0), opts = []; return; end
+        slices = localGA_parseNumListV6(a0{1},1:nZ);
+end
+slices = unique(max(1,min(nZ,round(slices))),'stable');
+if isempty(slices), slices = 1:nZ; end
+
+uModes = {'selected','normal','histology','vascular','regions'};
+[um,ok] = listdlg('PromptString',{ ...
+        'Underlay for exported PPT:', ...
+        'selected = bundle-selected underlay; otherwise force one atlas underlay'}, ...
+    'SelectionMode','single', ...
+    'ListString',uModes, ...
+    'InitialValue',1, ...
+    'ListSize',[420 180], ...
+    'Name','PPT underlay mode');
+if ~ok || isempty(um), opts = []; return; end
+
+% Read GUI settings AFTER underlay choice, then force only the export-specific values.
+opts = localGA_readDisplayOptsV6(S);
+opts.underlayMode = uModes{um};
+opts.baseWin = [20 40];
+
+answers = inputdlg({ ...
+    'Injection start (sec). Default = 60 s because motor baseline is 1 min per slice:', ...
+    'Window length (sec). Default = 28 s:', ...
+    'Specific time point sec to export (empty = every 28-s window):'}, ...
+    'Motor SCM PPT timing', 1, {'60', '28', ''});
+if isempty(answers), opts = []; return; end
+
+opts.slices = slices;
+opts.injSec = str2double(strtrim(answers{1}));
+if ~isfinite(opts.injSec), opts.injSec = 60; end
+opts.winLen = str2double(strtrim(answers{2}));
+if ~isfinite(opts.winLen) || opts.winLen <= 0, opts.winLen = 28; end
+tp = str2double(strtrim(answers{3}));
+if isfinite(tp), opts.singleTimePointSec = tp; else, opts.singleTimePointSec = NaN; end
+opts.TRHint = TR;
+opts.totalSecHint = totalSec;
+opts.nFramesHint = nT;
+
+fprintf('\n[GA motor PPT] GUI settings used: polarity=%s, pos caxis=[%g %g], neg caxis=[%g %g], alpha=%g%%, mod=[%g %g], baseline=[20 40] s\n', ...
+    opts.polarity, opts.caxis(1), opts.caxis(2), opts.negCaxis(1), opts.negCaxis(2), opts.alphaPercent, opts.modMin, opts.modMax);
+end
+
+function [G,E] = localGA_buildGroupBundleV6(S,rows,bfs,opts,slicesWanted)
+Gs = cell(1,numel(bfs)); Xs = cell(1,numel(bfs)); TRs = nan(1,numel(bfs));
+for i=1:numel(bfs)
+    Gs{i} = localGA_loadBundleV6(bfs{i});
+    Xs{i} = localGA_normalizePSCV6(localGA_getPSCFieldV6(Gs{i}));
+    TRs(i) = localGA_getTRV6(Gs{i});
+end
+nY = size(Xs{1},1); nX = size(Xs{1},2); nZ = size(Xs{1},3); nT = size(Xs{1},4);
+for i=2:numel(Xs)
+    nZ = min(nZ,size(Xs{i},3)); nT = min(nT,size(Xs{i},4));
+end
+if isempty(slicesWanted), slicesWanted = 1:nZ; end
+slicesWanted = unique(max(1,min(nZ,round(slicesWanted))),'stable');
+nZout = numel(slicesWanted);
+SUM = zeros(nY,nX,nZout,nT,'double'); CNT = zeros(nY,nX,nZout,nT,'double');
+Usum = zeros(nY,nX,nZout,'double'); Ucnt = zeros(nY,nX,nZout,'double');
+subjects = struct('row',{},'animal',{},'condition',{},'group',{},'bundleFile',{});
+for i=1:numel(Xs)
+    Xi = localGA_fitPSCToTargetV6(Xs{i},nY,nX,nZ,nT);
+    Xi = Xi(:,:,slicesWanted,1:nT);
+    ok = isfinite(Xi); Xi(~ok) = 0; SUM = SUM + Xi; CNT = CNT + double(ok);
+    Ui = localGA_getUnderlayStackV6(Gs{i},opts.underlayMode,nY,nX,nZ);
+    Ui = Ui(:,:,slicesWanted);
+    oku = isfinite(Ui); Ui(~oku) = 0; Usum = Usum + Ui; Ucnt = Ucnt + double(oku);
+    subjects(end+1) = localGA_rowInfoV6(S,rows(i),bfs{i},Gs{i}); %#ok<AGROW>
+end
+Xg = SUM ./ max(1,CNT); Xg(CNT==0) = 0;
+Ug = Usum ./ max(1,Ucnt); Ug(Ucnt==0) = 0;
+TR = median(TRs(isfinite(TRs) & TRs>0)); if ~isfinite(TR), TR = 1; end
+baseWin = [0 60]; try, if isfield(opts,'baseWin'), baseWin = opts.baseWin; end, catch, end
+sigWin = [60 88]; try, sigWin = [opts.injSec opts.injSec + opts.winLen]; catch, end
+maps = localGA_computeWindowMapsV6(Xg,TR,baseWin,sigWin,opts);
+G = struct();
+G.kind = 'SCM_GROUP_EXPORT';
+G.version = 'GA_MOTOR_EXPORT_INTEGRATED_V6';
+G.source = 'GroupAnalysis multi-slice motor export';
+G.created = datestr(now);
+G.pscAtlas4D = single(Xg);
+G.functional4D = single(repmat(Ug,[1 1 1 nT]));
+G.underlayAtlas = single(Ug);
+G.underlay2D = single(Ug);
+G.brainImage = single(Ug);
+G.commonUnderlay = single(Ug);
+G.scmMapSignedAtlas = single(maps);
+G.scmMapAtlas = single(maps);
+G.mapAtlas = single(maps);
+G.groupMap2D = single(maps);
+G.overlay2D = single(maps);
+G.TR = TR; G.tsec = (0:nT-1)*TR; G.tMin = G.tsec/60;
+G.nSlices = nZout; G.nFrames = nT; G.selectedSlices = slicesWanted;
+G.baseWindowSec = baseWin; G.signalWindowSec = sigWin;
+G.display = opts; G.render = opts; G.subjects = subjects;
+G.note = 'Multi-slice group mean PSC: [Y X Z T]. Suitable for step-motor GroupAnalysis, SCM, PPT, and Video GUI.';
+E = struct();
+E.kind = 'GA_GROUP_VIDEO_EXPORT';
+E.version = 'GA_MOTOR_EXPORT_INTEGRATED_V6';
+E.psc4D = single(Xg);
+E.functional4D = single(repmat(Ug,[1 1 1 nT]));
+E.underlay2D = single(Ug);
+E.brainImage = single(Ug);
+E.groupMap2D = single(maps);
+E.overlay2D = single(maps);
+E.TR = TR; E.tsec = G.tsec; E.tMin = G.tMin;
+E.nSlices = nZout; E.nFrames = nT; E.selectedSlices = slicesWanted;
+E.baseWindowSec = baseWin; E.signalWindowSec = sigWin;
+E.mapCaxis = opts.caxis; E.mapSigma = opts.sigma; E.mapModMin = opts.modMin; E.mapModMax = opts.modMax;
+E.render = opts; E.subjects = subjects; E.sourceG = G;
+end
+
+function maps = localGA_computeWindowMapsV6(X,TR,baseWin,sigWin,opts)
+[nY,nX,nZ,nT] = size(X); maps = zeros(nY,nX,nZ);
+b = localGA_secToIdxV6(baseWin,TR,nT); s = localGA_secToIdxV6(sigWin,TR,nT);
+for z=1:nZ
+    P = squeeze(X(:,:,z,:));
+    M = mean(P(:,:,s(1):s(2)),3) - mean(P(:,:,b(1):b(2)),3);
+    if opts.sigma > 0, M = localGA_smooth2V6(M,opts.sigma); end
+    M(~isfinite(M)) = 0; maps(:,:,z) = M;
+end
+end
+
+function [pngDir,nSlides,nTiles] = localGA_writeMotorPPTV6(outFile,G,E,opts)
+% SCM_gui-like motor PPT export for GroupAnalysis group mean maps.
+% Slide order: info slide, then slice 1 windows, slice 2 windows, etc.
+% Each slide contains up to 6 brain images.
+outDir = fileparts(outFile);
+if isempty(outDir), outDir = pwd; end
+[~,base] = fileparts(outFile);
+pngDir = fullfile(outDir,[base '_PNGs']);
+localGA_mkdirV6(pngDir);
+tileDir = fullfile(pngDir,'brain_tiles_png');
+slideDir = fullfile(pngDir,'fallback_slide_png');
+localGA_mkdirV6(tileDir);
+localGA_mkdirV6(slideDir);
+
+X = double(G.pscAtlas4D);
+U = double(G.underlayAtlas);
+TR = double(G.TR);
+[~,~,nZ,nT] = size(X);
+tsec = (0:nT-1)*TR;
+totalSec = max(tsec);
+baseIdx = localGA_secToIdxV6(opts.baseWin,TR,nT);
+
+if isfinite(opts.singleTimePointSec)
+    starts = max(0,floor(opts.singleTimePointSec/opts.winLen)*opts.winLen);
+else
+    starts = 0:opts.winLen:totalSec;
+end
+if isempty(starts), starts = 0; end
+
+perSlide = 6;
+estSlides = 1 + nZ * ceil(numel(starts)/perSlide);
+nTiles = 0;
+
+cbarFile = fullfile(pngDir,'colorbar_signal_change.png');
+localGA_makeColorbarPNGV6(cbarFile,opts);
+
+info = localGA_makeInfoTextV6(G,E,opts);
+infoPNG = fullfile(slideDir,'slide_000_info_table.png');
+localGA_makeInfoPNGV6(infoPNG,info);
+
+slides = struct('title',{},'subtitle',{},'tiles',{},'labels',{},'cbar',{});
+slides(1).title = 'GroupAnalysis motor SCM export';
+slides(1).subtitle = '';
+slides(1).tiles = {infoPNG};
+slides(1).labels = {'Export information'};
+slides(1).cbar = '';
+
+wb = [];
+try
+    wb = waitbar(0, sprintf('Preparing slide 1/%d...',estSlides), 'Name','Exporting motor SCM PPT');
+catch
+    wb = [];
+end
+localGA_setStatusBestEffortV6(opts,'PPT export: preparing info slide 1/%d',estSlides);
+
+slideCounter = 1;
+for z=1:nZ
+    tileFiles = {};
+    tileLabels = {};
+    for wi=1:numel(starts)
+        s0 = starts(wi);
+        s1 = min(s0 + opts.winLen, totalSec + TR);
+        idx = find(tsec >= s0 & tsec < s1);
+        if isempty(idx), continue; end
+
+        P = squeeze(X(:,:,z,:));
+        M = mean(P(:,:,idx),3) - mean(P(:,:,baseIdx(1):baseIdx(2)),3);
+        if opts.sigma > 0
+            M = localGA_smooth2V6(M,opts.sigma);
+        end
+        M(~isfinite(M)) = 0;
+
+        bg = U(:,:,min(z,size(U,3)));
+        phase = localGA_phaseLabelV6(s0,s1,opts.injSec);
+        lbl = sprintf('Slice %d/%d | %.0f-%.0f s | %s',z,nZ,s0,s1,phase);
+        tileFile = fullfile(tileDir,sprintf('slice%02d_window%03d_%0.0f_%0.0fs.png',z,wi,s0,s1));
+        localGA_renderTilePNGV6(tileFile,bg,M,opts,lbl);
+        tileFiles{end+1} = tileFile; %#ok<AGROW>
+        tileLabels{end+1} = lbl; %#ok<AGROW>
+        nTiles = nTiles + 1;
+
+        localGA_setStatusBestEffortV6(opts,'PPT export: rendered tile %d, slice %d/%d',nTiles,z,nZ);
+        drawnow;
+    end
+
+    if isempty(tileFiles), continue; end
+    nSlideZ = ceil(numel(tileFiles)/perSlide);
+    for si=1:nSlideZ
+        i0 = (si-1)*perSlide + 1;
+        i1 = min(si*perSlide,numel(tileFiles));
+        idx2 = i0:i1;
+        slideCounter = slideCounter + 1;
+        slides(end+1).title = sprintf('Slice %d/%d  |  windows %d-%d',z,nZ,i0,i1); %#ok<AGROW>
+        slides(end).subtitle = sprintf('Base %g-%g s | Injection %.0f s | TR %.4g s | alpha %.0f%%%% | AlphaMod %d [%g %g] | %s', ...
+            opts.baseWin(1),opts.baseWin(2),opts.injSec,TR,opts.alphaPercent,double(opts.alphaModOn),opts.modMin,opts.modMax,opts.polarity);
+        slides(end).tiles = tileFiles(idx2);
+        slides(end).labels = tileLabels(idx2);
+        slides(end).cbar = cbarFile;
+
+        try
+            if ~isempty(wb) && ishghandle(wb)
+                waitbar(min(0.95,slideCounter/max(1,estSlides)), wb, sprintf('Prepared slide %d/%d',slideCounter,estSlides));
+            end
+        catch
+        end
+        localGA_setStatusBestEffortV6(opts,'PPT export: prepared slide %d/%d',slideCounter,estSlides);
+        drawnow;
+    end
+end
+
+if numel(slides) <= 1
+    try, if ~isempty(wb) && ishghandle(wb), close(wb); end, catch, end
+    error('No PPT tiles were rendered.');
+end
+
+try
+    if ~isempty(wb) && ishghandle(wb)
+        waitbar(0.98, wb, 'Writing PowerPoint file...');
+    end
+catch
+end
+localGA_setStatusBestEffortV6(opts,'PPT export: writing PowerPoint file with %d slides...',numel(slides));
+localGA_writePPTObjectsV6(outFile,slides,slideDir,opts);
+try, if ~isempty(wb) && ishghandle(wb), close(wb); end, catch, end
+
+nSlides = numel(slides);
+localGA_setStatusBestEffortV6(opts,'PPT export saved: %s',outFile);
+end
+
+function localGA_writePPTObjectsV6(outFile,slides,slideDir,opts)
+if exist(outFile,'file')==2
+    try
+        delete(outFile);
+    catch
+        error('Could not overwrite PPTX: %s',outFile);
+    end
+end
+
+if ispc && exist('actxserver','file') == 2
+    ppt = []; pres = [];
+    try
+        ppt = actxserver('PowerPoint.Application');
+        ppt.Visible = 1;
+        pres = invoke(ppt.Presentations,'Add');
+        sw = pres.PageSetup.SlideWidth;
+        sh = pres.PageSetup.SlideHeight;
+
+        for i=1:numel(slides)
+            slide = invoke(pres.Slides,'Add',i,12);
+            localGA_setSlideBlackV6(slide);
+            localGA_addTextV6(slide,slides(i).title,20,12,sw-40,34,20,true);
+
+            if i == 1
+                localGA_addPictureFitV6(slide,slides(i).tiles{1},45,70,sw-90,sh-100);
+            else
+                localGA_addTextV6(slide,slides(i).subtitle,20,45,sw-40,24,10,false);
+
+                % Bigger readable left colorbar.
+                if ~isempty(slides(i).cbar)
+                    localGA_addPictureFitV6(slide,slides(i).cbar,10,92,95,500);
+                end
+
+                % 6-panel grid, image aspect preserved.
+                n = numel(slides(i).tiles);
+                cols = 3;
+                rows = 2;
+                left0 = 112;
+                top0 = 82;
+                gapX = 12;
+                gapY = 18;
+                cellW = (sw-left0-24-(cols-1)*gapX)/cols;
+                cellH = (sh-top0-28-(rows-1)*gapY)/rows;
+                for k=1:n
+                    rr = floor((k-1)/cols);
+                    cc = mod(k-1,cols);
+                    x = left0 + cc*(cellW+gapX);
+                    y = top0 + rr*(cellH+gapY);
+                    localGA_addPictureFitV6(slide,slides(i).tiles{k},x,y,cellW,cellH);
+                end
+            end
+
+            localGA_setStatusBestEffortV6(opts,'PPT export: writing slide %d/%d',i,numel(slides));
+            drawnow;
+        end
+
+        invoke(pres,'SaveAs',outFile);
+        invoke(pres,'Close');
+        invoke(ppt,'Quit');
+        pause(0.3);
+        if exist(outFile,'file')==2
+            return;
+        end
+    catch ME
+        try, if ~isempty(pres), invoke(pres,'Close'); end, catch, end
+        try, if ~isempty(ppt), invoke(ppt,'Quit'); end, catch, end
+        warning('ActiveX PPT failed, using fallback slide PNGs: %s',ME.message);
+    end
+end
+
+% Fallback: one slide PNG per PPT slide.
+slidePNGs = cell(1,numel(slides));
+for i=1:numel(slides)
+    slidePNGs{i} = fullfile(slideDir,sprintf('fallback_slide_%03d.png',i));
+    localGA_renderFallbackSlideV6(slidePNGs{i},slides(i),opts);
+    localGA_setStatusBestEffortV6(opts,'PPT fallback export: rendered slide %d/%d',i,numel(slides));
+    drawnow;
+end
+localGA_writePPTSlidePNGs_V6(outFile,slidePNGs);
+end
+
+function localGA_addPictureV6(slide,file,x,y,w,h)
+invoke(slide.Shapes,'AddPicture',file,0,1,x,y,w,h);
+end
+
+function localGA_addPictureFitV6(slide,file,x,y,w,h)
+% Insert image while preserving aspect ratio. Prevents stretched brain panels.
+try
+    info = imfinfo(file);
+    iw = double(info.Width);
+    ih = double(info.Height);
+    if iw > 0 && ih > 0
+        scale = min(w/iw,h/ih);
+        ww = iw*scale;
+        hh = ih*scale;
+        xx = x + (w-ww)/2;
+        yy = y + (h-hh)/2;
+        invoke(slide.Shapes,'AddPicture',file,0,1,xx,yy,ww,hh);
+        return;
+    end
+catch
+end
+invoke(slide.Shapes,'AddPicture',file,0,1,x,y,w,h);
+end
+
+function localGA_setSlideBlackV6(slide)
+try
+    slide.FollowMasterBackground = 0;
+    slide.Background.Fill.Visible = 1;
+    slide.Background.Fill.Solid;
+    slide.Background.Fill.ForeColor.RGB = 0;
+catch
+end
+end
+
+function localGA_addTextV6(slide,txt,x,y,w,h,fs,boldFlag)
+sh = invoke(slide.Shapes,'AddTextbox',1,x,y,w,h);
+try
+    sh.TextFrame.TextRange.Text = txt;
+    sh.TextFrame.TextRange.Font.Size = fs;
+    sh.TextFrame.TextRange.Font.Name = 'Arial';
+    sh.TextFrame.TextRange.Font.Color.RGB = 16777215;
+    if boldFlag, sh.TextFrame.TextRange.Font.Bold = 1; end
+catch
+end
+end
+
+function localGA_writePPTSlidePNGs_V6(outFile,slidePNGs)
+if ~isempty(which('mlreportgen.ppt.Presentation'))
+    import mlreportgen.ppt.*
+    ppt = Presentation(outFile); open(ppt);
+    for i=1:numel(slidePNGs)
+        try, slide = add(ppt,'Blank'); catch, slide = add(ppt); end
+        pic = Picture(slidePNGs{i}); pic.X='0in'; pic.Y='0in'; pic.Width='13.333in'; pic.Height='7.5in'; add(slide,pic);
+    end
+    close(ppt); pause(0.3); if exist(outFile,'file')==2, return; end
+end
+error('Could not create PowerPoint. Fallback slide PNGs were saved.');
+end
+
+function localGA_renderFallbackSlideV6(outFile,SL,opts)
+f = figure('Visible','off', ...
+    'Color',[0 0 0], ...
+    'InvertHardcopy','off', ...
+    'Units','inches', ...
+    'Position',[0.5 0.5 13.333 7.5]);
+annotation(f,'textbox',[0.02 0.91 0.96 0.07], ...
+    'String',SL.title, ...
+    'Color','w', ...
+    'EdgeColor','none', ...
+    'HorizontalAlignment','center', ...
+    'FontSize',16, ...
+    'FontWeight','bold', ...
+    'Interpreter','none');
+
+if numel(SL.tiles)==1 && isempty(SL.cbar)
+    ax = axes('Parent',f,'Position',[0.05 0.08 0.90 0.78]);
+    image(ax,imread(SL.tiles{1}));
+    axis(ax,'image'); axis(ax,'off');
+else
+    annotation(f,'textbox',[0.08 0.86 0.90 0.035], ...
+        'String',SL.subtitle, ...
+        'Color','w', ...
+        'EdgeColor','none', ...
+        'HorizontalAlignment','left', ...
+        'FontSize',8.5, ...
+        'Interpreter','none');
+    if ~isempty(SL.cbar)
+        axc = axes('Parent',f,'Position',[0.010 0.12 0.075 0.74]);
+        image(axc,imread(SL.cbar));
+        axis(axc,'image'); axis(axc,'off');
+    end
+    n = numel(SL.tiles);
+    cols = 3; rows = 2;
+    left0 = 0.095; top0 = 0.84; W = 0.885; H = 0.73; gapX = 0.016; gapY = 0.035;
+    cw = (W-(cols-1)*gapX)/cols;
+    ch = (H-(rows-1)*gapY)/rows;
+    for k=1:n
+        rr = floor((k-1)/cols);
+        cc = mod(k-1,cols);
+        x = left0 + cc*(cw+gapX);
+        y = top0 - (rr+1)*ch - rr*gapY;
+        ax = axes('Parent',f,'Position',[x y cw ch]);
+        image(ax,imread(SL.tiles{k}));
+        axis(ax,'image'); axis(ax,'off');
+    end
+end
+print(f,outFile,'-dpng','-r180','-opengl');
+close(f);
+end
+
+function localGA_makeInfoPNGV6(outFile,txt)
+f = figure('Visible','off', ...
+    'Color',[0 0 0], ...
+    'InvertHardcopy','off', ...
+    'Units','pixels', ...
+    'Position',[100 100 1800 1000]);
+ax = axes('Parent',f,'Position',[0 0 1 1]);
+axis(ax,'off'); hold(ax,'on');
+text(ax,0.04,0.94,'GroupAnalysis multi-slice motor SCM export', ...
+    'Units','normalized', ...
+    'Color',[1 1 1], ...
+    'FontName','Arial', ...
+    'FontSize',28, ...
+    'FontWeight','bold', ...
+    'Interpreter','none', ...
+    'VerticalAlignment','top');
+lines0 = regexp(txt,sprintf('\n'),'split');
+lines0 = lines0(~cellfun(@isempty,lines0));
+y = 0.86; dy = 0.038;
+for i=1:numel(lines0)
+    L = lines0{i};
+    if isempty(strtrim(L)), y = y - dy; continue; end
+    if ~isempty(strfind(L,'|'))
+        rectangle('Parent',ax,'Position',[0.035 y-0.026 0.93 0.034], ...
+            'EdgeColor',[0.28 0.28 0.28], ...
+            'FaceColor',[0.055 0.055 0.055]);
+    end
+    text(ax,0.05,y,L, ...
+        'Units','normalized', ...
+        'Color',[0.95 0.95 0.95], ...
+        'FontName','Consolas', ...
+        'FontSize',16, ...
+        'Interpreter','none', ...
+        'VerticalAlignment','middle');
+    y = y - dy;
+    if y < 0.05, break; end
+end
+print(f,outFile,'-dpng','-r150','-opengl');
+close(f);
+end
+
+function txtOut = localGA_makeInfoTextV6(G,E,opts)
+subs = {};
+try
+    for i=1:numel(G.subjects)
+        animal = G.subjects(i).animal;
+        groupName = G.subjects(i).group;
+        condName = G.subjects(i).condition;
+        fileName = localGA_localNameV6(G.subjects(i).bundleFile);
+        subs{end+1} = sprintf('%s | %s | %s | %s', animal, groupName, condName, fileName); %#ok<AGROW>
+    end
+catch
+end
+if isempty(subs), subs = {'unknown | unknown | unknown | unknown'}; end
+txtOut = sprintf('Animal / subject | Group | Condition | Bundle file\n');
+txtOut = [txtOut sprintf('%s\n', subs{:})];
+txtOut = [txtOut sprintf('\nExport settings\n')];
+txtOut = [txtOut sprintf('Slices exported | %s | Frames | %d\n', mat2str(G.selectedSlices), E.nFrames)];
+txtOut = [txtOut sprintf('TR / total duration | %.4g s | %.2f min\n', G.TR, max(G.tsec)/60)];
+txtOut = [txtOut sprintf('Baseline / injection | %g-%g s | injection %.0f s | window %.0f s\n', opts.baseWin(1),opts.baseWin(2),opts.injSec,opts.winLen)];
+txtOut = [txtOut sprintf('Polarity / underlay | %s | %s\n', opts.polarity, opts.underlayMode)];
+txtOut = [txtOut sprintf('Positive caxis | [%g %g] | Negative caxis | [%g %g]\n', opts.caxis(1),opts.caxis(2),opts.negCaxis(1),opts.negCaxis(2))];
+txtOut = [txtOut sprintf('Alpha / alpha modulation | %.0f%%%% | ON=%d | [%g %g]\n', opts.alphaPercent,double(opts.alphaModOn),opts.modMin,opts.modMax)];
+txtOut = [txtOut sprintf('Threshold / sigma | %g | %g\n', opts.threshold,opts.sigma)];
+txtOut = [txtOut sprintf('\nPNG note\nEach brain tile is saved separately in *_PNGs/brain_tiles_png.\nPPT slides contain up to 6 brain PNGs per slide, slice-by-slice like SCM_gui motor export.\n')];
+end
+
+function localGA_makeColorbarPNGV6(outFile,opts)
+f = figure('Visible','off', ...
+    'Color',[0 0 0], ...
+    'InvertHardcopy','off', ...
+    'Units','pixels', ...
+    'Position',[100 100 340 980]);
+ax = axes('Parent',f,'Position',[0.12 0.07 0.10 0.86]);
+imagesc(ax,[0 1;0 1]);
+set(ax,'Visible','off');
+[cm,cax] = localGA_cmapForOptsV6(opts);
+colormap(ax,cm);
+caxis(ax,cax);
+cb = colorbar(ax,'Position',[0.34 0.07 0.30 0.86]);
+try
+    cb.Color = 'w';
+    cb.FontSize = 16;
+    cb.LineWidth = 1.5;
+    mode = localGA_polarityModeV11(opts);
+    if mode == 2
+        cb.Label.String = 'Negative |signal change| (%)';
+    else
+        cb.Label.String = 'Signal change (%)';
+    end
+    cb.Label.Color = 'w';
+    cb.Label.FontSize = 16;
+    cb.Label.FontWeight = 'bold';
+catch
+end
+print(f,outFile,'-dpng','-r180','-opengl');
+close(f);
+end
+
+function localGA_renderTilePNGV6(outFile,bg,M,opts,lbl)
+[RGB,A,cmap,cax] = localGA_overlayRGBV6(bg,M,opts);
+f = figure('Visible','off', ...
+    'Color',[0 0 0], ...
+    'InvertHardcopy','off', ...
+    'Units','pixels', ...
+    'Position',[100 100 1200 820]);
+
+% Big centered title area above the brain image.
+annotation(f,'textbox',[0.02 0.925 0.96 0.060], ...
+    'String',lbl, ...
+    'Color','w', ...
+    'EdgeColor','none', ...
+    'HorizontalAlignment','center', ...
+    'VerticalAlignment','middle', ...
+    'FontName','Arial', ...
+    'FontSize',24, ...
+    'FontWeight','bold', ...
+    'Interpreter','none');
+
+ax = axes('Parent',f,'Position',[0.025 0.040 0.950 0.875]);
+image(ax,localGA_underlayRGBV6(bg));
+axis(ax,'image');
+axis(ax,'off');
+hold(ax,'on');
+h = image(ax,RGB);
+set(h,'AlphaData',A);
+try, set(h,'AlphaDataMapping','none'); catch, end
+colormap(ax,cmap);
+caxis(ax,cax);
+print(f,outFile,'-dpng','-r180','-opengl');
+close(f);
+end
+
+function mode = localGA_polarityModeV11(opts)
+% SCM_gui signMode equivalent: 1 positive, 2 negative, 3 signed positive+negative.
+mode = 1;
+try
+    pol = lower(strtrim(char(opts.polarity)));
+catch
+    pol = 'positive only';
+end
+if ~isempty(strfind(pol,'negative')) && isempty(strfind(pol,'positive'))
+    mode = 2;
+elseif ~isempty(strfind(pol,'+')) || ~isempty(strfind(pol,'both')) || ~isempty(strfind(pol,'pos/neg')) || ~isempty(strfind(pol,'positive + negative'))
+    mode = 3;
+else
+    mode = 1;
+end
+end
+
+function [posLo,posHi,negHi] = localGA_colorLimitsV11(opts)
+posLo = 0; posHi = 100; negHi = 100;
+try
+    ca = double(opts.caxis(:)');
+    if numel(ca) >= 2 && all(isfinite(ca(1:2)))
+        posLo = ca(1);
+        posHi = ca(2);
+    end
+catch
+end
+try
+    nca = double(opts.negCaxis(:)');
+    if numel(nca) >= 2 && all(isfinite(nca(1:2)))
+        negHi = max(abs(nca(1:2)));
+    end
+catch
+end
+if ~isfinite(posLo), posLo = 0; end
+if ~isfinite(posHi) || posHi <= posLo
+    tmp = max(abs([posLo posHi 100]));
+    if ~isfinite(tmp) || tmp <= 0, tmp = 100; end
+    posLo = 0;
+    posHi = tmp;
+end
+if ~isfinite(negHi) || negHi <= 0
+    negHi = max(abs([posLo posHi 100]));
+end
+if ~isfinite(negHi) || negHi <= 0
+    negHi = 100;
+end
+end
+
+function [posCM,negMagCM,signedCM] = localGA_scmColormapsV11(n)
+% Exact SCM_gui-style colormap selection.
+% positive: blackbdy_iso if available, else hot.
+% negative-only magnitude: black at 0, winter at high magnitude.
+% signed: winter -> black at zero -> blackbody.
+if nargin < 1 || isempty(n), n = 256; end
+n = max(2,round(n));
+
+if exist('blackbdy_iso','file') == 2
+    posCM = blackbdy_iso(n);
+else
+    posCM = hot(n);
+end
+posCM = min(max(posCM,0),1);
+if ~isempty(posCM), posCM(1,:) = [0 0 0]; end
+
+if exist('winter_brain_fsl','file') == 2
+    winterCM = winter_brain_fsl(n);
+else
+    winterCM = winter(n);
+end
+winterCM = min(max(winterCM,0),1);
+
+% Signed SCM negative half: strongest negative is winter, zero is black.
+nNeg = floor(n/2);
+nPos = n - nNeg;
+if exist('winter_brain_fsl','file') == 2
+    negSigned = winter_brain_fsl(max(nNeg,2));
+else
+    negSigned = winter(max(nNeg,2));
+end
+negSigned = negSigned(1:nNeg,:);
+if nNeg > 0
+    negSigned = negSigned .* repmat(linspace(1,0,nNeg)',1,3);
+    negSigned(end,:) = [0 0 0];
+end
+
+if exist('blackbdy_iso','file') == 2
+    posSigned = blackbdy_iso(max(nPos,2));
+else
+    posSigned = hot(max(nPos,2));
+end
+posSigned = posSigned(1:nPos,:);
+if ~isempty(posSigned), posSigned(1,:) = [0 0 0]; end
+
+signedCM = min(max([negSigned; posSigned],0),1);
+
+% Negative-only uses magnitude map abs(negative): 0 should be black, high magnitude winter.
+negMagCM = flipud(negSigned);
+if isempty(negMagCM)
+    negMagCM = winterCM;
+end
+negMagCM = min(max(negMagCM,0),1);
+if ~isempty(negMagCM), negMagCM(1,:) = [0 0 0]; end
+end
+
+function [RGB,A,cm,cax] = localGA_overlayRGBV6(bg,M,opts)
+% V11: exact SCM_gui-style sign handling and alpha modulation for PPT export.
+M = double(M);
+M(~isfinite(M)) = 0;
+sz = size(M);
+
+if ~isfield(opts,'alphaModOn'), opts.alphaModOn = true; end
+if ~isfield(opts,'threshold'), opts.threshold = 0; end
+if ~isfield(opts,'alphaPercent'), opts.alphaPercent = 100; end
+if ~isfield(opts,'modMin'), opts.modMin = 15; end
+if ~isfield(opts,'modMax'), opts.modMax = 30; end
+if ~isfield(opts,'caxis'), opts.caxis = [0 100]; end
+if ~isfield(opts,'negCaxis'), opts.negCaxis = [-100 0]; end
+
+[posLo,posHi,negHi] = localGA_colorLimitsV11(opts);
+mode = localGA_polarityModeV11(opts);
+[posCM,negMagCM,signedCM] = localGA_scmColormapsV11(256);
+
+% SCM_gui buildDisplayedOverlay equivalent.
+switch mode
+    case 1
+        showMask = M > 0;
+        dispMap = M;
+        cm = posCM;
+        cax = [posLo posHi];
+        RGB = localGA_colorizeV6(dispMap,posLo,posHi,posCM);
+    case 2
+        showMask = M < 0;
+        dispMap = abs(min(M,0));
+        cm = negMagCM;
+        cax = [0 negHi];
+        RGB = localGA_colorizeV6(dispMap,0,negHi,negMagCM);
+    otherwise
+        showMask = isfinite(M) & M ~= 0;
+        dispMap = M;
+        cm = signedCM;
+        cax = [-negHi posHi];
+        RGB = localGA_colorizeV6(dispMap,-negHi,posHi,signedCM);
+end
+
+brain = localGA_brainMaskFromUnderlayV11(bg,sz);
+thr = abs(double(opts.threshold));
+thrMask = double((abs(M) >= thr) & showMask) .* double(brain);
+
+a = max(0,min(100,double(opts.alphaPercent))) / 100;
+mMin = double(opts.modMin);
+mMax = double(opts.modMax);
+if ~isfinite(mMin), mMin = 15; end
+if ~isfinite(mMax), mMax = 30; end
+if mMax < mMin, tmp=mMin; mMin=mMax; mMax=tmp; end
+
+if ~logical(opts.alphaModOn)
+    A = a .* thrMask;
+else
+    effLo = max(mMin,thr);
+    effHi = mMax;
+    mag = abs(M);
+    mag(~showMask) = NaN;
+    if ~isfinite(effHi) || effHi <= effLo
+        tmpv = mag(isfinite(mag));
+        if isempty(tmpv)
+            effHi = effLo + eps;
+        else
+            effHi = max(tmpv);
+        end
+    end
+    if ~isfinite(effHi) || effHi <= effLo
+        effHi = effLo + eps;
+    end
+    modv = (abs(M) - effLo) ./ max(eps,(effHi-effLo));
+    modv(~isfinite(modv)) = 0;
+    modv = min(max(modv,0),1);
+    modv(~showMask) = 0;
+
+    if mode == 1
+        A = a .* modv .* thrMask;
+    else
+        A = a .* (0.20 + 0.80 .* modv) .* thrMask;
+    end
+end
+
+A(~isfinite(A)) = 0;
+A = min(max(A,0),1);
+
+for cc=1:3
+    C = RGB(:,:,cc);
+    C(A <= 0) = 0;
+    RGB(:,:,cc) = C;
+end
+end
+
+function brain = localGA_brainMaskFromUnderlayV11(bg,sz)
+try
+    G = localGA_underlayRGBV6(bg);
+    G = mean(G,3);
+    mx = max(G(:));
+    if ~isfinite(mx) || mx <= 0
+        brain = true(sz);
+        return;
+    end
+    brain = G > max(0.02,0.15*mx);
+    if nnz(brain) < 10, brain = true(sz); end
+catch
+    brain = true(sz);
+end
+end
+
+function RGB=localGA_colorizeV6(V,lo,hi,cm)
+if hi<=lo, hi=lo+eps; end
+t=(double(V)-lo)./(hi-lo); t=min(max(t,0),1); t(~isfinite(t))=0; idx=1+round(t*(size(cm,1)-1));
+RGB=zeros([size(V) 3]); for c=1:3, C=cm(:,c); RGB(:,:,c)=reshape(C(idx(:)),size(V)); end
+end
+
+function cm=localGA_blackbodyV6(n)
+% Shared blackbody-like positive map: black -> red -> orange/yellow -> white.
+if nargin < 1 || isempty(n), n = 256; end
+n = max(2,round(n));
+x = linspace(0,1,n)';
+anchorX = [0.00 0.18 0.40 0.68 1.00]';
+anchorC = [ ...
+    0.00 0.00 0.00;  ...
+    0.35 0.00 0.00;  ...
+    0.85 0.05 0.00;  ...
+    1.00 0.75 0.00;  ...
+    1.00 1.00 1.00];
+cm = zeros(n,3);
+for cc=1:3
+    cm(:,cc) = interp1(anchorX,anchorC(:,cc),x,'linear','extrap');
+end
+cm = max(0,min(1,cm));
+end
+
+function RGB=localGA_underlayRGBV6(U)
+U=double(U); U=squeeze(U); if ndims(U)==3 && size(U,3)==3, RGB=U; if max(RGB(:))>1, RGB=RGB/255; end; RGB=max(0,min(1,RGB)); return; end
+U(~isfinite(U))=0; v=U(:); v=v(isfinite(v)); if isempty(v), U01=zeros(size(U)); else, lo=localGA_prctileV6(v,1); hi=localGA_prctileV6(v,99); if hi<=lo, U01=zeros(size(U)); else, U01=min(max((U-lo)/(hi-lo),0),1); end, end
+RGB=repmat(U01,[1 1 3]);
+end
+
+function m=localGA_brainMaskFromUnderlayV6(U,sz)
+G=localGA_underlayRGBV6(U); G=mean(G,3); thr=max(0.02,0.15*max(G(:))); m=G>thr; if nnz(m)<10, m=true(sz); end
+end
+
+function [cm,cax]=localGA_cmapForOptsV6(opts)
+% V11: colorbar matches exact SCM-style overlay rendering.
+[posLo,posHi,negHi] = localGA_colorLimitsV11(opts);
+mode = localGA_polarityModeV11(opts);
+[posCM,negMagCM,signedCM] = localGA_scmColormapsV11(256);
+switch mode
+    case 1
+        cm = posCM;
+        cax = [posLo posHi];
+    case 2
+        cm = negMagCM;
+        cax = [0 negHi];
+    otherwise
+        cm = signedCM;
+        cax = [-negHi posHi];
+end
+end
+
+function G=localGA_loadBundleV6(bf)
+L=load(bf); G=[];
+if isfield(L,'G') && isstruct(L.G), G=L.G; return; end
+if isfield(L,'E') && isstruct(L.E), G=L.E; return; end
+if isfield(L,'GA') && isstruct(L.GA), G=L.GA; return; end
+fn=fieldnames(L); for i=1:numel(fn), v=L.(fn{i}); if isstruct(v) && (isfield(v,'pscAtlas4D')||isfield(v,'psc4D')||isfield(v,'functional4D')), G=v; return; end, end
+error('Could not find bundle struct G/E/GA in: %s',bf);
+end
+
+function X=localGA_getPSCFieldV6(G)
+flds={'pscAtlas4D','psc4D','PSC','functionalPSC','Ipsc'}; X=[]; for i=1:numel(flds), if isfield(G,flds{i}) && ~isempty(G.(flds{i})), X=G.(flds{i}); return; end, end
+error('Bundle has no PSC time series field.');
+end
+
+function X=localGA_normalizePSCV6(X)
+X=double(X); X(~isfinite(X))=0;
+if ndims(X)==2, error('PSC is only 2D static map, not a time series.'); end
+if ndims(X)==3, X=reshape(X,[size(X,1) size(X,2) 1 size(X,3)]); return; end
+if ndims(X)==4, return; end
+while ndims(X)>4, X=squeeze(mean(X,1)); end
+if ndims(X)==3, X=reshape(X,[size(X,1) size(X,2) 1 size(X,3)]); end
+if ndims(X)~=4, error('PSC must normalize to [Y X Z T].'); end
+end
+
+function TR=localGA_getTRV6(G)
+TR=NaN; try, if isfield(G,'TR') && ~isempty(G.TR), TR=double(G.TR(1)); end, catch, end
+try, if (~isfinite(TR)||TR<=0) && isfield(G,'tsec') && numel(G.tsec)>1, TR=median(diff(double(G.tsec(:)))); end, catch, end
+try, if (~isfinite(TR)||TR<=0) && isfield(G,'tMin') && numel(G.tMin)>1, TR=60*median(diff(double(G.tMin(:)))); end, catch, end
+if ~isfinite(TR)||TR<=0, TR=1; end
+end
+
+function U=localGA_getUnderlayStackV6(G,mode,nY,nX,nZ)
+U=[]; mode=lower(strtrim(mode));
+try
+    if isfield(G,'underlays') && isstruct(G.underlays)
+        if strcmp(mode,'selected') && isfield(G,'underlaySelectedMode'), mode=lower(strtrim(char(G.underlaySelectedMode))); end
+        order={mode,'normal','histology','vascular','regions'};
+        for k=1:numel(order)
+            fn=order{k}; if isempty(fn), continue; end
+            if isfield(G.underlays,fn)
+                E=G.underlays.(fn); if isstruct(E) && isfield(E,'data'), U=E.data; else, U=E; end
+                if ~isempty(U), break; end
+            end
+        end
+    end
+catch, U=[]; end
+if isempty(U)
+    flds={'underlayAtlas','underlay2D','underlayAtlas2D','brainImage','commonUnderlay','bg','functional4D'};
+    for i=1:numel(flds), if isfield(G,flds{i}) && ~isempty(G.(flds{i})), U=G.(flds{i}); break; end, end
+end
+if isempty(U), U=zeros(nY,nX,nZ); end
+U=localGA_fitUnderlayV6(U,nY,nX,nZ);
+end
+
+function U=localGA_fitUnderlayV6(U,nY,nX,nZ)
+U=squeeze(double(U)); U(~isfinite(U))=0;
+if ndims(U)==2
+    U2=localGA_resize2V6(U,nY,nX); U=repmat(U2,[1 1 nZ]); return;
+end
+if ndims(U)==3
+    if size(U,3)==3 && nZ==1, U=mean(U,3); U=localGA_resize2V6(U,nY,nX); U=reshape(U,[nY nX 1]); return; end
+    V=zeros(nY,nX,size(U,3)); for z=1:size(U,3), V(:,:,z)=localGA_resize2V6(U(:,:,z),nY,nX); end
+    if size(V,3)==nZ, U=V; else, idx=round(linspace(1,size(V,3),nZ)); U=V(:,:,idx); end
+    return;
+end
+if ndims(U)==4
+    V=mean(U,4); U=localGA_fitUnderlayV6(V,nY,nX,nZ); return;
+end
+U=zeros(nY,nX,nZ);
+end
+
+function Xo=localGA_fitPSCToTargetV6(X,nY,nX,nZ,nT)
+Xo=zeros(nY,nX,nZ,nT);
+for z=1:nZ
+    zz=min(z,size(X,3));
+    for t=1:nT
+        tt=min(t,size(X,4)); Xo(:,:,z,t)=localGA_resize2V6(X(:,:,zz,tt),nY,nX);
+    end
+end
+end
+
+function B=localGA_resize2V6(A,nY,nX)
+A=double(A); if size(A,1)==nY && size(A,2)==nX, B=A; return; end
+try, B=imresize(A,[nY nX],'bilinear'); catch, [Y,X]=size(A); [xq,yq]=meshgrid(linspace(1,X,nX),linspace(1,Y,nY)); B=interp2(A,xq,yq,'linear',0); end
+end
+
+function opts=localGA_readDisplayOptsV6(S)
+opts = struct();
+opts.caxis = [0 100];
+opts.negCaxis = [-100 0];
+opts.threshold = 0;
+opts.alphaPercent = 100;
+opts.alphaModOn = true;
+opts.modMin = 10;
+opts.modMax = 20;
+opts.sigma = 0;
+opts.polarity = 'Positive only';
+opts.underlayMode = 'selected';
+opts.baseWin = [20 40];
+
+% Positive caxis from GroupAnalysis GUI.
+try, if isfield(S,'mapCaxis') && numel(S.mapCaxis)>=2, opts.caxis=double(S.mapCaxis(1:2)); end, catch, end
+try
+    if isfield(S,'hMapCaxis') && ishghandle(S.hMapCaxis)
+        opts.caxis = localGA_parseRangeV6(get(S.hMapCaxis,'String'),opts.caxis);
+    end
+catch
+end
+
+% Negative caxis if present; otherwise mirror positive range.
+negFound = false;
+try, if isfield(S,'mapNegCaxis') && numel(S.mapNegCaxis)>=2, opts.negCaxis=double(S.mapNegCaxis(1:2)); negFound=true; end, catch, end
+try, if ~negFound && isfield(S,'mapNegativeCaxis') && numel(S.mapNegativeCaxis)>=2, opts.negCaxis=double(S.mapNegativeCaxis(1:2)); negFound=true; end, catch, end
+try
+    if ~negFound && isfield(S,'hMapNegCaxis') && ishghandle(S.hMapNegCaxis)
+        opts.negCaxis = localGA_parseRangeV6(get(S.hMapNegCaxis,'String'),opts.negCaxis);
+        negFound = true;
+    end
+catch
+end
+if ~negFound
+    mx = max(abs(opts.caxis));
+    if ~isfinite(mx) || mx <= 0, mx = 100; end
+    opts.negCaxis = [-mx 0];
+end
+if opts.negCaxis(1) > opts.negCaxis(2), opts.negCaxis = fliplr(opts.negCaxis); end
+if opts.negCaxis(2) > 0 && opts.negCaxis(1) >= 0
+    opts.negCaxis = [-max(abs(opts.negCaxis)) 0];
+end
+
+try, if isfield(S,'mapThreshold'), opts.threshold=double(S.mapThreshold(1)); end, catch, end
+try, if isfield(S,'mapModMin'), opts.modMin=double(S.mapModMin(1)); end, catch, end
+try, if isfield(S,'mapModMax'), opts.modMax=double(S.mapModMax(1)); end, catch, end
+try, if isfield(S,'hMapModMin') && ishghandle(S.hMapModMin), opts.modMin=str2double(get(S.hMapModMin,'String')); end, catch, end
+try, if isfield(S,'hMapModMax') && ishghandle(S.hMapModMax), opts.modMax=str2double(get(S.hMapModMax,'String')); end, catch, end
+try, if isfield(S,'mapSigma'), opts.sigma=double(S.mapSigma(1)); end, catch, end
+
+% Alpha modulation ON/OFF, compatible with current and future GUI fields.
+try, if isfield(S,'mapAlphaModOn'), opts.alphaModOn=logical(S.mapAlphaModOn); end, catch, end
+try, if isfield(S,'alphaModOn'), opts.alphaModOn=logical(S.alphaModOn); end, catch, end
+try, if isfield(S,'hMapAlphaMod') && ishghandle(S.hMapAlphaMod), opts.alphaModOn=logical(get(S.hMapAlphaMod,'Value')); end, catch, end
+try, if isfield(S,'hAlphaMod') && ishghandle(S.hAlphaMod), opts.alphaModOn=logical(get(S.hAlphaMod,'Value')); end, catch, end
+
+% Polarity from GUI.
+try, if isfield(S,'mapPolarity') && ~isempty(S.mapPolarity), opts.polarity=char(S.mapPolarity); end, catch, end
+try
+    if isfield(S,'hMapPolarity') && ishghandle(S.hMapPolarity)
+        items = get(S.hMapPolarity,'String');
+        val = get(S.hMapPolarity,'Value');
+        if iscell(items), opts.polarity = items{val}; else, opts.polarity = strtrim(items(val,:)); end
+    end
+catch
+end
+
+% Alpha percent.
+try, if isfield(S,'mapAlphaPercent'), opts.alphaPercent=double(S.mapAlphaPercent(1)); end, catch, end
+try, if isfield(S,'mapAlphaPct'), opts.alphaPercent=double(S.mapAlphaPct(1)); end, catch, end
+try, if isfield(S,'alphaPercent'), opts.alphaPercent=double(S.alphaPercent(1)); end, catch, end
+try, if isfield(S,'mapAlpha') && S.mapAlpha <= 1, opts.alphaPercent=100*double(S.mapAlpha(1)); end, catch, end
+
+if ~isfinite(opts.alphaPercent), opts.alphaPercent=100; end
+opts.alphaPercent=max(0,min(100,opts.alphaPercent));
+if ~isfinite(opts.modMin), opts.modMin=10; end
+if ~isfinite(opts.modMax), opts.modMax=20; end
+if opts.modMax<opts.modMin, tmp=opts.modMin; opts.modMin=opts.modMax; opts.modMax=tmp; end
+if ~isfinite(opts.sigma), opts.sigma = 0; end
+end
+
+function [rows,bfs]=localGA_collectBundlesV6(S)
+rows=[]; bfs={}; seen={};
+if ~isfield(S,'subj') || isempty(S.subj), return; end
+for r=1:size(S.subj,1)
+    use=true; try, use=localGA_toLogicalV6(S.subj{r,1}); catch, end
+    if ~use, continue; end
+    bf=''; try, bf=strtrim(char(S.subj{r,8})); catch, end
+    if isempty(bf) || exist(bf,'file')~=2, continue; end
+    key=lower(strrep(bf,'/','\'));
+    if any(strcmp(seen,key)), continue; end
+    seen{end+1}=key; rows(end+1)=r; bfs{end+1}=bf; %#ok<AGROW>
+end
+end
+
+function ri=localGA_rowInfoV6(S,row,bf,G)
+ri=struct('row',row,'animal','','condition','','group','','bundleFile',bf);
+try, ri.animal=strtrim(char(S.subj{row,2})); catch, end
+try, ri.group=strtrim(char(S.subj{row,5})); catch, end
+try, ri.condition=strtrim(char(S.subj{row,6})); catch, end
+try, if isempty(ri.animal) && isfield(G,'animalID'), ri.animal=char(G.animalID); end, catch, end
+if isempty(ri.animal), [~,ri.animal]=fileparts(bf); end
+end
+
+function tf=localGA_toLogicalV6(x)
+if islogical(x), tf=logical(x(1)); elseif isnumeric(x), tf=isfinite(x(1)) && x(1)~=0; else, s=lower(strtrim(char(x))); tf=any(strcmp(s,{'1','true','yes','y','on'})); end
+end
+
+function idx=localGA_secToIdxV6(win,TR,nT)
+idx=[max(1,min(nT,floor(win(1)/TR)+1)) max(1,min(nT,floor(win(2)/TR)+1))]; if idx(2)<idx(1), idx=fliplr(idx); end
+end
+
+function r=localGA_parseRangeV6(s,fb)
+r = fb;
+try
+    s = strtrim(char(s));
+    s = regexprep(s,'(?<=\d)\s*-\s*(?=\d)',' ');
+    tok = regexp(s,'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?','match');
+    if numel(tok) >= 2
+        v1 = str2double(tok{1});
+        v2 = str2double(tok{2});
+        if isfinite(v1) && isfinite(v2)
+            r = [v1 v2];
+        end
+    end
+catch
+    r = fb;
+end
+if numel(r) < 2 || any(~isfinite(r(1:2)))
+    r = fb;
+end
+if r(2)<r(1), r=fliplr(r); end
+end
+
+function vals=localGA_parseNumListV6(s,fb)
+try, vals=eval(['[' char(s) ']']); vals=vals(:)'; vals=vals(isfinite(vals)); catch, vals=fb; end
+end
+
+function d=localGA_smartStartDirV6(S,bf)
+d=pwd; try, [p,~,~]=fileparts(bf); if exist(p,'dir')==7, d=p; end, catch, end
+try, if isfield(S,'outDir') && exist(S.outDir,'dir')==7, d=S.outDir; end, catch, end
+end
+
+function s=localGA_phaseLabelV6(s0,s1,inj)
+if ~isfinite(inj), s=sprintf('%.1f min',s0/60); elseif s1<=inj, s='Baseline'; elseif s0<inj && s1>inj, s='Injection'; else, s=sprintf('PI %.2f-%.2f min',(s0-inj)/60,(s1-inj)/60); end
+end
+
+function q=localGA_prctileV6(v,p)
+v=sort(double(v(:))); v=v(isfinite(v)); if isempty(v), q=0; return; end; n=numel(v); k=1+(n-1)*(p/100); k1=max(1,min(n,floor(k))); k2=max(1,min(n,ceil(k))); if k1==k2, q=v(k1); else, q=v(k1)+(k-k1)*(v(k2)-v(k1)); end
+end
+
+function tf=localGA_containsV6(s,pat)
+tf=~isempty(strfind(lower(char(s)),lower(char(pat))));
+end
+
+function B=localGA_smooth2V6(A,sigma)
+try, B=imgaussfilt(A,sigma); return; catch, end
+if sigma<=0, B=A; return; end; r=max(1,ceil(3*sigma)); x=-r:r; g=exp(-(x.^2)/(2*sigma^2)); g=g/sum(g); B=conv2(conv2(double(A),g,'same'),g','same');
+end
+
+function localGA_mkdirV6(d), if exist(d,'dir')~=7, mkdir(d); end, end
+function n=localGA_localNameV6(f), [~,n,e]=fileparts(f); n=[n e]; end
+function s=localGA_stripExtV6(s), [~,s]=fileparts(s); end
+function localGA_setStatusBestEffortV6(opts,varargin)
+try
+    msg = sprintf(varargin{:});
+catch
+    try, msg = char(varargin{1}); catch, msg = ''; end
+end
+if isempty(msg), return; end
+try, fprintf('\n[GA PPT] %s\n',msg); catch, end
+try
+    if isfield(opts,'hFig') && ishghandle(opts.hFig)
+        hFig0 = opts.hFig;
+        hs = findall(hFig0,'Style','text');
+        for ii=1:numel(hs)
+            try
+                tag = get(hs(ii),'Tag');
+                str = get(hs(ii),'String');
+                if ~isempty(strfind(lower(tag),'status')) || ~isempty(strfind(lower(str),'ready')) || ~isempty(strfind(lower(str),'export'))
+                    set(hs(ii),'String',msg);
+                    break;
+                end
+            catch
+            end
+        end
+    end
+catch
+end
+drawnow;
+end
+
+%% END_LOCAL_GA_MOTOR_EXPORT_INTEGRATED_V6
