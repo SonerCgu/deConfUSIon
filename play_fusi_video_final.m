@@ -3063,6 +3063,16 @@ end
 % SMALL HELPERS
 % =========================================================
     function E = extractGroupVideoBundleStruct(S)
+
+    try
+        if exist('GA_video_bundle_fix_v5','file') == 2
+            E = GA_video_bundle_fix_v5('extract',S);
+            return;
+        end
+    catch ME_v5_extract
+        try, fprintf('GA_video_bundle_fix_v5 extract fallback: %s\n',ME_v5_extract.message); catch, end
+    end
+
     if isfield(S,'E') && isstruct(S.E) && isfield(S.E,'kind') && ...
             strcmpi(safeStr(S.E.kind),'GA_GROUP_VIDEO_EXPORT')
         E = S.E;
@@ -3271,6 +3281,16 @@ end
         end
 
         if isstruct(maskIn)
+
+            try
+                if exist('GA_video_bundle_fix_v5','file') == 2
+                    [maskOut, maskIsIncludeOut, bgOut, note, handled_v5] = GA_video_bundle_fix_v5('mask',S,bgIn,ny0,nx0,nZ0,nVols0,slice0);
+                    if handled_v5, return; end
+                end
+            catch ME_v5_mask
+                try, fprintf('GA_video_bundle_fix_v5 mask fallback: %s\n',ME_v5_mask.message); catch, end
+            end
+
             S = maskIn;
             if isfield(S,'maskBundle') && isstruct(S.maskBundle) && ~isempty(S.maskBundle)
                 S = S.maskBundle;

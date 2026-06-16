@@ -37,7 +37,7 @@ switch key
         E = localBuildGroupAnalysisVideoExportGA(varargin{:});
         varargout = localPackOut(nargout, E);
     case 'onexportgroupmappptfrommain'
-        GA_exportGroupAnalysisPPTBundleFix_20260511(varargin{:});
+        localExportGroupMapPPTCompat(varargin{:});
         varargout = {};
     otherwise
         error('Unsupported GroupAnalysis_Map action: %s', actionIn);
@@ -90,7 +90,9 @@ end
 end
 
 function [mapNow, winInfoTxt] = localBuildPreviewMapFromBundle(S, G)
+% GA_STEPMOTOR_SCM_MAP_PATCH_V1
 winInfoTxt = '';
+G = localApplySliceFromStateToBundle(S,G);
 src = localGetCharField(S,'mapSource','Recompute from exported PSC');
 useGlobal = localGetLogicalField(S,'mapUseGlobalWindows',true);
 sigma = localGetNumField(S,'mapSigma',0);
@@ -118,7 +120,7 @@ mapNow(~isfinite(mapNow)) = 0;
 end
 
 function tf = localHasExportedMap(G)
-names = {'scmMapAtlas','mapAtlas','pscMapAtlas','scmMap','PSCmap','pscMap','map','overlay2D','groupMap2D'};
+names = {'scmMapSignedAtlas','scmMapAtlas','mapAtlas','pscMapAtlas','scmMap','PSCmap','pscMap','map','scmMapDisplayAtlas','overlay2D','groupMap2D'};
 tf = false;
 for i = 1:numel(names)
     if isfield(G,names{i}) && ~isempty(G.(names{i}))
@@ -128,7 +130,7 @@ end
 end
 
 function M = localGetExportedMap(G)
-names = {'scmMapAtlas','mapAtlas','pscMapAtlas','scmMap','PSCmap','pscMap','map','overlay2D','groupMap2D'};
+names = {'scmMapSignedAtlas','scmMapAtlas','mapAtlas','pscMapAtlas','scmMap','PSCmap','pscMap','map','scmMapDisplayAtlas','overlay2D','groupMap2D'};
 for i = 1:numel(names)
     if isfield(G,names{i}) && ~isempty(G.(names{i}))
         M = localSqueeze2D(G.(names{i}),G);
@@ -139,55 +141,217 @@ error('No exported map field found.');
 end
 
 function map2 = localRecomputeMapFromPSC(G,bw,sw,sigma)
+% Integrated V6 robust for single-slice [Y X T], step-motor [Y X Z T], and static maps.
 PSC = double(G.pscAtlas4D);
+PSC(~isfinite(PSC)) = 0;
 TR = localGetNumField(G,'TR',NaN);
-if ~isfinite(TR) || TR <= 0, error('Bundle has no valid TR.'); end
+if ~isfinite(TR) || TR <= 0
+    try, if isfield(G,'tsec') && numel(G.tsec)>1, TR = median(diff(double(G.tsec(:)))); end, catch, end
+end
+if ~isfinite(TR) || TR <= 0, TR = 1; end
 if ndims(PSC) == 4
-    z = localPickZ(G,size(PSC,3));
+    z = localPickZ(G,size(PSC,3)); z = max(1,min(size(PSC,3),round(z)));
     P = squeeze(PSC(:,:,z,:));
 elseif ndims(PSC) == 3
     P = PSC;
 elseif ndims(PSC) == 2
-    map2 = PSC; return;
+    map2 = PSC; map2(~isfinite(map2)) = 0; return;
 else
-    error('Unsupported pscAtlas4D dimensionality.');
+    error('Unsupported pscAtlas4D dimensionality: %d', ndims(PSC));
 end
-if ndims(P) ~= 3, error('Selected PSC data is not [Y X T].'); end
+if ndims(P) == 2
+    map2 = P; map2(~isfinite(map2)) = 0; return;
+end
+if ndims(P) ~= 3, error('Selected PSC data is not [Y X T]. Size: %s', mat2str(size(P))); end
 T = size(P,3);
-b0 = max(1,min(T,floor(bw(1)/TR)+1));
-b1 = max(1,min(T,floor(bw(2)/TR)+1));
-s0 = max(1,min(T,floor(sw(1)/TR)+1));
-s1 = max(1,min(T,floor(sw(2)/TR)+1));
+if T < 2, map2 = P(:,:,1); map2(~isfinite(map2))=0; return; end
+if numel(bw)<2 || any(~isfinite(bw(1:2))), bw = [0 max(TR,0.2*T*TR)]; end
+if numel(sw)<2 || any(~isfinite(sw(1:2))), sw = [max(0,0.7*T*TR) T*TR]; end
+b0 = max(1,min(T,floor(bw(1)/TR)+1)); b1 = max(1,min(T,floor(bw(2)/TR)+1));
+s0 = max(1,min(T,floor(sw(1)/TR)+1)); s1 = max(1,min(T,floor(sw(2)/TR)+1));
 if b1 < b0, tmp=b0; b0=b1; b1=tmp; end
 if s1 < s0, tmp=s0; s0=s1; s1=tmp; end
-baseMap = mean(P(:,:,b0:b1),3);
-sigMap  = mean(P(:,:,s0:s1),3);
+baseMap = mean(P(:,:,b0:b1),3); sigMap = mean(P(:,:,s0:s1),3);
 map2 = sigMap - baseMap;
 if sigma > 0, map2 = localSmooth2D(map2,sigma); end
 map2(~isfinite(map2)) = 0;
 end
 
 function U = localResolvePreviewUnderlay(S,G,mapNow)
+G = localApplySliceFromStateToBundle(S,G);
 targetSz = size(mapNow); targetSz = targetSz(1:2);
 mode = localGetCharField(S,'mapUnderlayMode','Bundle underlay');
+
 if strcmpi(mode,'Loaded custom underlay') && isfield(S,'mapLoadedUnderlay') && ~isempty(S.mapLoadedUnderlay)
-    U = localAnyTo2D(S.mapLoadedUnderlay,targetSz,G); return;
+    U = localAnyTo2D(S.mapLoadedUnderlay,targetSz,G);
+    return;
 end
+
+% New SCM bundle underlay library exported by SCM_gui.
+bundleMode = '';
+mlow = lower(strtrimSafeLocal(mode));
+if ~isempty(strfind(mlow,'normal')),   bundleMode = 'normal';   end
+if ~isempty(strfind(mlow,'histology')), bundleMode = 'histology'; end
+if ~isempty(strfind(mlow,'vascular')),  bundleMode = 'vascular';  end
+if ~isempty(strfind(mlow,'regions')),   bundleMode = 'regions';   end
+if isempty(bundleMode) && ~isempty(strfind(mlow,'bundle'))
+    bundleMode = 'selected';
+end
+
+if ~isempty(bundleMode)
+    U = localGetBundleUnderlayByMode(G,bundleMode,targetSz);
+    if ~isempty(U)
+        return;
+    end
+end
+
 names = {'underlay2D','underlayAtlas2D','underlayAtlas','commonUnderlay','brainImage','bg','bgAtlas','meanAtlas','anatomyAtlas'};
 U = [];
 for i = 1:numel(names)
     if isfield(G,names{i}) && ~isempty(G.(names{i}))
-        U = G.(names{i}); break;
+        U = G.(names{i});
+        break;
     end
 end
 if isempty(U), U = zeros(targetSz); end
 U = localAnyTo2D(U,targetSz,G);
 end
 
-function h = localRenderPSCOverlay(ax,U,M,R,styleName,showCB)
-% Strict SCM-style renderer with UNDERLAY-BASED OVERLAY MASKING.
-% This removes outside-brain spots when using a custom underlay/overlay.
+function U = localGetBundleUnderlayByMode(G,modeName,targetSz)
+U = [];
+try
+    if ~isfield(G,'underlays') || ~isstruct(G.underlays)
+        return;
+    end
 
+    modeName = lower(strtrimSafeLocal(modeName));
+    if strcmpi(modeName,'selected')
+        modeName = '';
+        try, modeName = lower(strtrimSafeLocal(G.underlaySelectedMode)); catch, end
+        if isempty(modeName), modeName = 'normal'; end
+    end
+
+    order = {modeName,'normal','histology','vascular','regions'};
+    for kk = 1:numel(order)
+        fn = order{kk};
+        if isempty(fn), continue; end
+        if isfield(G.underlays,fn)
+            E = G.underlays.(fn);
+            if isstruct(E) && isfield(E,'data') && ~isempty(E.data)
+                U = localAnyTo2D(E.data,targetSz,G);
+                return;
+            elseif isnumeric(E) || islogical(E)
+                U = localAnyTo2D(E,targetSz,G);
+                return;
+            end
+        end
+    end
+catch
+    U = [];
+end
+end
+function mode = localMapPolarityModeV11(R)
+% SCM_gui signMode equivalent for GroupAnalysis_Map display.
+mode = 1;
+try
+    pol = lower(strtrim(char(localGetCharField(R,'polarity','Positive only'))));
+catch
+    pol = 'positive only';
+end
+if ~isempty(strfind(pol,'negative')) && isempty(strfind(pol,'positive'))
+    mode = 2;
+elseif ~isempty(strfind(pol,'+')) || ~isempty(strfind(pol,'both')) || ~isempty(strfind(pol,'pos/neg')) || ~isempty(strfind(pol,'positive + negative'))
+    mode = 3;
+else
+    mode = 1;
+end
+end
+
+function [posLo,posHi,negHi] = localMapColorLimitsV11(R)
+posLo = 0; posHi = 100; negHi = 100;
+try
+    ca = localGetVecField(R,'caxis',[0 100]);
+    ca = double(ca(:)');
+    if numel(ca) >= 2 && all(isfinite(ca(1:2)))
+        posLo = ca(1); posHi = ca(2);
+    end
+catch
+end
+try
+    nca = localGetVecField(R,'negCaxis',[-max(abs([posLo posHi 100])) 0]);
+    nca = double(nca(:)');
+    if numel(nca) >= 2 && all(isfinite(nca(1:2)))
+        negHi = max(abs(nca(1:2)));
+    end
+catch
+end
+if ~isfinite(posLo), posLo = 0; end
+if ~isfinite(posHi) || posHi <= posLo
+    tmp = max(abs([posLo posHi 100]));
+    if ~isfinite(tmp) || tmp <= 0, tmp = 100; end
+    posLo = 0; posHi = tmp;
+end
+if ~isfinite(negHi) || negHi <= 0
+    negHi = max(abs([posLo posHi 100]));
+end
+if ~isfinite(negHi) || negHi <= 0, negHi = 100; end
+end
+
+function [posCM,negMagCM,signedCM] = localMapSCMColormapsV11(n)
+if nargin < 1 || isempty(n), n = 256; end
+n = max(2,round(n));
+if exist('blackbdy_iso','file') == 2
+    posCM = blackbdy_iso(n);
+else
+    posCM = hot(n);
+end
+posCM = min(max(posCM,0),1);
+if ~isempty(posCM), posCM(1,:) = [0 0 0]; end
+nNeg = floor(n/2);
+nPos = n - nNeg;
+if exist('winter_brain_fsl','file') == 2
+    negSigned = winter_brain_fsl(max(nNeg,2));
+else
+    negSigned = winter(max(nNeg,2));
+end
+negSigned = negSigned(1:nNeg,:);
+if nNeg > 0
+    negSigned = negSigned .* repmat(linspace(1,0,nNeg)',1,3);
+    negSigned(end,:) = [0 0 0];
+end
+if exist('blackbdy_iso','file') == 2
+    posSigned = blackbdy_iso(max(nPos,2));
+else
+    posSigned = hot(max(nPos,2));
+end
+posSigned = posSigned(1:nPos,:);
+if ~isempty(posSigned), posSigned(1,:) = [0 0 0]; end
+signedCM = min(max([negSigned; posSigned],0),1);
+negMagCM = flipud(negSigned);
+if isempty(negMagCM)
+    if exist('winter_brain_fsl','file') == 2, negMagCM = winter_brain_fsl(n); else, negMagCM = winter(n); end
+end
+negMagCM = min(max(negMagCM,0),1);
+if ~isempty(negMagCM), negMagCM(1,:) = [0 0 0]; end
+end
+
+function RGB = localMapColorizeV11(V,lo,hi,CM)
+V = double(V);
+if hi <= lo, hi = lo + eps; end
+t = (V - lo) ./ max(eps,(hi-lo));
+t(~isfinite(t)) = 0;
+t = min(max(t,0),1);
+idx = 1 + round(t .* (size(CM,1)-1));
+idx = max(1,min(size(CM,1),idx));
+RGB = zeros([size(V) 3]);
+for cc=1:3
+    C = CM(:,cc);
+    RGB(:,:,cc) = reshape(C(idx(:)),size(V));
+end
+end
+
+function h = localRenderPSCOverlay(ax,U,M,R,styleName,showCB)
+% V11: exact SCM_gui-style sign handling and alpha modulation for live GroupAnalysis display.
 if nargin < 6, showCB = true; end
 if nargin < 5 || isempty(styleName), styleName = 'Dark'; end
 if isempty(ax) || ~ishghandle(ax)
@@ -202,113 +366,98 @@ if isfield(R,'flipUDPreview') && logical(R.flipUDPreview)
     U = localFlipUD(U);
 end
 
-% Prepare underlay.
 U = localAnyTo2D(U,size(M),struct());
 Ug = localToGray(U);
 Urgb = localToRGB(U);
 
-% Build a mask from the underlay.
-% Pixels outside the underlay support will suppress overlay visibility.
-maskThr = 0.03;
-try
-    gt = graythresh(Ug);
-    if isfinite(gt)
-        maskThr = max(maskThr, 0.5 * gt);
-    end
-catch
-end
-
-brainMask = Ug > maskThr;
+brainMask = Ug > max(0.02,0.15*max(Ug(:)));
 try, brainMask = imfill(brainMask,'holes'); catch, end
-try, brainMask = bwareaopen(brainMask, max(10, round(0.001 * numel(brainMask)))); catch, end
-
-% Fail-safe: if masking became too strict, do not destroy the display.
-if nnz(brainMask) < 10
-    brainMask = true(size(Ug));
-end
+try, brainMask = bwareaopen(brainMask,max(10,round(0.001*numel(brainMask)))); catch, end
+if nnz(brainMask) < 10, brainMask = true(size(Ug)); end
 
 cla(ax);
 try, delete(findall(ancestor(ax,'figure'),'Type','ColorBar')); catch, end
-
-% Draw underlay first.
 image(ax,Urgb);
-axis(ax,'image');
-axis(ax,'off');
-hold(ax,'on');
+axis(ax,'image'); axis(ax,'off'); hold(ax,'on');
 
-% Display / alpha settings.
-cax = localGetVecField(R,'caxis',[0 100]);
+[posLo,posHi,negHi] = localMapColorLimitsV11(R);
+mode = localMapPolarityModeV11(R);
+[posCM,negMagCM,signedCM] = localMapSCMColormapsV11(256);
+
+switch mode
+    case 1
+        showMask = M > 0;
+        dispMap = M;
+        CM = posCM; CA = [posLo posHi];
+        RGB = localMapColorizeV11(dispMap,posLo,posHi,posCM);
+    case 2
+        showMask = M < 0;
+        dispMap = abs(min(M,0));
+        CM = negMagCM; CA = [0 negHi];
+        RGB = localMapColorizeV11(dispMap,0,negHi,negMagCM);
+    otherwise
+        showMask = isfinite(M) & M ~= 0;
+        dispMap = M;
+        CM = signedCM; CA = [-negHi posHi];
+        RGB = localMapColorizeV11(dispMap,-negHi,posHi,signedCM);
+end
+
 thr = abs(localGetNumField(R,'threshold',0));
-modMin = localGetNumField(R,'modMin',10);
-modMax = localGetNumField(R,'modMax',20);
-alphaPct = localGetNumField(R,'alphaPercent',100);
-alphaPct = max(0,min(100,alphaPct));
+thrMask = double((abs(M) >= thr) & showMask) .* double(brainMask);
+
+a = localGetNumField(R,'alphaPercent',100);
+a = max(0,min(100,a))/100;
 alphaModOn = localGetLogicalField(R,'alphaModOn',true);
-
-if modMax < modMin
-    tmp = modMin;
-    modMin = modMax;
-    modMax = tmp;
-end
-if modMax <= modMin
-    modMax = modMin + eps;
-end
-
-% Positive-only overlay like the SCM blackbody display.
-D = M;
-mag = abs(M);
-showMask = isfinite(M) & (M > thr);
-
-% SCM-style alpha ramp.
-effLo = max(modMin,thr);
-effHi = modMax;
-if effHi <= effLo
-    effHi = effLo + eps;
-end
+mMin = localGetNumField(R,'modMin',15);
+mMax = localGetNumField(R,'modMax',30);
+if mMax < mMin, tmp=mMin; mMin=mMax; mMax=tmp; end
 
 if ~alphaModOn
-    A = (alphaPct/100) .* double(showMask);
+    A = a .* thrMask;
 else
-    ramp = (mag - effLo) ./ max(eps,(effHi - effLo));
-    ramp(~isfinite(ramp)) = 0;
-    ramp = min(max(ramp,0),1);
-    ramp(mag <= effLo) = 0;
-    A = (alphaPct/100) .* ramp .* double(showMask);
+    effLo = max(mMin,thr);
+    effHi = mMax;
+    mag = abs(M);
+    mag(~showMask) = NaN;
+    if ~isfinite(effHi) || effHi <= effLo
+        tmpv = mag(isfinite(mag));
+        if isempty(tmpv), effHi = effLo + eps; else, effHi = max(tmpv); end
+    end
+    if ~isfinite(effHi) || effHi <= effLo, effHi = effLo + eps; end
+    modv = (abs(M) - effLo) ./ max(eps,(effHi-effLo));
+    modv(~isfinite(modv)) = 0;
+    modv = min(max(modv,0),1);
+    modv(~showMask) = 0;
+    if mode == 1
+        A = a .* modv .* thrMask;
+    else
+        A = a .* (0.20 + 0.80 .* modv) .* thrMask;
+    end
 end
-
-% IMPORTANT: apply underlay-derived brain mask here.
-A = A .* double(brainMask);
 
 A(~isfinite(A)) = 0;
 A = min(max(A,0),1);
-
-% Extra safety.
-A(mag <= effLo) = 0;
-D(A <= 0) = 0;
-
-% Draw overlay.
-h = imagesc(ax,D);
-set(h,'AlphaData',A);
-try, set(h,'AlphaDataMapping','none'); catch, end
-
-try, caxis(ax,cax); catch, end
-try
-    colormap(ax,localCmap(localGetCharField(R,'colormapName','blackbdy_iso'),256));
-catch
-    colormap(ax,hot(256));
+for cc=1:3
+    C = RGB(:,:,cc);
+    C(A <= 0) = 0;
+    RGB(:,:,cc) = C;
 end
 
+h = image(ax,RGB);
+set(h,'AlphaData',A);
+try, set(h,'AlphaDataMapping','none'); catch, end
+colormap(ax,CM);
+try, caxis(ax,CA); catch, end
 if showCB
     cb = colorbar(ax);
     try, set(cb,'Color',[1 1 1]); catch, end
 end
-
 if strcmpi(styleName,'Light')
     try, set(ax,'Color',[1 1 1]); catch, end
 else
     try, set(ax,'Color',[0 0 0]); catch, end
 end
-
+axis(ax,'image'); axis(ax,'off');
 hold(ax,'off');
 end
 
@@ -430,6 +579,50 @@ end
 end
 
 
+function G = localApplySliceFromStateToBundle(S,G)
+try
+    z = localGetNumField(S,'mapCurrentSlice',NaN);
+    if isfinite(z) && z >= 1
+        z = round(z);
+        G.currentSlice = z;
+        G.sliceIdx = z;
+        G.zIndex = z;
+        G.atlasSliceIndex = z;
+    end
+catch
+end
+end
+
+function localExportGroupMapPPTCompat(hFig,makePPT)
+% Compatibility handler for old map-backend PPT export action.
+if nargin < 2 || isempty(makePPT), makePPT = true; end
+if nargin < 1 || isempty(hFig) || ~ishghandle(hFig)
+    error('Invalid GroupAnalysis figure handle.');
+end
+try
+    GA_exportGroupMeanSCMBundle_Interactive(hFig,makePPT);
+catch ME
+    % If the exporter is only available as a local function inside GroupAnalysis.m,
+    % trigger the visible button callback instead.
+    if makePPT
+        h = findall(hFig,'String','Export PPT');
+    else
+        h = findall(hFig,'String','Export Data SCM');
+    end
+    if isempty(h)
+        rethrow(ME);
+    end
+    cb = get(h(1),'Callback');
+    if isa(cb,'function_handle')
+        feval(cb,h(1),[]);
+    elseif iscell(cb) && ~isempty(cb) && isa(cb{1},'function_handle')
+        feval(cb{1},h(1),[],cb{2:end});
+    else
+        rethrow(ME);
+    end
+end
+end
+
 function [M,U] = localApplyHemisphereFlip(S,rowIdx,M,U)
 mode = localGetCharField(S,'mapFlipMode','Off');
 if strcmpi(mode,'Off'), return; end
@@ -466,7 +659,7 @@ end
 
 function z = localPickZ(G,nZ)
 z = round(nZ/2);
-names = {'atlasSliceIndex','currentSlice','sliceIdx','zIndex'};
+names = {'currentSlice','sliceIdx','zIndex','atlasSliceIndex'};
 for i = 1:numel(names)
     try
         if isfield(G,names{i}) && ~isempty(G.(names{i}))
@@ -558,6 +751,8 @@ switch name
         cm = jet(n);
     case 'gray'
         cm = gray(n);
+    case 'winter'
+        cm = winter(n);
     otherwise
         cm = hot(n);
 end
@@ -572,21 +767,24 @@ B = conv2(conv2(double(A),g,'same'),g','same');
 end
 
 function M = localNanMean3(X)
-n = sum(isfinite(X),3);
-X(~isfinite(X)) = 0;
-M = sum(X,3)./max(1,n);
-M(n==0) = NaN;
+X = double(X);
+if isempty(X), M = []; return; end
+if ndims(X) < 3, M = X; return; end
+n = sum(isfinite(X),3); X(~isfinite(X)) = 0;
+M = sum(X,3)./max(1,n); M(n==0) = NaN;
 end
 
 function M = localNanMedian3(X)
-sz = size(X);
-Y = reshape(X,[],sz(3));
-m = nan(size(Y,1),1);
+X = double(X);
+if isempty(X), M = []; return; end
+if ndims(X) < 3, M = X; return; end
+nY = size(X,1); nX = size(X,2); nN = size(X,3);
+Y = reshape(X,[],nN); m = nan(size(Y,1),1);
 for i = 1:size(Y,1)
     v = Y(i,:); v = v(isfinite(v));
     if ~isempty(v), m(i) = median(v); end
 end
-M = reshape(m,sz(1),sz(2));
+M = reshape(m,nY,nX);
 end
 
 function s = localGetCharField(S,name,fb)

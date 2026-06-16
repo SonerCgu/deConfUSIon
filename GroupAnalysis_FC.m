@@ -211,16 +211,10 @@ for i = 1:numel(fileList)
     for j = 1:numel(B.subjects)
         subj = B.subjects(j);
 
-        if ~isfield(subj,'labels') || isempty(subj.labels)
-            continue;
-        end
-
-        if ~isfield(subj,'R') || isempty(subj.R)
-            continue;
-        end
+        if ~isfield(subj,'labels') || isempty(subj.labels), continue; end
+        if ~isfield(subj,'R')      || isempty(subj.R),      continue; end
 
         idx = idx + 1;
-
         FC.subjects(idx).sourceFile = fp;
 
         if isfield(subj,'name') && ~isempty(subj.name)
@@ -234,7 +228,6 @@ for i = 1:numel(fileList)
         else
             FC.subjects(idx).group = inferFCGroupFromText([FC.subjects(idx).name ' ' fp]);
         end
-
         if isempty(FC.subjects(idx).group) || strcmpi(FC.subjects(idx).group,'All')
             FC.subjects(idx).group = inferFCGroupFromText([FC.subjects(idx).name ' ' fp]);
         end
@@ -252,12 +245,57 @@ for i = 1:numel(fileList)
         if isfield(subj,'Z') && ~isempty(subj.Z)
             FC.subjects(idx).Z = double(subj.Z);
         else
-            Rtmp = double(subj.R);
-            Rtmp = max(-0.999999,min(0.999999,Rtmp));
+            Rtmp = max(-0.999999,min(0.999999,double(subj.R)));
             Ztmp = atanh(Rtmp);
             Ztmp(1:size(Ztmp,1)+1:end) = 0;
             FC.subjects(idx).Z = Ztmp;
         end
+
+        % Preserve step-motor / slice-specific FC fields.
+        FC.subjects(idx).isStepMotor3D = isfield(subj,'isStepMotor3D') && logical(subj.isStepMotor3D);
+        if isfield(subj,'nSlices') && ~isempty(subj.nSlices)
+            FC.subjects(idx).nSlices = double(subj.nSlices);
+        else
+            FC.subjects(idx).nSlices = [];
+        end
+        if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
+            FC.subjects(idx).sliceResults = subj.sliceResults;
+        else
+            FC.subjects(idx).sliceResults = struct([]);
+        end
+
+        % Preserve display-mode fields.
+        if isfield(subj,'displayMatrix') && ~isempty(subj.displayMatrix)
+            FC.subjects(idx).displayMatrix = double(subj.displayMatrix);
+        else
+            FC.subjects(idx).displayMatrix = FC.subjects(idx).R;
+        end
+        if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
+            FC.subjects(idx).displayZ = double(subj.displayZ);
+        else
+            FC.subjects(idx).displayZ = FC.subjects(idx).Z;
+        end
+        if isfield(subj,'displayNames') && ~isempty(subj.displayNames)
+            FC.subjects(idx).displayNames = subj.displayNames(:);
+        else
+            FC.subjects(idx).displayNames = FC.subjects(idx).names;
+        end
+        if isfield(subj,'displayLabels') && ~isempty(subj.displayLabels)
+            FC.subjects(idx).displayLabels = double(subj.displayLabels(:));
+        else
+            FC.subjects(idx).displayLabels = FC.subjects(idx).labels;
+        end
+
+        % Preserve provenance and rich payloads.
+        if isfield(subj,'TR') && ~isempty(subj.TR), FC.subjects(idx).TR = double(subj.TR); else, FC.subjects(idx).TR = []; end
+        if isfield(subj,'analysisDir') && ~isempty(subj.analysisDir), FC.subjects(idx).analysisDir = subj.analysisDir; else, FC.subjects(idx).analysisDir = ''; end
+        if isfield(subj,'meanTS'), FC.subjects(idx).meanTS = subj.meanTS; else, FC.subjects(idx).meanTS = []; end
+        if isfield(subj,'counts'), FC.subjects(idx).counts = subj.counts; else, FC.subjects(idx).counts = []; end
+        if isfield(subj,'timeIdx'), FC.subjects(idx).timeIdx = subj.timeIdx; else, FC.subjects(idx).timeIdx = []; end
+        if isfield(subj,'heatmap'), FC.subjects(idx).heatmap = subj.heatmap; else, FC.subjects(idx).heatmap = struct(); end
+        if isfield(subj,'compareROI'), FC.subjects(idx).compareROI = subj.compareROI; else, FC.subjects(idx).compareROI = struct(); end
+        if isfield(subj,'seedResults'), FC.subjects(idx).seedResults = subj.seedResults; else, FC.subjects(idx).seedResults = struct([]); end
+        if isfield(subj,'allEpochs'), FC.subjects(idx).allEpochs = subj.allEpochs; else, FC.subjects(idx).allEpochs = struct([]); end
     end
 end
 
