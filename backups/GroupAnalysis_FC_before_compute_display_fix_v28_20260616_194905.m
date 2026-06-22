@@ -3,6 +3,25 @@
 % FC group matrices are averaged/statistically compared in Fisher z space.
 % Convert back with tanh(Z) only for Pearson-r display if needed.
 function varargout = GroupAnalysis_FC(action, varargin)
+% FC_DIRECT_LOAD_DISPATCH_V27
+% Directly intercept FC bundle loading before any older dispatcher logic.
+try
+    if nargin >= 1
+        actionKeyV27 = lower(regexprep(strtrim(char(action)),'[^a-zA-Z0-9]',''));
+        if any(strcmp(actionKeyV27,{'loadfcgroupbundlesfromfiles','loadfcgroupbundlefromfiles','loadfcfiles','loadfcgroupbundles'}))
+            if nargout == 0
+                loadFCGroupBundlesFromFiles(varargin{:});
+            else
+                [varargout{1:nargout}] = loadFCGroupBundlesFromFiles(varargin{:});
+            end
+            return;
+        end
+    end
+catch ME_fc_direct_v27
+    rethrow(ME_fc_direct_v27);
+end
+% END_FC_DIRECT_LOAD_DISPATCH_V27
+
 
 if nargin < 1 || isempty(action)
     error('GroupAnalysis_FC requires an action string.');
@@ -135,67 +154,28 @@ for i = 1:numel(sub)
 end
 end
 
-function tf = isFCGroupBundleFile(fp)
-tf = false;
 
-if nargin < 1 || isempty(fp) || exist(fp,'file') ~= 2
-    return;
-end
 
-try
-    info = whos('-file',fp);
-    vars = {info.name};
-    if any(strcmp(vars,'fcBundle'))
-        tf = true;
-        return;
-    end
-catch
-end
 
-[~,nm,ext] = fileparts(fp);
-if strcmpi(ext,'.mat') && ~isempty(regexpi(nm,'^FC_GroupBundle_','once'))
-    tf = true;
-end
-end
-
-function [B, cache] = getCachedFCBundle(cache, fp)
-key = makeCacheKey('FCBUNDLE',fp);
-
-if isstruct(cache) && isfield(cache,'fcBundle') && isa(cache.fcBundle,'containers.Map')
-    try
-        if isKey(cache.fcBundle,key)
-            B = cache.fcBundle(key);
-            return;
-        end
-    catch
-    end
-end
-
-L = load(fp);
-
-if isfield(L,'fcBundle')
-    B = L.fcBundle;
-else
-    error('File does not contain variable fcBundle: %s', fp);
-end
-
-if ~isstruct(B) || ~isfield(B,'subjects')
-    error('Invalid FC group bundle: %s', fp);
-end
-
-if isstruct(cache) && isfield(cache,'fcBundle') && isa(cache.fcBundle,'containers.Map')
-    try
-        cache.fcBundle(key) = B;
-    catch
-    end
-end
-end
 
 function [FC, cache] = loadFCGroupBundlesFromFiles(fileList, cache)
+% Restored FC group-bundle loader V27.
+
+if nargin < 2 || isempty(cache)
+    cache = struct();
+end
+if nargin < 1 || isempty(fileList)
+    fileList = {};
+end
+if ischar(fileList)
+    fileList = {fileList};
+end
+
 FC = struct();
 FC.files = fileList(:);
 FC.subjects = struct([]);
 FC.nSubjects = 0;
+FC.loaded = false;
 
 idx = 0;
 
@@ -207,6 +187,10 @@ for i = 1:numel(fileList)
     end
 
     [B, cache] = getCachedFCBundle(cache, fp);
+
+    if ~isfield(B,'subjects') || isempty(B.subjects)
+        continue;
+    end
 
     for j = 1:numel(B.subjects)
         subj = B.subjects(j);
@@ -247,100 +231,124 @@ for i = 1:numel(fileList)
         else
             Rtmp = max(-0.999999,min(0.999999,double(subj.R)));
             Ztmp = atanh(Rtmp);
-            Ztmp(1:size(Ztmp,1)+1:end) = 0;
+            try
+                Ztmp(1:size(Ztmp,1)+1:end) = 0;
+            catch
+            end
             FC.subjects(idx).Z = Ztmp;
         end
 
-        % Preserve step-motor / slice-specific FC fields.
-        FC.subjects(idx).isStepMotor3D = isfield(subj,'isStepMotor3D') && logical(subj.isStepMotor3D);
+        FC.subjects(idx).isStepMotor3D = false;
+        try, FC.subjects(idx).isStepMotor3D = isfield(subj,'isStepMotor3D') && logical(subj.isStepMotor3D); catch, end
+
         if isfield(subj,'nSlices') && ~isempty(subj.nSlices)
             FC.subjects(idx).nSlices = double(subj.nSlices);
         else
             FC.subjects(idx).nSlices = [];
         end
+
         if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
             FC.subjects(idx).sliceResults = subj.sliceResults;
         else
             FC.subjects(idx).sliceResults = struct([]);
         end
 
-        % Preserve display-mode fields.
         if isfield(subj,'displayMatrix') && ~isempty(subj.displayMatrix)
             FC.subjects(idx).displayMatrix = double(subj.displayMatrix);
         else
             FC.subjects(idx).displayMatrix = FC.subjects(idx).R;
         end
+
         if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
             FC.subjects(idx).displayZ = double(subj.displayZ);
         else
             FC.subjects(idx).displayZ = FC.subjects(idx).Z;
         end
+
         if isfield(subj,'displayNames') && ~isempty(subj.displayNames)
             FC.subjects(idx).displayNames = subj.displayNames(:);
         else
             FC.subjects(idx).displayNames = FC.subjects(idx).names;
         end
+
         if isfield(subj,'displayLabels') && ~isempty(subj.displayLabels)
             FC.subjects(idx).displayLabels = double(subj.displayLabels(:));
         else
             FC.subjects(idx).displayLabels = FC.subjects(idx).labels;
         end
 
-        % Preserve provenance and rich payloads.
         if isfield(subj,'TR') && ~isempty(subj.TR), FC.subjects(idx).TR = double(subj.TR); else, FC.subjects(idx).TR = []; end
         if isfield(subj,'analysisDir') && ~isempty(subj.analysisDir), FC.subjects(idx).analysisDir = subj.analysisDir; else, FC.subjects(idx).analysisDir = ''; end
         if isfield(subj,'meanTS'), FC.subjects(idx).meanTS = subj.meanTS; else, FC.subjects(idx).meanTS = []; end
+        if isfield(subj,'roiTS'), FC.subjects(idx).roiTS = subj.roiTS; else, FC.subjects(idx).roiTS = []; end
+        if isfield(subj,'timeCourses'), FC.subjects(idx).timeCourses = subj.timeCourses; else, FC.subjects(idx).timeCourses = []; end
         if isfield(subj,'counts'), FC.subjects(idx).counts = subj.counts; else, FC.subjects(idx).counts = []; end
         if isfield(subj,'timeIdx'), FC.subjects(idx).timeIdx = subj.timeIdx; else, FC.subjects(idx).timeIdx = []; end
         if isfield(subj,'heatmap'), FC.subjects(idx).heatmap = subj.heatmap; else, FC.subjects(idx).heatmap = struct(); end
         if isfield(subj,'compareROI'), FC.subjects(idx).compareROI = subj.compareROI; else, FC.subjects(idx).compareROI = struct(); end
         if isfield(subj,'seedResults'), FC.subjects(idx).seedResults = subj.seedResults; else, FC.subjects(idx).seedResults = struct([]); end
         if isfield(subj,'allEpochs'), FC.subjects(idx).allEpochs = subj.allEpochs; else, FC.subjects(idx).allEpochs = struct([]); end
-        % TARGETED_FCGA_LOAD_SPATIAL_FULLNAMES_20260622
-        % Preserve full region names and spatial maps from FC bundles.
-        if isfield(subj,'fullNames') && ~isempty(subj.fullNames), FC.subjects(idx).fullNames = subj.fullNames(:); else, FC.subjects(idx).fullNames = {}; end
-        if isfield(subj,'sourceFile') && ~isempty(subj.sourceFile), FC.subjects(idx).roiSourceFile = subj.sourceFile; else, FC.subjects(idx).roiSourceFile = ''; end
-        if isfield(subj,'roiSourceFile') && ~isempty(subj.roiSourceFile), FC.subjects(idx).roiSourceFile = subj.roiSourceFile; end
-        FC.subjects(idx).bundleFile = fp;
-        spatialFields = {'roiMap','labelMap','parcelMap','labelMask','roiLabelMask','roiAtlas','atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};
-        for sf = 1:numel(spatialFields)
-            fn = spatialFields{sf};
-            try
-                if isfield(subj,fn) && ~isempty(subj.(fn))
-                    FC.subjects(idx).(fn) = subj.(fn);
-                elseif isfield(B,fn) && ~isempty(B.(fn))
-                    FC.subjects(idx).(fn) = B.(fn);
-                end
-            catch
-            end
-        end
-        try
-            if isfield(subj,'spatialMapNote'), FC.subjects(idx).spatialMapNote = subj.spatialMapNote;
-            elseif isfield(B,'spatialMapNote'), FC.subjects(idx).spatialMapNote = B.spatialMapNote; end
-        catch
-        end
+        try, FC.subjects(idx).fcMeta = subj; catch, end
     end
 end
 
 FC.nSubjects = idx;
-end
+FC.loaded = idx > 0;
 
-function names = makeDefaultFCNames(labels)
-names = cell(numel(labels),1);
-for i = 1:numel(labels)
-    names{i} = sprintf('ROI_%g',labels(i));
+if FC.nSubjects < 1
+    error('No valid FC subjects found in selected FC group bundle file(s).');
 end
 end
 
-function g = inferFCGroupFromText(txt)
-g = 'Unassigned';
+function [B, cache] = getCachedFCBundle(cache, fp)
+key = makeCacheKey('FCBUNDLE',fp);
 
-u = upper(strtrimSafe(txt));
+if isstruct(cache) && isfield(cache,'fcBundle') && isa(cache.fcBundle,'containers.Map')
+    try
+        if isKey(cache.fcBundle,key)
+            B = cache.fcBundle(key);
+            return;
+        end
+    catch
+    end
+end
 
-if contains(u,'PACAP') || contains(u,'GROUPA') || contains(u,'CONDA')
-    g = 'PACAP';
-elseif contains(u,'VEHICLE') || contains(u,'VEH') || contains(u,'CONTROL') || contains(u,'GROUPB') || contains(u,'CONDB')
-    g = 'Vehicle';
+L = load(fp);
+
+if isfield(L,'fcBundle')
+    B = L.fcBundle;
+elseif isfield(L,'FC') && isstruct(L.FC)
+    B = L.FC;
+elseif isfield(L,'subjects')
+    B = struct('subjects',L.subjects);
+else
+    error('File does not contain fcBundle/FC/subjects: %s', fp);
+end
+
+if ~isstruct(B) || ~isfield(B,'subjects')
+    error('Invalid FC group bundle: %s', fp);
+end
+
+if isstruct(cache) && isfield(cache,'fcBundle') && isa(cache.fcBundle,'containers.Map')
+    try
+        cache.fcBundle(key) = B;
+    catch
+    end
+end
+end
+
+function key = makeCacheKey(varargin)
+parts = cell(size(varargin));
+for ii = 1:numel(varargin)
+    parts{ii} = strtrimSafe(varargin{ii});
+end
+try
+    key = strjoin(parts,'||');
+catch
+    key = parts{1};
+    for ii = 2:numel(parts)
+        key = [key '||' parts{ii}]; %#ok<AGROW>
+    end
 end
 end
 
@@ -348,6 +356,12 @@ function s = strtrimSafe(x)
 try
     if isempty(x)
         s = '';
+    elseif ischar(x)
+        s = strtrim(x);
+    elseif iscell(x)
+        if isempty(x), s = ''; else, s = strtrimSafe(x{1}); end
+    elseif isnumeric(x) || islogical(x)
+        if isscalar(x), s = strtrim(num2str(x)); else, s = strtrim(mat2str(x)); end
     else
         s = strtrim(char(x));
     end
@@ -356,7 +370,49 @@ catch
 end
 end
 
-function key = makeCacheKey(varargin)
-parts = cellfun(@(x) strtrimSafe(x), varargin, 'UniformOutput', false);
-key = strjoin(parts,'||');
+function g = inferFCGroupFromText(txt0)
+g = 'Unassigned';
+u = upper(strtrimSafe(txt0));
+if isempty(u), return; end
+
+if ~isempty(strfind(u,'PACAP')) || ~isempty(strfind(u,'GROUPA')) || ~isempty(strfind(u,'CONDA'))
+    g = 'PACAP';
+elseif ~isempty(strfind(u,'VEHICLE')) || ~isempty(strfind(u,'VEH')) || ~isempty(strfind(u,'CONTROL')) || ~isempty(strfind(u,'GROUPB')) || ~isempty(strfind(u,'CONDB')) || ~isempty(strfind(u,'PBS')) || ~isempty(strfind(u,'ACSF'))
+    g = 'Vehicle';
 end
+end
+
+function names = makeDefaultFCNames(labels)
+labels = double(labels(:));
+names = cell(numel(labels),1);
+for ii = 1:numel(labels)
+    names{ii,1} = sprintf('ROI_%g',labels(ii));
+end
+end
+
+function tf = isFCGroupBundleFile(fp)
+tf = false;
+
+if nargin < 1 || isempty(fp) || exist(fp,'file') ~= 2
+    return;
+end
+
+try
+    info = whos('-file',fp);
+    vars = {info.name};
+    if any(strcmp(vars,'fcBundle')) || any(strcmp(vars,'FC')) || any(strcmp(vars,'subjects'))
+        tf = true;
+        return;
+    end
+catch
+end
+
+try
+    [~,nm,ext] = fileparts(fp);
+    if strcmpi(ext,'.mat') && ~isempty(regexpi(nm,'FC|GroupBundle|connect','once'))
+        tf = true;
+    end
+catch
+end
+end
+

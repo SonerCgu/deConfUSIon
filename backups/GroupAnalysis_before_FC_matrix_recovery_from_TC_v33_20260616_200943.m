@@ -1,0 +1,10449 @@
+
+% GA_FISHERZ_STATS_PATCH_20260512
+% FC group matrices are averaged/statistically compared in Fisher z space.
+% Convert back with tanh(Z) only for Pearson-r display if needed.
+%% GA_ALPHA_MOD_SCM_STYLE_20260504_START
+% AlphaData set-lines are wrapped with GA_alphaModFixFromCData_20260504.
+% This keeps blackbody 0-percent pixels transparent below Mod Min.
+%% GA_ALPHA_MOD_SCM_STYLE_20260504_END
+
+function hFig = GroupAnalysis(varargin)
+% GroupAnalysis.m
+% Reduced modular main GUI for fUSI Studio Group Analysis
+% MATLAB 2017b + 2023b compatible
+%
+% This file is intentionally smaller.
+%
+% Backend functions are delegated to:
+%   GroupAnalysis_Map.m
+%   GroupAnalysis_FC.m
+%   GroupAnalysis_Common.m
+%
+
+%%% =====================================================================
+%%% INPUT PARSING
+%%% =====================================================================
+posStudio = [];
+posOnClose = [];
+args = varargin;
+
+if ~isempty(args) && isstruct(args{1}) && ~ischar(args{1})
+    posStudio = args{1};
+    args = args(2:end);
+end
+
+if ~isempty(args) && isa(args{1},'function_handle')
+    posOnClose = args{1};
+    args = args(2:end);
+end
+
+%%% GA_INPUTPARSER_POSITIONAL_STARTDIR_FIX_V2_20260504_START
+% Accept old caller style: GroupAnalysis(studio,onClose,startDir)
+% or accidental positional folder paths from fUSI Studio.
+posStartDir = '';
+try
+    gaKnownInputNames = {'studio','logFcn','statusFcn','startDir','onClose'};
+    gaCleanArgs = {};
+    iiGA = 1;
+    while iiGA <= numel(args)
+        aGA = args{iiGA};
+        try
+            if exist('isstring','builtin') && isstring(aGA) && isscalar(aGA)
+                aGA = char(aGA);
+            end
+        catch
+        end
+
+        if isa(aGA,'function_handle')
+            posOnClose = aGA;
+            iiGA = iiGA + 1;
+            continue;
+        end
+
+        if ischar(aGA)
+            aTxt = strtrim(aGA);
+            isKnownName = any(strcmpi(aTxt,gaKnownInputNames));
+
+            if isKnownName
+                gaCleanArgs{end+1} = aTxt; %#ok<AGROW>
+                if iiGA < numel(args)
+                    gaCleanArgs{end+1} = args{iiGA+1}; %#ok<AGROW>
+                    iiGA = iiGA + 2;
+                else
+                    iiGA = iiGA + 1;
+                end
+                continue;
+            else
+                % Any unknown positional char/string is treated as startDir.
+                posStartDir = aTxt;
+                iiGA = iiGA + 1;
+                continue;
+            end
+        end
+
+        gaCleanArgs{end+1} = args{iiGA}; %#ok<AGROW>
+        iiGA = iiGA + 1;
+    end
+    args = gaCleanArgs;
+catch ME_ga_parse_clean
+    try, disp(['GroupAnalysis input cleanup warning: ' ME_ga_parse_clean.message]); catch, end
+end
+%%% GA_INPUTPARSER_POSITIONAL_STARTDIR_FIX_V2_20260504_END
+
+P = inputParser;
+P.addParameter('studio', struct(), @(x) isstruct(x));
+P.addParameter('logFcn', [], @(x) isempty(x) || isa(x,'function_handle'));
+P.addParameter('statusFcn', [], @(x) isempty(x) || isa(x,'function_handle'));
+P.addParameter('startDir', '', @(x) ischar(x) || (exist('isstring','builtin') && isstring(x) && isscalar(x)));
+P.addParameter('onClose', [], @(x) isempty(x) || isa(x,'function_handle'));
+P.parse(args{:});
+opt = P.Results;
+%%% GA_APPLY_POSITIONAL_STARTDIR_V2_20260504_START
+try
+    if exist('isstring','builtin') && isstring(opt.startDir) && isscalar(opt.startDir)
+        opt.startDir = char(opt.startDir);
+    end
+catch
+end
+try
+    if exist('posStartDir','var') && ~isempty(posStartDir)
+        opt.startDir = posStartDir;
+    end
+catch
+end
+%%% GA_APPLY_POSITIONAL_STARTDIR_V2_20260504_END
+
+if ~isempty(posStudio)
+    opt.studio = posStudio;
+end
+
+if ~isempty(posOnClose)
+    opt.onClose = posOnClose;
+end
+
+if isempty(opt.startDir)
+    opt.startDir = pwd;
+end
+
+try
+    if isfield(opt.studio,'exportPath') && ~isempty(opt.studio.exportPath) && exist(opt.studio.exportPath,'dir') == 7
+        opt.startDir = opt.studio.exportPath;
+    end
+catch
+end
+
+%%% =====================================================================
+%%% THEME
+%%% =====================================================================
+C.bg     = [0.06 0.06 0.06];
+C.panel  = [0.10 0.10 0.10];
+C.panel2 = [0.08 0.08 0.08];
+C.txt    = [0.95 0.95 0.95];
+C.muted  = [0.70 0.80 0.90];
+C.axisBg = [0.00 0.00 0.00];
+C.editBg = [0.14 0.14 0.14];
+
+C.btnSecondary = [0.18 0.18 0.18];
+C.btnPrimary   = [0.22 0.70 0.52];
+C.btnAction    = [0.25 0.55 0.95];
+C.btnDanger    = [0.90 0.25 0.25];
+C.btnHelp      = [0.20 0.60 0.95];
+
+F.name  = 'Arial';
+F.base  = 13;
+F.small = 12;
+F.big   = 16;
+F.table = 12;
+F.tab   = 15;
+
+%%% =====================================================================
+%%% FIGURE
+%%% =====================================================================
+hFig = figure( ...
+    'Name','fUSI Studio - Group Analysis', ...
+    'Color',C.bg, ...
+    'MenuBar','none', ...
+    'ToolBar','none', ...
+    'NumberTitle','off', ...
+    'Position',[120 60 1860 980], ...
+    'CloseRequestFcn',@closeMe);
+% HUMoR_FORCE_FULLSCREEN_PATCH32
+try, deConfUSIon_force_fullscreen_fig(hFig); catch, end
+
+
+set(hFig, ...
+    'DefaultUicontrolFontName',F.name, ...
+    'DefaultUicontrolFontSize',F.base, ...
+    'DefaultUipanelFontName',F.name, ...
+    'DefaultUipanelFontSize',F.base, ...
+    'DefaultAxesFontName',F.name, ...
+    'DefaultAxesFontSize',F.base);
+
+%%% =====================================================================
+%%% STATE
+%%% =====================================================================
+S = struct();
+S.opt = opt;
+S.C = C;
+S.F = F;
+
+S.subj = cell(0,9);
+S.fcRowFiles = cell(0,1);      % FC row-specific bundle paths
+S.fcAtlasLabelFile = '';     % optional Allen/Waxholm label file
+S.fcSeedRegion = '';         % optional seed/region name or label
+S.selectedRows = [];
+S.isClosing = false;
+
+S.lastROI = struct();
+S.lastMAP = struct();
+S.lastFC  = struct();
+S.lastMapDisplay = struct();
+
+S.activeTab = 'ROI';
+S.mode = 'ROI Timecourse';
+
+S.groupList = {'PACAP','Vehicle','Control','GroupA','GroupB'};
+S.condList  = {'CondA','CondB','Baseline','Post'};
+S.defaultGroup = 'PACAP';
+S.defaultCond  = 'CondA';
+S.tableMinRows = 2;
+S.tableColWidths = {38 126 56 96 94 78 78 62 72 112};
+
+S.applyAllIfNoneSelected = true;
+
+try
+    S.groupToCondMap = containers.Map('KeyType','char','ValueType','char');
+    S.groupToCondMap('PACAP')   = 'CondA';
+    S.groupToCondMap('VEHICLE') = 'CondB';
+    S.groupToCondMap('CONTROL') = 'CondB';
+    S.groupToCondMap('GROUPA')  = 'CondA';
+    S.groupToCondMap('GROUPB')  = 'CondB';
+catch
+    S.groupToCondMap = [];
+end
+
+try
+    S.cache.roiTC       = containers.Map('KeyType','char','ValueType','any');
+    S.cache.pscMap      = containers.Map('KeyType','char','ValueType','any');
+    S.cache.groupBundle = containers.Map('KeyType','char','ValueType','any');
+    S.cache.fcBundle    = containers.Map('KeyType','char','ValueType','any');
+catch
+    S.cache = struct();
+end
+
+%%% ROI defaults
+S.tc_computePSC      = false;
+S.tc_baseMin0        = 0;
+S.tc_baseMin1        = 10;
+S.tc_injMin0         = 5;
+S.tc_injMin1         = 15;
+S.tc_plateauMin0     = 30;
+S.tc_plateauMin1     = 40;
+S.tc_peakSearchMin0  = 15;
+S.tc_peakSearchMin1  = 25;
+S.tc_peakWinMin      = 3;
+S.tc_trimPct         = 10;
+S.tc_metric          = 'Robust Peak';
+S.tc_showSEM         = true;
+S.tc_showInjectionBox = true;
+S.displaySemAlpha    = 0.35;
+S.exportSemAlpha     = 0.20;
+
+%%% Group map defaults
+S.mapSummary          = 'Mean';
+S.mapUseGlobalWindows = true;
+S.mapGlobalBaseSec    = [30 240];
+S.mapGlobalSigSec     = [840 900];
+S.mapSource           = 'Recompute from exported PSC';
+S.mapUseBundleWindows = true;
+S.mapSigma            = 1;
+S.mapUnderlayMode     = 'Bundle underlay';
+S.mapCustomUnderlayFile = '';
+S.mapLoadedUnderlay   = [];
+S.mapLoadedOverlayMask = [];
+S.rowPacapSide        = cell(0,1);
+S.mapRefPacapSide     = 'Left';
+S.mapPreviewRow       = NaN;
+S.mapCurrentSlice     = NaN;   % GA_STEPMOTOR_GROUPMAP_SCROLL_PATCH_V1
+S.mapCurrentSliceMax  = NaN;
+S.mapPolarity         = 'Positive only';
+
+S.mapThreshold       = 0;
+S.mapCaxis           = [0 100];
+S.mapAlphaModOn      = true;
+S.mapModMin          = 10;
+S.mapModMax          = 20;
+S.mapBlackBody       = true;
+S.mapFlipMode        = 'Off';
+S.mapColormap        = 'blackbdy_iso';
+
+%%% FC state
+S.FC = struct();
+S.FC.files = {};
+S.FC.subjects = struct([]);
+S.FC.loaded = false;
+
+S.fcDisplayValue = 'Pearson r';
+S.fcThreshold = 0;
+S.fcGroupA = 'PACAP';
+S.fcGroupB = 'Vehicle';
+
+%%% style
+S.colorMode     = 'Scheme';
+S.colorScheme   = 'PACAP/Vehicle';
+S.manualGroupA  = 'PACAP';
+S.manualGroupB  = 'Vehicle';
+S.manualColorA  = 1;
+S.manualColorB  = 2;
+
+S.plotTop = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
+S.plotBot = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
+
+S.previewStyle    = 'Dark';
+S.previewShowGrid = false;
+S.tc_previewSmooth = false;
+S.tc_previewSmoothWinSec = 60;
+
+S.testType  = 'Two-sample t-test (Student, equal var)';
+S.alpha     = 0.05;
+S.annotMode = 'Bottom only';
+S.showPText = true;
+
+S.outlierMethod = 'None';
+S.outMADthr     = 3.5;
+S.outIQRk       = 1.5;
+S.outlierKeys   = {};
+S.outlierInfo   = {};
+
+S.outDir = defaultOutDir(opt);
+
+%%% =====================================================================
+%%% LAYOUT
+%%% =====================================================================
+leftW = 0.46;
+
+pLeft = uipanel(hFig, ...
+    'Units','normalized', ...
+    'Position',[0.02 0.05 leftW 0.93], ...
+    'Title','Subjects / Groups', ...
+    'BackgroundColor',C.panel, ...
+    'ForegroundColor','w', ...
+    'FontSize',F.big, ...
+    'FontWeight','bold');
+
+pRight = uipanel(hFig, ...
+    'Units','normalized', ...
+    'Position',[0.02+leftW+0.02 0.05 0.96-(0.02+leftW+0.02) 0.93], ...
+    'Title','', ...
+    'BackgroundColor',C.panel, ...
+    'ForegroundColor','w', ...
+    'FontSize',F.big, ...
+    'FontWeight','bold');
+
+%%% =====================================================================
+%%% LEFT TABLE
+%%% =====================================================================
+colNames = {'Use','Animal ID','Session','Scan ID','Group','Condition','ROI File','Bundle File','FC File','Status'};
+colEdit  = [true true false false true true false false false false];
+colFmt   = {'logical','char','char','char',S.groupList,S.condList,'char','char','char','char'};
+
+S.hTable = uitable(pLeft, ...
+    'Units','normalized', ...
+    'Position',[0.03 0.42 0.70 0.55], ...
+    'Data',makeUITableDisplayData(S.subj,S.tableMinRows,localGA_getFCRowFilesV12(S)), ...
+    'ColumnName',colNames, ...
+    'ColumnEditable',colEdit, ...
+    'ColumnFormat',colFmt, ...
+    'RowName','numbered', ...
+    'ColumnWidth',S.tableColWidths, ...
+    'BackgroundColor',buildTableRowColorsDisplay(S.subj,S.tableMinRows), ...
+    'ForegroundColor',[1 1 1], ...
+    'FontName','Consolas', ...
+    'FontSize',F.table, ...
+    'CellSelectionCallback',@onCellSelect, ...
+    'CellEditCallback',@onCellEdit);
+
+%%% =====================================================================
+%%% QUICK ASSIGN
+%%% =====================================================================
+pQuick = uipanel(pLeft, ...
+    'Units','normalized', ...
+    'Position',[0.75 0.42 0.22 0.55], ...
+    'Title','Quick Assign', ...
+    'BackgroundColor',C.panel2, ...
+    'ForegroundColor','w', ...
+    'FontSize',F.base, ...
+    'FontWeight','bold');
+
+S.hSelInfo = uicontrol(pQuick,'Style','text','String','Selected: none', ...
+    'Units','normalized','Position',[0.05 0.93 0.90 0.05], ...
+    'BackgroundColor',C.panel2,'ForegroundColor',C.muted, ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hApplyAllIfNone = uicontrol(pQuick,'Style','checkbox', ...
+    'String','If none selected -> active USE rows', ...
+    'Units','normalized','Position',[0.05 0.87 0.90 0.05], ...
+    'Value',double(S.applyAllIfNoneSelected), ...
+    'BackgroundColor',C.panel2,'ForegroundColor','w', ...
+    'Callback',@onApplyAllToggle);
+
+uicontrol(pQuick,'Style','text','String','Group', ...
+    'Units','normalized','Position',[0.05 0.79 0.90 0.045], ...
+    'BackgroundColor',C.panel2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hQuickGroup = uicontrol(pQuick,'Style','popupmenu','String',S.groupList, ...
+    'Units','normalized','Position',[0.05 0.735 0.90 0.055], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@onQuickGroupChanged);
+
+uicontrol(pQuick,'Style','text','String','Condition', ...
+    'Units','normalized','Position',[0.05 0.655 0.90 0.045], ...
+    'BackgroundColor',C.panel2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hQuickCond = uicontrol(pQuick,'Style','popupmenu','String',S.condList, ...
+    'Units','normalized','Position',[0.05 0.60 0.90 0.055], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w');
+
+S.hApplyGroup = mkBtn(pQuick,'Apply Group',[0.05 0.50 0.43 0.075],C.btnAction,@onApplyGroup);
+S.hApplyCond  = mkBtn(pQuick,'Apply Cond',[0.52 0.50 0.43 0.075],C.btnAction,@onApplyCond);
+S.hApplyBoth  = mkBtn(pQuick,'Apply Both',[0.05 0.405 0.90 0.075],C.btnPrimary,@onApplyBoth);
+
+S.hAddGroup = mkBtn(pQuick,'Add Group',[0.05 0.305 0.43 0.070],C.btnSecondary,@onAddGroup);
+S.hAddCond  = mkBtn(pQuick,'Add Cond',[0.52 0.305 0.43 0.070],C.btnSecondary,@onAddCond);
+S.hRevertExcluded = mkBtn(pQuick,'Revert Excluded',[0.05 0.145 0.90 0.075],C.btnSecondary,@onRevertExcluded);
+
+S.hAutoPair = uicontrol(pQuick,'Style','checkbox','String','Auto PairID = Subject', ...
+    'Units','normalized','Position',[0.01 0.01 0.01 0.01], ...
+    'Value',1,'Visible','off');
+
+%%% =====================================================================
+%%% LEFT ACTIONS
+%%% =====================================================================
+S.hAddBundles = mkBtn(pLeft,'Add Bundles',[0.03 0.285 0.22 0.060],C.btnAction,@onAddBundles);
+S.hAddFiles   = mkBtn(pLeft,'Add ROI / DATA',[0.27 0.285 0.22 0.060],C.btnSecondary,@onAddFiles);
+S.hAddFolder  = mkBtn(pLeft,'Add Folder',[0.51 0.285 0.14 0.060],C.btnSecondary,@onAddFolder);
+S.hRemove     = mkBtn(pLeft,'Remove Selected / USE',[0.67 0.285 0.30 0.060],C.btnDanger,@onRemoveSelected);
+
+S.hSaveList = mkBtn(pLeft,'Save List',[0.03 0.210 0.45 0.055],C.btnSecondary,@onSaveList);
+S.hLoadList = mkBtn(pLeft,'Load List',[0.52 0.210 0.45 0.055],C.btnSecondary,@onLoadList);
+
+S.hHelp  = mkBtn(pLeft,'Help',[0.47 0.060 0.24 0.050],C.btnHelp,@onHelp);
+S.hClose = mkBtn(pLeft,'Close',[0.73 0.060 0.24 0.050],C.btnDanger,@(~,~) closeMe(hFig,[]));
+
+%%% =====================================================================
+%%% RIGHT MANUAL TABS
+%%% =====================================================================
+S.hAnalysisTitle = uicontrol(pRight,'Style','text','String','Analysis', ...
+    'Units','normalized','Position',[0.02 0.965 0.18 0.025], ...
+    'BackgroundColor',C.panel,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontSize',F.big,'FontWeight','bold');
+
+S.hTabBar = uipanel(pRight,'Units','normalized','Position',[0.02 0.935 0.96 0.035], ...
+    'BorderType','none','BackgroundColor',C.panel);
+
+S.hTabROI   = mkTabBtn(S.hTabBar,'ROI Timecourse',      [0.000 0.05 0.175 0.90],@(s,e) onTabClicked('ROI'));
+S.hTabMAP   = mkTabBtn(S.hTabBar,'Group Maps',          [0.185 0.05 0.135 0.90],@(s,e) onTabClicked('MAP'));
+S.hTabFC    = mkTabBtn(S.hTabBar,'Functional Conn.',    [0.330 0.05 0.185 0.90],@(s,e) onTabClicked('FC'));
+S.hTabSTATS = mkTabBtn(S.hTabBar,'Statistics / Export', [0.525 0.05 0.225 0.90],@(s,e) onTabClicked('STATS'));
+S.hTabPREV  = mkTabBtn(S.hTabBar,'ROI Preview',         [0.760 0.05 0.130 0.90],@(s,e) onTabClicked('PREV'));
+
+S.tabROI   = uipanel(pRight,'Units','normalized','Position',[0.02 0.02 0.96 0.90], ...
+    'BorderType','none','BackgroundColor',C.bg);
+S.tabMAP   = uipanel(pRight,'Units','normalized','Position',[0.02 0.02 0.96 0.90], ...
+    'BorderType','none','BackgroundColor',C.bg,'Visible','off');
+S.tabFC    = uipanel(pRight,'Units','normalized','Position',[0.02 0.02 0.96 0.90], ...
+    'BorderType','none','BackgroundColor',C.bg,'Visible','off');
+S.tabSTATS = uipanel(pRight,'Units','normalized','Position',[0.02 0.02 0.96 0.90], ...
+    'BorderType','none','BackgroundColor',C.bg,'Visible','off');
+S.tabPREV  = uipanel(pRight,'Units','normalized','Position',[0.02 0.02 0.96 0.90], ...
+    'BorderType','none','BackgroundColor',C.bg,'Visible','off');
+
+bg2 = C.panel2;
+
+%%% =====================================================================
+%%% ROI TAB
+%%% =====================================================================
+pROIBG = uipanel(S.tabROI,'Units','normalized','Position',[0 0 1 1], ...
+    'BorderType','none','BackgroundColor',C.bg);
+
+pROItop = uipanel(pROIBG,'Units','normalized','Position',[0.02 0.92 0.96 0.07], ...
+    'BorderType','none','BackgroundColor',bg2);
+
+uicontrol(pROItop,'Style','text','String','Active mode:', ...
+    'Units','normalized','Position',[0.02 0.15 0.18 0.70], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hMode = uicontrol(pROItop,'Style','popupmenu', ...
+    'String',{'ROI Timecourse','Group Maps'}, ...
+    'Units','normalized','Position',[0.20 0.18 0.25 0.70], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@onModeChanged);
+
+pROI = uipanel(pROIBG,'Units','normalized','Position',[0.02 0.60 0.96 0.30], ...
+    'Title','ROI settings','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+S.hTC_ComputePSC = uicontrol(pROI,'Style','checkbox', ...
+    'String','Compute %SC from raw using baseline', ...
+    'Units','normalized','Position',[0.02 0.82 0.58 0.15], ...
+    'Value',double(S.tc_computePSC), ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'Callback',@onROIChanged);
+
+uicontrol(pROI,'Style','text','String','Injection (min):', ...
+    'Units','normalized','Position',[0.62 0.84 0.16 0.10], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hInj0 = uicontrol(pROI,'Style','edit','String',num2str(S.tc_injMin0), ...
+    'Units','normalized','Position',[0.79 0.84 0.08 0.10], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
+
+S.hInj1 = uicontrol(pROI,'Style','edit','String',num2str(S.tc_injMin1), ...
+    'Units','normalized','Position',[0.88 0.84 0.08 0.10], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
+
+[S.hBase0,S.hBase1] = addPairEditsDark(pROI,0.62,'Baseline (min):',S.tc_baseMin0,S.tc_baseMin1,C,@onROIChanged);
+[S.hPkS0,S.hPkS1]   = addPairEditsDark(pROI,0.42,'Peak search (min):',S.tc_peakSearchMin0,S.tc_peakSearchMin1,C,@onROIChanged);
+[S.hPlat0,S.hPlat1] = addPairEditsDark(pROI,0.22,'Plateau (min):',S.tc_plateauMin0,S.tc_plateauMin1,C,@onROIChanged);
+
+uicontrol(pROI,'Style','text','String','Peak win (min):', ...
+    'Units','normalized','Position',[0.66 0.62 0.18 0.12], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hTC_PeakWin = uicontrol(pROI,'Style','edit','String',num2str(S.tc_peakWinMin), ...
+    'Units','normalized','Position',[0.84 0.62 0.12 0.12], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
+
+uicontrol(pROI,'Style','text','String','Trim %:', ...
+    'Units','normalized','Position',[0.66 0.42 0.18 0.12], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hTC_Trim = uicontrol(pROI,'Style','edit','String',num2str(S.tc_trimPct), ...
+    'Units','normalized','Position',[0.84 0.42 0.12 0.12], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
+
+uicontrol(pROI,'Style','text','String','Metric:', ...
+    'Units','normalized','Position',[0.66 0.22 0.18 0.12], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hTC_Metric = uicontrol(pROI,'Style','popupmenu','String',{'Plateau','Robust Peak'}, ...
+    'Value',2, ...
+    'Units','normalized','Position',[0.84 0.22 0.12 0.12], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
+% GA_FORCE_ROBUST_PEAK_POPUP_START
+try, set(S.hTC_Metric,'Value',2); catch, end
+% GA_FORCE_ROBUST_PEAK_POPUP_END
+
+pStyle = uipanel(pROIBG,'Units','normalized','Position',[0.02 0.36 0.96 0.22], ...
+    'Title','Display style','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+uicontrol(pStyle,'Style','text','String','Color scheme:', ...
+    'Units','normalized','Position',[0.02 0.64 0.18 0.22], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hColorScheme = uicontrol(pStyle,'Style','popupmenu', ...
+    'String',{'PACAP/Vehicle','Blue/Red','Green/Magenta','A/B green-magenta','Cyan/Orange','Purple/Green','Gray/Orange','Red/Blue','Distinct','Tableau 10','Bright 12'}, ...
+    'Units','normalized','Position',[0.20 0.66 0.22 0.22], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStyleChanged);
+
+S.hShowSEM = uicontrol(pStyle,'Style','checkbox','String','Show SEM', ...
+    'Units','normalized','Position',[0.45 0.66 0.16 0.22], ...
+    'Value',double(S.tc_showSEM), ...
+    'BackgroundColor',bg2,'ForegroundColor','w','Callback',@onStyleChanged);
+
+S.hShowInjBox = uicontrol(pStyle,'Style','checkbox','String','Injection box', ...
+    'Units','normalized','Position',[0.62 0.66 0.18 0.22], ...
+    'Value',double(S.tc_showInjectionBox), ...
+    'BackgroundColor',bg2,'ForegroundColor','w','Callback',@onStyleChanged);
+
+pY = uipanel(pROIBG,'Units','normalized','Position',[0.02 0.02 0.96 0.32], ...
+    'Title','Y-Axis Scaling','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+[S.hTopAuto,S.hTopZero,S.hTopStep,S.hTopYmin,S.hTopYmax] = mkYControlsSimple(pY,0.62,'Top',S.plotTop,C,@onPlotScaleChanged);
+[S.hBotAuto,S.hBotZero,S.hBotStep,S.hBotYmin,S.hBotYmax] = mkYControlsSimple(pY,0.20,'Bottom',S.plotBot,C,@onPlotScaleChanged);
+
+%%% =====================================================================
+%%% MAP TAB
+%%% =====================================================================
+pMAPBG = uipanel(S.tabMAP,'Units','normalized','Position',[0 0 1 1], ...
+    'BorderType','none','BackgroundColor',C.bg);
+
+pMapDisp = uipanel(pMAPBG,'Units','normalized','Position',[0.02 0.855 0.96 0.140], ...
+    'Title','Render style','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+uicontrol(pMapDisp,'Style','text','String','Summary:', ...
+    'Units','normalized','Position',[0.02 0.66 0.09 0.18], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapSummary = uicontrol(pMapDisp,'Style','popupmenu','String',{'Mean','Median'}, ...
+    'Units','normalized','Position',[0.12 0.64 0.12 0.20], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+uicontrol(pMapDisp,'Style','text','String','Source:', ...
+    'Units','normalized','Position',[0.30 0.66 0.08 0.18], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapSource = uicontrol(pMapDisp,'Style','popupmenu', ...
+    'String',{'Use exported SCM map','Recompute from exported PSC'}, ...
+    'Units','normalized','Position',[0.39 0.64 0.30 0.20], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged, ...
+    'Value',2);
+
+uicontrol(pMapDisp,'Style','text','String','Colormap:', ...
+    'Units','normalized','Position',[0.02 0.36 0.09 0.18], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapColormap = uicontrol(pMapDisp,'Style','popupmenu', ...
+    'String',{'blackbdy_iso','hot','parula','turbo','jet','gray'}, ...
+    'Units','normalized','Position',[0.12 0.34 0.16 0.20], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+S.hMapBlackBody = uicontrol(pMapDisp,'Style','checkbox','String','Black body', ...
+    'Units','normalized','Position',[0.31 0.34 0.12 0.20], ...
+    'Value',double(S.mapBlackBody), ...
+    'BackgroundColor',bg2,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+uicontrol(pMapDisp,'Style','text','String','Flip mode:', ...
+    'Units','normalized','Position',[0.46 0.36 0.09 0.18], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapFlipMode = uicontrol(pMapDisp,'Style','popupmenu', ...
+    'String',{'Off','Flip right-injected animals','Flip left-injected animals','Align to Reference Hemisphere'}, ...
+    'Units','normalized','Position',[0.56 0.34 0.40 0.20], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+uicontrol(pMapDisp,'Style','text','String','Alpha min:', ...
+    'Units','normalized','Position',[0.02 0.08 0.08 0.16], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapModMin = uicontrol(pMapDisp,'Style','edit','String',num2str(S.mapModMin), ...
+    'Units','normalized','Position',[0.11 0.06 0.09 0.18], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+uicontrol(pMapDisp,'Style','text','String','Alpha max:', ...
+    'Units','normalized','Position',[0.23 0.08 0.08 0.16], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapModMax = uicontrol(pMapDisp,'Style','edit','String',num2str(S.mapModMax), ...
+    'Units','normalized','Position',[0.32 0.06 0.09 0.18], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+uicontrol(pMapDisp,'Style','text','String','Sigma:', ...
+    'Units','normalized','Position',[0.45 0.08 0.06 0.16], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapSigma = uicontrol(pMapDisp,'Style','edit','String',num2str(S.mapSigma), ...
+    'Units','normalized','Position',[0.52 0.06 0.08 0.18], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+uicontrol(pMapDisp,'Style','text','String','Caxis:', ...
+    'Units','normalized','Position',[0.64 0.08 0.06 0.16], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapCaxis = uicontrol(pMapDisp,'Style','edit','String',sprintf('%g %g',S.mapCaxis(1),S.mapCaxis(2)), ...
+    'Units','normalized','Position',[0.71 0.06 0.14 0.18], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+S.hMapPolarity = uicontrol(pMapDisp,'Style','popupmenu', ...
+    'String',{'Positive only','Negative only','Positive + Negative'}, ...
+    'Units','normalized','Position',[0.865 0.06 0.12 0.18], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'TooltipString','SCM sign display: positive blackbody, negative winter', ...
+    'Callback',@onMapDisplayChanged);
+
+pMapPrev = uipanel(pMAPBG,'Units','normalized','Position',[0.02 0.115 0.96 0.725], ...
+    'Title','Preview','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+S.hMapPreviewPopup = uicontrol(pMapPrev,'Style','popupmenu', ...
+    'String',{'No bundle rows'}, ...
+    'Units','normalized','Position',[0.03 0.938 0.37 0.050], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@onMapPreviewPopup, ...
+    'UserData',[]);
+
+uicontrol(pMapPrev,'Style','text','String','Inj side:', ...
+    'Units','normalized','Position',[0.43 0.945 0.08 0.040], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapPreviewSide = uicontrol(pMapPrev,'Style','popupmenu', ...
+    'String',{'Unknown','Left','Right'}, ...
+    'Units','normalized','Position',[0.52 0.938 0.10 0.050], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@onMapPreviewSideChanged);
+
+uicontrol(pMapPrev,'Style','text','String','Ref hemi:', ...
+    'Units','normalized','Position',[0.65 0.945 0.09 0.040], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapRefSide = uicontrol(pMapPrev,'Style','popupmenu', ...
+    'String',{'Left','Right'}, ...
+    'Units','normalized','Position',[0.75 0.938 0.11 0.050], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@onMapDisplayChanged);
+
+uicontrol(pMapPrev,'Style','text','String','Slice:', ...
+    'Units','normalized','Position',[0.875 0.945 0.055 0.040], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapSliceText = uicontrol(pMapPrev,'Style','edit','String','-', ...
+    'Units','normalized','Position',[0.930 0.938 0.055 0.050], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'TooltipString','Current step-motor slice. You can also use mouse wheel on Group Maps preview.', ...
+    'Callback',@onMapSliceEdit);
+
+S.axMap1 = axes('Parent',pMapPrev,'Units','normalized','Position',[0.03 0.13 0.58 0.78]);
+axis(S.axMap1,'off');
+
+S.hMapSideBox = uipanel(pMapPrev, ...
+    'Units','normalized','Position',[0.62 0.07 0.36 0.82], ...
+    'Title','Side assignment / Map options', ...
+    'BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+S.hMapSideTable = uitable(S.hMapSideBox, ...
+    'Units','normalized','Position',[0.04 0.55 0.92 0.38], ...
+    'Data',cell(0,4), ...
+    'ColumnName',{'Animal','Sess','Scan','Inj Side'}, ...
+    'ColumnEditable',[false false false false], ...
+    'RowName',[], ...
+    'BackgroundColor',[0.12 0.12 0.12; 0.10 0.10 0.10], ...
+    'ForegroundColor',[1 1 1], ...
+    'FontName','Consolas','FontSize',11);
+
+S.hMapUseGlobalWin = uicontrol(S.hMapSideBox,'Style','checkbox', ...
+    'String','Use custom global baseline / signal windows', ...
+    'Units','normalized','Position',[0.05 0.45 0.90 0.06], ...
+    'Value',double(S.mapUseGlobalWindows), ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'Callback',@onMapDisplayChanged);
+
+uicontrol(S.hMapSideBox,'Style','text','String','Base (s):', ...
+    'Units','normalized','Position',[0.05 0.34 0.28 0.055], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapBase0 = uicontrol(S.hMapSideBox,'Style','edit','String',num2str(S.mapGlobalBaseSec(1)), ...
+    'Units','normalized','Position',[0.40 0.33 0.15 0.08], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+S.hMapBase1 = uicontrol(S.hMapSideBox,'Style','edit','String',num2str(S.mapGlobalBaseSec(2)), ...
+    'Units','normalized','Position',[0.59 0.33 0.15 0.08], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+uicontrol(S.hMapSideBox,'Style','text','String','Signal (s):', ...
+    'Units','normalized','Position',[0.05 0.23 0.28 0.055], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hMapSig0 = uicontrol(S.hMapSideBox,'Style','edit','String',num2str(S.mapGlobalSigSec(1)), ...
+    'Units','normalized','Position',[0.40 0.22 0.15 0.08], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+S.hMapSig1 = uicontrol(S.hMapSideBox,'Style','edit','String',num2str(S.mapGlobalSigSec(2)), ...
+    'Units','normalized','Position',[0.59 0.22 0.15 0.08], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onMapDisplayChanged);
+
+S.hMapUnderlayMode = uicontrol(S.hMapSideBox,'Style','popupmenu', ...
+    'String',{'Bundle underlay','Bundle normal','Bundle histology','Bundle vascular','Bundle regions','Loaded custom underlay'}, ...
+    'Units','normalized','Position',[0.12 0.11 0.76 0.07], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@onMapDisplayChanged);
+
+S.hMapLoadUnderlay = mkBtn(S.hMapSideBox,'Load Underlay',[0.22 0.02 0.56 0.07],C.btnAction,@onLoadCustomUnderlay);
+
+pMapBottom = uipanel(pMAPBG,'Units','normalized','Position',[0.02 0.015 0.96 0.085], ...
+    'BorderType','none','BackgroundColor',bg2);
+
+S.hMapPreviewSel  = mkBtn(pMapBottom,'Preview Only',       [0.02 0.48 0.13 0.42],C.btnSecondary,@onPreviewSelectedBundle);
+S.hMapCompute     = mkBtn(pMapBottom,'Compute Group Maps', [0.16 0.48 0.20 0.42],C.btnPrimary,@onComputeGroupMaps);
+S.hMapExportData  = mkBtn(pMapBottom,'Export Data Video',  [0.38 0.48 0.16 0.42],C.btnAction,@onExportGroupMapData);
+S.hMapExportSCM   = mkBtn(pMapBottom,'Export Data SCM',    [0.55 0.48 0.15 0.42],C.btnAction,@onExportGroupMapDataSCM);
+S.hMapExportPNG   = mkBtn(pMapBottom,'Export PNG',         [0.71 0.50 0.12 0.40],C.btnAction,@onExportGroupMapPNG);
+S.hMapExportPPT   = mkBtn(pMapBottom,'Export PPT',         [0.84 0.50 0.12 0.40],C.btnAction,@onExportGroupMapPPT);
+
+S.hMapExportStatus = uicontrol(pMapBottom,'Style','text','String','Ready.', ...
+    'Units','normalized','Position',[0.02 0.06 0.96 0.18], ...
+    'BackgroundColor',bg2,'ForegroundColor',C.muted, ...
+    'HorizontalAlignment','left','FontName','Consolas','FontSize',11);
+
+%%% =====================================================================
+%%% FC TAB
+%%% =====================================================================
+pFCBG = uipanel(S.tabFC,'Units','normalized','Position',[0 0 1 1], ...
+    'BorderType','none','BackgroundColor',C.bg);
+
+pFCTop = uipanel(pFCBG,'Units','normalized','Position',[0.02 0.695 0.96 0.300], ...
+    'Title','Functional Connectivity group analysis', ...
+    'BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+S.hFCLoad = mkBtn(pFCTop,'Load FC Bundles',[0.010 0.720 0.120 0.220],C.btnAction,@onLoadFCGroupBundles);
+S.hFCScan = mkBtn(pFCTop,'Scan Folder',[0.140 0.720 0.090 0.220],C.btnSecondary,@onScanFCGroupFolder);
+S.hFCLoadAtlas = mkBtn(pFCTop,'Atlas TXT/Auto',[0.240 0.720 0.120 0.220],C.btnSecondary,@onLoadFCAtlasLabels);
+
+uicontrol(pFCTop,'Style','text','String','Grp A:', ...
+    'Units','normalized','Position',[0.385 0.805 0.060 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCGroupA = uicontrol(pFCTop,'Style','popupmenu','String',S.groupList, ...
+    'Units','normalized','Position',[0.445 0.760 0.105 0.165], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@updateFCTabPreview);
+
+uicontrol(pFCTop,'Style','text','String','Grp B:', ...
+    'Units','normalized','Position',[0.565 0.805 0.060 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCGroupB = uicontrol(pFCTop,'Style','popupmenu','String',S.groupList, ...
+    'Units','normalized','Position',[0.625 0.760 0.105 0.165], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@updateFCTabPreview);
+
+S.hFCCompute = mkBtn(pFCTop,'Compute FC',[0.755 0.720 0.105 0.220],C.btnPrimary,@onComputeGroupFC);
+S.hFCExport  = mkBtn(pFCTop,'Export All FC',[0.875 0.720 0.110 0.220],C.btnAction,@onExportGroupFC);
+
+uicontrol(pFCTop,'Style','text','String','View:', ...
+    'Units','normalized','Position',[0.010 0.465 0.045 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCView = uicontrol(pFCTop,'Style','popupmenu', ...
+    'String',{'Matrix summary','Seed profile','Pair correlation','Max connections','ROI time course','Subject heatmap','Region graph'}, ...
+    'Units','normalized','Position',[0.055 0.420 0.140 0.165], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@updateFCTabPreview);
+
+uicontrol(pFCTop,'Style','text','String','Show:', ...
+    'Units','normalized','Position',[0.205 0.465 0.045 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCActiveGroup = uicontrol(pFCTop,'Style','popupmenu','String',{'Group A'}, ...
+    'Units','normalized','Position',[0.250 0.420 0.120 0.165], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@updateFCTabPreview);
+
+uicontrol(pFCTop,'Style','text','String','Hemi:', ...
+    'Units','normalized','Position',[0.385 0.465 0.050 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCHemiMode = uicontrol(pFCTop,'Style','popupmenu', ...
+    'String',{'All / merged','Left only','Right only','Left vs Right'}, ...
+    'Units','normalized','Position',[0.435 0.420 0.135 0.165], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@updateFCTabPreview);
+
+uicontrol(pFCTop,'Style','text','String','Units:', ...
+    'Units','normalized','Position',[0.585 0.465 0.050 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCDisplay = uicontrol(pFCTop,'Style','popupmenu','String',{'Pearson r','Fisher z'}, ...
+    'Units','normalized','Position',[0.635 0.420 0.090 0.165], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@updateFCTabPreview);
+
+uicontrol(pFCTop,'Style','text','String','Hide |r|<', ...
+    'Units','normalized','Position',[0.740 0.465 0.075 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCThreshold = uicontrol(pFCTop,'Style','edit','String','0', ...
+    'Units','normalized','Position',[0.815 0.420 0.055 0.165], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@updateFCTabPreview);
+S.hFCHelp = mkBtn(pFCTop,'Help',[0.890 0.405 0.095 0.190],C.btnSecondary,@onFCHelpV15);
+
+uicontrol(pFCTop,'Style','text','String','ROI 1:', ...
+    'Units','normalized','Position',[0.010 0.170 0.055 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCRegion1 = uicontrol(pFCTop,'Style','popupmenu','String',{'Compute/load FC first'}, ...
+    'Units','normalized','Position',[0.065 0.105 0.360 0.175], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@onFCRegionChangedV15);
+
+uicontrol(pFCTop,'Style','text','String','ROI 2:', ...
+    'Units','normalized','Position',[0.445 0.170 0.055 0.090], ...
+    'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold','FontSize',11);
+S.hFCRegion2 = uicontrol(pFCTop,'Style','popupmenu','String',{'Compute/load FC first'}, ...
+    'Units','normalized','Position',[0.500 0.105 0.360 0.175], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'Callback',@updateFCTabPreview);
+S.hFCRefreshRegions = mkBtn(pFCTop,'Refresh',[0.875 0.095 0.110 0.195],C.btnSecondary,@onRefreshFCRegionMenusV15);
+
+% Hidden legacy seed edit.
+S.hFCSeedRegion = uicontrol(pFCTop,'Style','edit','String','', ...
+    'Units','normalized','Position',[0.001 0.001 0.001 0.001], ...
+    'Visible','off');
+try
+    set(findall(pFCTop,'Style','text'),'FontSize',11,'FontWeight','bold');
+catch
+end
+
+
+
+
+
+
+
+
+
+pFCAx = uipanel(pFCBG,'Units','normalized','Position',[0.02 0.095 0.96 0.570], ...
+    'Title','FC matrices', ...
+    'BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+S.hFCInfo = uicontrol(pFCBG,'Style','text', ...
+    'String','FC status appears here. Select one table row before loading if you want row-specific FC assignment.', ...
+    'Units','normalized','Position',[0.02 0.020 0.96 0.045], ...
+    'BackgroundColor',bg2,'ForegroundColor',[0.75 0.80 0.90], ...
+    'HorizontalAlignment','left','FontSize',11);
+
+
+
+
+
+
+
+
+
+S.axFCA = axes('Parent',pFCAx,'Units','normalized','Position',[0.060 0.100 0.875 0.835]);
+S.axFCB = axes('Parent',pFCAx,'Units','normalized','Position',[0.570 0.565 0.365 0.360],'Visible','off');
+S.axFCD = axes('Parent',pFCAx,'Units','normalized','Position',[0.060 0.090 0.365 0.360],'Visible','off');
+S.axFCP = axes('Parent',pFCAx,'Units','normalized','Position',[0.570 0.090 0.365 0.360],'Visible','off');
+
+fcNoDataLocal(S.axFCA,'Group A mean FC',C);
+fcNoDataLocal(S.axFCB,'Group B mean FC',C);
+fcNoDataLocal(S.axFCD,'Difference: A - B',C);
+fcNoDataLocal(S.axFCP,'p-value map',C);
+
+%%% =====================================================================
+%%% STATS / EXPORT TAB
+%%% =====================================================================
+pSTATSBG = uipanel(S.tabSTATS,'Units','normalized','Position',[0 0 1 1], ...
+    'BorderType','none','BackgroundColor',C.bg);
+
+pStats = uipanel(pSTATSBG,'Units','normalized','Position',[0.02 0.54 0.96 0.44], ...
+    'Title','Metric statistics','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+uicontrol(pStats,'Style','text','String','Test:', ...
+    'Units','normalized','Position',[0.02 0.72 0.12 0.20], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hTest = uicontrol(pStats,'Style','popupmenu', ...
+    'String',{'None','One-sample t-test (vs 0)','Two-sample t-test (Student, equal var)','Two-sample t-test (Welch)','One-way ANOVA (groups)'}, ...
+    'Units','normalized','Position',[0.14 0.74 0.50 0.20], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStatsChanged, ...
+    'Value',3);
+
+uicontrol(pStats,'Style','text','String','Alpha:', ...
+    'Units','normalized','Position',[0.66 0.72 0.10 0.20], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hAlpha = uicontrol(pStats,'Style','edit','String',num2str(S.alpha), ...
+    'Units','normalized','Position',[0.75 0.74 0.10 0.20], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStatsChanged);
+
+uicontrol(pStats,'Style','text','String','Annotate:', ...
+    'Units','normalized','Position',[0.02 0.52 0.12 0.14], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+S.hAnnotMode = uicontrol(pStats,'Style','popupmenu', ...
+    'String',{'None','Bottom only','Both'}, ...
+    'Units','normalized','Position',[0.14 0.54 0.25 0.16], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStatsChanged, ...
+    'Value',2);
+
+S.hShowPText = uicontrol(pStats,'Style','checkbox','String','Show p-value text', ...
+    'Units','normalized','Position',[0.42 0.54 0.25 0.16], ...
+    'Value',double(S.showPText), ...
+    'BackgroundColor',bg2,'ForegroundColor','w','Callback',@onStatsChanged);
+
+pOut = uipanel(pStats,'Units','normalized','Position',[0.02 0.02 0.96 0.46], ...
+    'Title','Outlier detection','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+S.hOutMethod = uicontrol(pOut,'Style','popupmenu','String',{'None','MAD robust z-score','IQR rule'}, ...
+    'Units','normalized','Position',[0.02 0.79 0.22 0.16], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w');
+
+S.hOutParam = uicontrol(pOut,'Style','edit','String',num2str(S.outMADthr), ...
+    'Units','normalized','Position',[0.26 0.79 0.08 0.16], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w');
+
+S.hDetectOut  = mkBtn(pOut,'Detect',[0.38 0.79 0.11 0.16],C.btnAction,@onDetectOutliers);
+S.hExcludeOut = mkBtn(pOut,'Exclude',[0.51 0.79 0.11 0.16],C.btnDanger,@onExcludeOutliers);
+S.hRevertOut  = mkBtn(pOut,'Revert',[0.64 0.79 0.11 0.16],C.btnSecondary,@onRevertExcluded);
+
+S.hOutInfo = uicontrol(pOut,'Style','listbox', ...
+    'Units','normalized','Position',[0.02 0.06 0.96 0.60], ...
+    'String',{'No outliers detected yet.'}, ...
+    'BackgroundColor',C.axisBg,'ForegroundColor','w', ...
+    'FontName','Consolas','FontSize',11);
+
+pRun = uipanel(pSTATSBG,'Units','normalized','Position',[0.02 0.02 0.96 0.48], ...
+    'Title','Run / Export','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+S.hRun         = mkBtn(pRun,'Run Analysis',[0.14 0.62 0.22 0.24],C.btnPrimary,@onRun);
+S.hExport      = mkBtn(pRun,'Export Results',[0.39 0.62 0.22 0.24],C.btnSecondary,@onExport);
+S.hExportExcel = mkBtn(pRun,'Export Excel',[0.64 0.62 0.22 0.24],C.btnAction,@onExportExcel);
+
+S.hStatus = uicontrol(pRun,'Style','text','String','Ready.', ...
+    'Units','normalized','Position',[0.04 0.10 0.92 0.36], ...
+    'BackgroundColor',bg2,'ForegroundColor',C.muted, ...
+    'HorizontalAlignment','center','FontSize',F.small);
+
+%%% =====================================================================
+%%% PREVIEW TAB
+%%% =====================================================================
+S.hPrevBG = uipanel(S.tabPREV,'Units','normalized','Position',[0 0 1 1], ...
+    'BorderType','none','BackgroundColor',C.bg);
+
+S.hPrevTop = uipanel(S.hPrevBG,'Units','normalized','Position',[0.02 0.895 0.96 0.095], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+
+S.hPrevExportTop  = mkBtn(S.hPrevTop,'Export Top PNG',    [0.015 0.16 0.140 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(1));
+S.hPrevExportBot  = mkBtn(S.hPrevTop,'Export Bottom PNG', [0.165 0.16 0.155 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(2));
+S.hPrevExportBoth = mkBtn(S.hPrevTop,'Export Both PNGs',  [0.330 0.16 0.155 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(3));
+
+S.hPrevLblView = uicontrol(S.hPrevTop,'Style','text','String','View:','Units','normalized','Position',[0.510 0.18 0.055 0.64],'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold','FontSize',12);
+S.hPrevStyle = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'Dark','Light'},'Units','normalized','Position',[0.565 0.18 0.090 0.64],'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',12,'Callback',@onPreviewStyleChanged);
+S.hPrevGrid = uicontrol(S.hPrevTop,'Style','checkbox','String','Grid','Units','normalized','Position',[0.665 0.15 0.065 0.70],'Value',double(S.previewShowGrid),'BackgroundColor',bg2,'ForegroundColor','w','FontSize',12,'Callback',@onPreviewStyleChanged);
+S.hSmoothEnable = uicontrol(S.hPrevTop,'Style','checkbox','String','Smoothing','Units','normalized','Position',[0.740 0.15 0.120 0.70],'Value',double(S.tc_previewSmooth),'BackgroundColor',bg2,'ForegroundColor','w','FontSize',12,'Callback',@onSmoothChanged);
+S.hPrevLblWin = uicontrol(S.hPrevTop,'Style','text','String','Win (s):','Units','normalized','Position',[0.865 0.18 0.070 0.64],'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold','FontSize',12);
+S.hSmoothWin = uicontrol(S.hPrevTop,'Style','edit','String',num2str(S.tc_previewSmoothWinSec),'Units','normalized','Position',[0.935 0.18 0.055 0.64],'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',12,'Callback',@onSmoothChanged);
+
+S.ax1 = axes('Parent',S.hPrevBG,'Units','normalized','Position',[0.095 0.540 0.850 0.285]);
+S.ax2 = axes('Parent',S.hPrevBG,'Units','normalized','Position',[0.095 0.120 0.850 0.285]);
+try
+    set(S.hPrevTop,'Position',[0.02 0.735 0.96 0.255]);
+    set(S.ax1,'Position',[0.095 0.455 0.850 0.245]);
+    set(S.ax2,'Position',[0.095 0.060 0.850 0.245]);
+
+    try, set(S.hPrevExportTop, 'Position',[0.015 0.650 0.120 0.270],'FontSize',11); catch, end
+    try, set(S.hPrevExportBot, 'Position',[0.145 0.650 0.130 0.270],'FontSize',11); catch, end
+    try, set(S.hPrevExportBoth,'Position',[0.285 0.650 0.140 0.270],'FontSize',11); catch, end
+
+    try, set(S.hPrevLblView,'Position',[0.465 0.735 0.050 0.120],'HorizontalAlignment','right','FontSize',12); catch, end
+    try, set(S.hPrevStyle,  'Position',[0.525 0.710 0.090 0.180],'FontSize',11); catch, end
+    try, set(S.hPrevGrid,   'Position',[0.635 0.700 0.060 0.190],'FontSize',11); catch, end
+    try, set(S.hSmoothEnable,'Position',[0.710 0.700 0.110 0.190],'FontSize',11); catch, end
+    try, set(S.hPrevLblWin,'Position',[0.815 0.735 0.065 0.120],'HorizontalAlignment','right','FontSize',12); catch, end
+    try, set(S.hSmoothWin,'Position',[0.895 0.650 0.055 0.270],'FontSize',11); catch, end
+
+    uicontrol(S.hPrevTop,'Style','text','String','Line width','Units','normalized', ...
+        'Position',[0.020 0.470 0.095 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevLineWidth = uicontrol(S.hPrevTop,'Style','slider','Min',1,'Max',6,'Value',2.8, ...
+        'Units','normalized','Position',[0.125 0.465 0.140 0.110],'BackgroundColor',C.editBg, ...
+        'Callback',@onSmoothChanged,'Tag','GA_RPV_LINE_WIDTH');
+
+    uicontrol(S.hPrevTop,'Style','text','String','Shade alpha','Units','normalized', ...
+        'Position',[0.285 0.470 0.100 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevShadeAlpha = uicontrol(S.hPrevTop,'Style','slider','Min',0,'Max',0.70,'Value',0.22, ...
+        'Units','normalized','Position',[0.395 0.465 0.140 0.110],'BackgroundColor',C.editBg, ...
+        'Callback',@onSmoothChanged,'Tag','GA_RPV_SHADE_ALPHA');
+
+    uicontrol(S.hPrevTop,'Style','text','String','A color','Units','normalized', ...
+        'Position',[0.560 0.470 0.065 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevColorA = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Vehicle gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black'}, ...
+        'Value',1,'Units','normalized','Position',[0.630 0.445 0.125 0.180], ...
+        'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_COLOR_A');
+
+    uicontrol(S.hPrevTop,'Style','text','String','B color','Units','normalized', ...
+        'Position',[0.775 0.470 0.065 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevColorB = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Vehicle gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black'}, ...
+        'Value',2,'Units','normalized','Position',[0.845 0.445 0.125 0.180], ...
+        'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_COLOR_B');
+
+    S.hPrevAnimalLabels = uicontrol(S.hPrevTop,'Style','checkbox','String','Animal labels', ...
+        'Units','normalized','Position',[0.845 0.330 0.130 0.110], ...
+        'Value',0,'BackgroundColor',bg2,'ForegroundColor','w','FontSize',11, ...
+        'Callback',@onSmoothChanged,'Tag','GA_RPV_ANIMAL_LABELS');
+
+    uicontrol(S.hPrevTop,'Style','text','String','X min / max','Units','normalized', ...
+        'Position',[0.020 0.155 0.095 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevXMin = uicontrol(S.hPrevTop,'Style','edit','String','0','Units','normalized', ...
+        'Position',[0.125 0.080 0.055 0.250],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+        'FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_XMIN');
+    S.hPrevXMax = uicontrol(S.hPrevTop,'Style','edit','String','45','Units','normalized', ...
+        'Position',[0.190 0.080 0.055 0.250],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+        'FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_XMAX');
+
+    uicontrol(S.hPrevTop,'Style','text','String','Top Ymax','Units','normalized', ...
+        'Position',[0.295 0.155 0.075 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevTopYmax = uicontrol(S.hPrevTop,'Style','edit','String','50','Units','normalized', ...
+        'Position',[0.375 0.080 0.055 0.250],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+        'FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_TOP_YMAX');
+
+    uicontrol(S.hPrevTop,'Style','text','String','Top step','Units','normalized', ...
+        'Position',[0.465 0.155 0.070 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevTopStep = uicontrol(S.hPrevTop,'Style','edit','String','10','Units','normalized', ...
+        'Position',[0.540 0.080 0.055 0.250],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+        'FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_TOP_STEP');
+
+    uicontrol(S.hPrevTop,'Style','text','String','Bottom Ymax','Units','normalized', ...
+        'Position',[0.635 0.155 0.095 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevBotYmax = uicontrol(S.hPrevTop,'Style','edit','String','50','Units','normalized', ...
+        'Position',[0.735 0.080 0.055 0.250],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+        'FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_BOT_YMAX');
+
+    uicontrol(S.hPrevTop,'Style','text','String','Bottom step','Units','normalized', ...
+        'Position',[0.825 0.155 0.100 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
+        'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevBotStep = uicontrol(S.hPrevTop,'Style','edit','String','10','Units','normalized', ...
+        'Position',[0.930 0.080 0.055 0.250],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+        'FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_BOT_STEP');
+
+catch ME_ga_roi_visual_ui
+    disp('ROI preview visual UI patch failed:');
+    disp(ME_ga_roi_visual_ui.message);
+end
+
+
+%%% =====================================================================
+%%% INITIALIZE
+%%% =====================================================================
+guidata(hFig,S);
+try, set(hFig,'WindowScrollWheelFcn',@onMapScrollWheel); catch, end
+updateManualTabs();
+refreshTable();
+clearPreview();
+refreshMapBundlePopup();
+updateMapSideSummaryTable();
+setStatusText('Ready. Modular main loaded.');
+
+try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
+drawnow;
+
+%%% =====================================================================
+%%% CALLBACKS
+%%% =====================================================================
+
+    function closeMe(src,~)
+        S0 = guidata(src);
+        if isempty(S0)
+            delete(src);
+            return;
+        end
+        if isfield(S0,'isClosing') && S0.isClosing
+            delete(src);
+            return;
+        end
+        S0.isClosing = true;
+        guidata(src,S0);
+        try
+            setStatus(true);
+        catch
+        end
+        try
+            if isfield(S0.opt,'onClose') && ~isempty(S0.opt.onClose)
+                S0.opt.onClose();
+            end
+        catch
+        end
+        delete(src);
+    end
+
+    function onCellSelect(~,evt)
+        S0 = guidata(hFig);
+        if isempty(evt) || ~isfield(evt,'Indices') || isempty(evt.Indices)
+            S0.selectedRows = [];
+        else
+            S0.selectedRows = unique(evt.Indices(:,1));
+        end
+        guidata(hFig,S0);
+        updateSelLabel();
+    end
+
+    function onCellEdit(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        S0 = sanitizeTableStruct(S0);
+        guidata(hFig,S0);
+        refreshTable();
+    end
+
+    function onApplyAllToggle(src,~)
+        S0 = guidata(hFig);
+        S0.applyAllIfNoneSelected = logical(get(src,'Value'));
+        guidata(hFig,S0);
+    end
+
+    function onQuickGroupChanged(src,~)
+        S0 = guidata(hFig);
+        g = getSelectedPopupString(src);
+        c = mapConditionFromGroup(S0,g);
+        if ~isempty(c)
+            setPopupToString(S0.hQuickCond,c);
+        end
+    end
+
+    function onApplyGroup(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        rows = getTargetRows(S0);
+        if isempty(rows)
+            setStatusText('No rows selected.');
+            return;
+        end
+        g = getSelectedPopupString(S0.hQuickGroup);
+        cAuto = mapConditionFromGroup(S0,g);
+        for r = rows(:)'
+            S0.subj{r,3} = g;
+            if ~isempty(cAuto)
+                S0.subj{r,4} = cAuto;
+            end
+        end
+        guidata(hFig,S0);
+        refreshTable();
+        setStatusText(['Applied group: ' g]);
+    end
+
+    function onApplyCond(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        rows = getTargetRows(S0);
+        if isempty(rows)
+            setStatusText('No rows selected.');
+            return;
+        end
+        c = getSelectedPopupString(S0.hQuickCond);
+        for r = rows(:)'
+            S0.subj{r,4} = c;
+        end
+        guidata(hFig,S0);
+        refreshTable();
+        setStatusText(['Applied condition: ' c]);
+    end
+
+    function onApplyBoth(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        rows = getTargetRows(S0);
+        if isempty(rows)
+            setStatusText('No rows selected.');
+            return;
+        end
+        g = getSelectedPopupString(S0.hQuickGroup);
+        c = getSelectedPopupString(S0.hQuickCond);
+        for r = rows(:)'
+            S0.subj{r,3} = g;
+            S0.subj{r,4} = c;
+        end
+        guidata(hFig,S0);
+        refreshTable();
+        setStatusText(['Applied group/condition: ' g ' / ' c]);
+    end
+
+    function onAddGroup(~,~)
+        S0 = guidata(hFig);
+        answ = inputdlg({'New group name:'},'Add group',1,{''});
+        if isempty(answ), return; end
+        nm = strtrimSafe(answ{1});
+        if isempty(nm), return; end
+        S0.groupList = mergeUniqueStable(S0.groupList,{nm});
+        guidata(hFig,S0);
+        refreshTable();
+    end
+
+    function onAddCond(~,~)
+        S0 = guidata(hFig);
+        answ = inputdlg({'New condition name:'},'Add condition',1,{''});
+        if isempty(answ), return; end
+        nm = strtrimSafe(answ{1});
+        if isempty(nm), return; end
+        S0.condList = mergeUniqueStable(S0.condList,{nm});
+        guidata(hFig,S0);
+        refreshTable();
+    end
+
+    function onHelp(~,~)
+        msg = sprintf([ ...
+            'GROUP ANALYSIS MODULAR MAIN\n\n' ...
+            'This reduced GroupAnalysis.m only manages the GUI and state.\n\n' ...
+            'Backends are delegated to:\n' ...
+            '  GroupAnalysis_Map.m\n' ...
+            '  GroupAnalysis_FC.m\n' ...
+            '  GroupAnalysis_Common.m\n\n' ...
+            'If a button gives "module action failed", the action name is missing from the corresponding module dispatcher.\n\n' ...
+            'Recommended test order:\n' ...
+            '1. Start GUI.\n' ...
+            '2. Add Bundles.\n' ...
+            '3. Open Group Maps tab.\n' ...
+            '4. Preview Only.\n' ...
+            '5. Compute Group Maps.\n' ...
+            '6. Test Export PNG, then PPT.\n']);
+        helpdlg(msg,'GroupAnalysis Help');
+    end
+
+    function onAddFiles(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        [f,p] = uigetfile({'*.mat;*.txt','MAT or TXT (*.mat, *.txt)'}, ...
+            'Select DATA / ROI / bundle files',startPath,'MultiSelect','on');
+        if isequal(f,0), return; end
+        if ischar(f), f = {f}; end
+        for i = 1:numel(f)
+            S0 = addFileSmartLight(S0,fullfile(p,f{i}));
+        end
+        S0.opt.startDir = p;
+        guidata(hFig,S0);
+        refreshTable();
+        setStatusText(sprintf('Added %d file(s).',numel(f)));
+    end
+
+    function onAddBundles(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        [f,p] = uigetfile({'*.mat','SCM Group bundle MAT (*.mat)'}, ...
+            'Select SCM Group bundle MAT files',startPath,'MultiSelect','on');
+        if isequal(f,0), return; end
+        if ischar(f), f = {f}; end
+
+        sel = clampSelRows(S0.selectedRows,size(S0.subj,1));
+        if ~isempty(sel)
+            nDirect = min(numel(sel),numel(f));
+            for ii = 1:nDirect
+                S0 = assignBundleToRow(S0,sel(ii),fullfile(p,f{ii}));
+            end
+            for ii = nDirect+1:numel(f)
+                S0 = addBundleAsNewRow(S0,fullfile(p,f{ii}));
+            end
+        else
+            for ii = 1:numel(f)
+                S0 = addBundleAsNewRow(S0,fullfile(p,f{ii}));
+            end
+        end
+
+        S0.opt.startDir = p;
+        S0 = sanitizeTableStruct(S0);
+        S0 = ensureRowPacapSideSize(S0);
+        guidata(hFig,S0);
+        refreshTable();
+        refreshMapBundlePopup();
+        setStatusText(sprintf('Added %d bundle file(s).',numel(f)));
+    end
+
+    function onAddFolder(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        folder = uigetdir(startPath,'Select a folder to scan');
+        if isequal(folder,0), return; end
+        dm = dir(fullfile(folder,'*.mat'));
+        dt = dir(fullfile(folder,'*.txt'));
+        for i = 1:numel(dm)
+            S0 = addFileSmartLight(S0,fullfile(dm(i).folder,dm(i).name));
+        end
+        for i = 1:numel(dt)
+            S0 = addFileSmartLight(S0,fullfile(dt(i).folder,dt(i).name));
+        end
+        S0.opt.startDir = folder;
+        guidata(hFig,S0);
+        refreshTable();
+        refreshMapBundlePopup();
+        setStatusText(sprintf('Scanned folder. Added %d file(s).',numel(dm)+numel(dt)));
+    end
+
+    function onRemoveSelected(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        sel = clampSelRows(S0.selectedRows,size(S0.subj,1));
+        if isempty(sel)
+            sel = find(logicalCol(S0.subj,1));
+        end
+        if isempty(sel)
+            setStatusText('No rows selected.');
+            return;
+        end
+        S0.subj(sel,:) = [];
+        if isfield(S0,'rowPacapSide') && numel(S0.rowPacapSide) >= max(sel)
+            keep = true(numel(S0.rowPacapSide),1);
+            keep(sel) = false;
+            S0.rowPacapSide = S0.rowPacapSide(keep);
+        end
+        S0.selectedRows = [];
+        S0.lastROI = struct();
+        S0.lastMAP = struct();
+        S0.lastFC = struct();
+        S0 = ensureRowPacapSideSize(S0);
+        guidata(hFig,S0);
+        refreshTable();
+        clearPreview();
+        refreshMapBundlePopup();
+        setStatusText(sprintf('Removed %d row(s).',numel(sel)));
+    end
+
+    function onSaveList(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        S0 = ensureFCRowFilesSizeV13(S0);
+        startPath = getSmartBrowseDir(S0);
+        [f,p] = uiputfile({'*.mat','MAT list (*.mat)'}, ...
+            'Save subject list',fullfile(startPath,'GroupSubjects.mat'));
+        if isequal(f,0), return; end
+        subj = S0.subj;
+        groupList = S0.groupList;
+        condList = S0.condList;
+        rowPacapSide = S0.rowPacapSide;
+        fcRowFiles = localGA_getFCRowFilesV13(S0);
+        FC = struct(); lastFC = struct();
+        fcAtlasLabelFile = ''; fcSeedRegion = '';
+        try, FC = S0.FC; catch, end
+        try, lastFC = S0.lastFC; catch, end
+        try, fcAtlasLabelFile = S0.fcAtlasLabelFile; catch, end
+        try
+            if isfield(S0,'hFCSeedRegion') && ishghandle(S0.hFCSeedRegion)
+                fcSeedRegion = strtrim(char(get(S0.hFCSeedRegion,'String')));
+            else
+                fcSeedRegion = S0.fcSeedRegion;
+            end
+        catch
+        end
+        save(fullfile(p,f),'subj','groupList','condList','rowPacapSide', ...
+            'fcRowFiles','FC','lastFC','fcAtlasLabelFile','fcSeedRegion','-v7.3');
+        S0.opt.startDir = p;
+        guidata(hFig,S0);
+        setStatusText('Saved list including FC files and FC data.');
+    end
+
+    function onLoadList(~,~)
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        [f,p] = uigetfile({'*.mat','MAT list (*.mat)'},'Load subject list',startPath);
+        if isequal(f,0), return; end
+        L = load(fullfile(p,f));
+        if isfield(L,'subj'), S0.subj = L.subj; end
+        if isfield(L,'groupList'), S0.groupList = L.groupList; end
+        if isfield(L,'condList'), S0.condList = L.condList; end
+        if isfield(L,'rowPacapSide'), S0.rowPacapSide = L.rowPacapSide; else, S0.rowPacapSide = cell(size(S0.subj,1),1); end
+        if isfield(L,'fcRowFiles'), S0.fcRowFiles = L.fcRowFiles; else, S0.fcRowFiles = cell(size(S0.subj,1),1); end
+        if isfield(L,'FC') && isstruct(L.FC), S0.FC = L.FC; else, S0.FC = struct('files',{{}},'subjects',struct([]),'loaded',false); end
+        try, S0.FC.loaded = isfield(S0.FC,'subjects') && ~isempty(S0.FC.subjects); catch, end
+        if isfield(L,'lastFC'), S0.lastFC = L.lastFC; else, S0.lastFC = struct(); end
+        if isfield(L,'fcAtlasLabelFile'), S0.fcAtlasLabelFile = L.fcAtlasLabelFile; end
+        if isfield(L,'fcSeedRegion'), S0.fcSeedRegion = L.fcSeedRegion; end
+        try
+            if isfield(S0,'hFCSeedRegion') && ishghandle(S0.hFCSeedRegion)
+                set(S0.hFCSeedRegion,'String',S0.fcSeedRegion);
+            end
+        catch
+        end
+        S0.opt.startDir = p;
+        S0.selectedRows = [];
+        S0 = sanitizeTableStruct(S0);
+        S0 = ensureRowPacapSideSize(S0);
+        S0 = ensureFCRowFilesSizeV13(S0);
+        S0 = localGA_autoFCAtlasFileV13(S0,false);
+        guidata(hFig,S0);
+        refreshTable(); refreshMapBundlePopup(); refreshFCGroupPopups(); clearPreview();
+        try, updateFCTabPreview(); catch, end
+        setStatusText('Loaded list including FC files and FC data.');
+    end
+
+    function onRevertExcluded(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        for r = 1:size(S0.subj,1)
+            st = lower(strtrimSafe(S0.subj{r,9}));
+            if contains(st,'excluded') || contains(st,'not used')
+                S0.subj{r,1} = true;
+                S0.subj{r,9} = '';
+            end
+        end
+        S0.outlierKeys = {};
+        S0.outlierInfo = {};
+        S0.lastROI = struct();
+        S0.lastMAP = struct();
+        guidata(hFig,S0);
+        refreshTable();
+        setStatusText('Reverted excluded rows.');
+    end
+
+    function onTabClicked(tabName)
+        S0 = guidata(hFig);
+        S0.activeTab = upper(strtrimSafe(tabName));
+        switch S0.activeTab
+            case 'ROI'
+                S0.mode = 'ROI Timecourse';
+                try, set(S0.hMode,'Value',1); catch, end
+            case 'MAP'
+                S0.mode = 'Group Maps';
+                try, set(S0.hMode,'Value',2); catch, end
+            case 'FC'
+                S0.mode = 'Functional Connectivity';
+            case 'STATS'
+                S0.mode = 'ROI Timecourse';
+                try, set(S0.hMode,'Value',1); catch, end
+            case 'PREV'
+                S0.mode = 'ROI Timecourse';
+                try, set(S0.hMode,'Value',1); catch, end
+        end
+        guidata(hFig,S0);
+        updateManualTabs();
+        if strcmpi(S0.activeTab,'MAP')
+            refreshMapBundlePopup();
+            updateMapSideSummaryTable();
+            updateMapTabPreview();
+        elseif strcmpi(S0.activeTab,'FC')
+            updateFCTabPreview();
+        elseif strcmpi(S0.activeTab,'PREV')
+            updatePreview();
+        end
+    end
+
+    function onModeChanged(src,~)
+        S0 = guidata(hFig);
+        items = get(src,'String');
+        S0.mode = items{get(src,'Value')};
+        if strcmpi(S0.mode,'Group Maps')
+            S0.activeTab = 'MAP';
+        else
+            S0.activeTab = 'ROI';
+        end
+        guidata(hFig,S0);
+        updateManualTabs();
+    end
+
+    function onROIChanged(~,~)
+        S0 = readROISettingsFromUI(guidata(hFig));
+        guidata(hFig,S0);
+        updatePreview();
+    end
+
+    function onStyleChanged(~,~)
+        S0 = guidata(hFig);
+        try
+            items = get(S0.hColorScheme,'String');
+            S0.colorScheme = items{get(S0.hColorScheme,'Value')};
+        catch
+        end
+        try, S0.tc_showSEM = logical(get(S0.hShowSEM,'Value')); catch, end
+        try, S0.tc_showInjectionBox = logical(get(S0.hShowInjBox,'Value')); catch, end
+        guidata(hFig,S0);
+        updatePreview();
+    end
+
+    function onPreviewStyleChanged(~,~)
+        S0 = guidata(hFig);
+        try
+            items = get(S0.hPrevStyle,'String');
+            S0.previewStyle = items{get(S0.hPrevStyle,'Value')};
+        catch
+        end
+        try, S0.previewShowGrid = logical(get(S0.hPrevGrid,'Value')); catch, end
+        guidata(hFig,S0);
+        updatePreview();
+    end
+
+    function onSmoothChanged(~,~)
+        S0 = guidata(hFig);
+        try, S0.tc_previewSmooth = logical(get(S0.hSmoothEnable,'Value')); catch, end
+        try, S0.tc_previewSmoothWinSec = safeNum(get(S0.hSmoothWin,'String'),S0.tc_previewSmoothWinSec); catch, end
+        try, S0 = readPreviewAxisControlsLocal(S0); catch, end
+        guidata(hFig,S0);
+        updatePreview();
+    end
+
+    function onPlotScaleChanged(~,~)
+        S0 = guidata(hFig);
+        try, S0 = readPreviewAxisControlsLocal(S0); catch, end
+        guidata(hFig,S0);
+        updatePreview();
+    end
+
+    function onMapDisplayChanged(~,~)
+        S0 = guidata(hFig);
+        S0 = readMapSettingsFromUI(S0);
+        guidata(hFig,S0);
+        if isfield(S0,'lastMAP') && isstruct(S0.lastMAP) && ~isempty(fieldnames(S0.lastMAP))
+            updateMapTabPreview();
+        elseif isfield(S0,'mapPreviewRow') && isfinite(S0.mapPreviewRow)
+            previewBundleRow(S0.mapPreviewRow);
+        end
+    end
+
+    function onLoadCustomUnderlay(~,~)
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        [f,p] = uigetfile({'*.mat;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp','Underlay / MaskEditor files'}, ...
+            'Select custom underlay or MaskEditor mask bundle',startPath);
+        if isequal(f,0), return; end
+
+        fpOriginal = fullfile(p,f);
+        fpUsed = fpOriginal;
+        overlayMask = [];
+
+        try
+            [U,overlayMask,infoTxt] = GA_loadUnderlayAndOverlayMask_20260504(fpOriginal);
+        catch ME_direct
+            try
+                % Fallback only. Do NOT rely on corrupt cache files.
+                U = callMap('loadGroupUnderlayFile',fpOriginal);
+                overlayMask = [];
+                infoTxt = ['fallback raw load: ' shortPathForTable(fpOriginal,60)];
+            catch ME_fallback
+                msg = sprintf('Could not load underlay/mask bundle.\n\nDirect extraction:\n%s\n\nFallback:\n%s', ...
+                    ME_direct.message, ME_fallback.message);
+                errordlg(msg,'Load custom underlay');
+                return;
+            end
+        end
+
+        S0.mapLoadedUnderlay = U;
+        S0.mapLoadedOverlayMask = overlayMask;
+        S0.mapCustomUnderlayFile = fpOriginal;
+        S0.mapUnderlayMode = 'Loaded custom underlay';
+
+        try, setPopupToString(S0.hMapUnderlayMode,'Loaded custom underlay'); catch, end
+
+        guidata(hFig,S0);
+        updateMapTabPreview();
+
+        if ~isempty(overlayMask)
+            setStatusText(['Loaded true underlay + overlay mask: ' infoTxt]);
+        else
+            setStatusText(['Loaded true underlay only: ' infoTxt]);
+        end
+    end
+
+    function onMapSliceEdit(src,~)
+        S0 = guidata(hFig);
+        s = '';
+        try, s = get(src,'String'); catch, end
+        v = sscanf(strrep(s,'/',' '),'%f');
+        if isempty(v) || ~isfinite(v(1)), return; end
+        S0.mapCurrentSlice = round(v(1));
+        if ~isfield(S0,'mapCurrentSliceMax') || ~isfinite(S0.mapCurrentSliceMax)
+            S0.mapCurrentSliceMax = max(1,S0.mapCurrentSlice);
+        end
+        S0.mapCurrentSlice = max(1,min(S0.mapCurrentSliceMax,S0.mapCurrentSlice));
+        guidata(hFig,S0);
+        redrawMapAfterSliceChangeLocal();
+    end
+
+    function onMapScrollWheel(~,evt)
+        S0 = guidata(hFig);
+        try
+            if ~isfield(S0,'activeTab') || ~strcmpi(S0.activeTab,'MAP')
+                if ~isfield(S0,'mode') || isempty(strfind(lower(S0.mode),'map'))
+                    return;
+                end
+            end
+        catch
+            return;
+        end
+
+        r = [];
+        try
+            if isfield(S0,'mapPreviewRow') && isfinite(S0.mapPreviewRow)
+                r = S0.mapPreviewRow;
+            end
+        catch
+            r = [];
+        end
+        if isempty(r)
+            try
+                rows = findBundleDisplayRowsLocal(S0);
+                if ~isempty(rows), r = rows(1); end
+            catch
+            end
+        end
+        if isempty(r), return; end
+
+        S0 = ensureMapSliceStateForRowLocal(S0,r);
+        nZ = 1;
+        try, nZ = max(1,round(S0.mapCurrentSliceMax)); catch, end
+        if nZ <= 1
+            updateMapSliceTextLocal(S0);
+            guidata(hFig,S0);
+            return;
+        end
+
+        step = 1;
+        try
+            if evt.VerticalScrollCount < 0, step = -1; else, step = 1; end
+        catch
+            step = 1;
+        end
+        S0.mapCurrentSlice = max(1,min(nZ,round(S0.mapCurrentSlice + step)));
+        updateMapSliceTextLocal(S0);
+        guidata(hFig,S0);
+        redrawMapAfterSliceChangeLocal();
+    end
+
+    function redrawMapAfterSliceChangeLocal()
+        S0 = guidata(hFig);
+        updateMapSliceTextLocal(S0);
+        try
+            if isfield(S0,'lastMAP') && isstruct(S0.lastMAP) && ~isempty(fieldnames(S0.lastMAP))
+                onComputeGroupMaps([],[]);
+            elseif isfield(S0,'mapPreviewRow') && isfinite(S0.mapPreviewRow)
+                previewBundleRow(S0.mapPreviewRow);
+            end
+        catch ME_scroll
+            try, GA_printErrorLocal(ME_scroll,'GroupAnalysis map slice scroll'); catch, end
+            setStatusText(['Slice redraw failed: ' ME_scroll.message]);
+        end
+    end
+
+    function S0 = ensureMapSliceStateForRowLocal(S0,r)
+        if isempty(r) || r < 1 || r > size(S0.subj,1), return; end
+        bf = '';
+        try, bf = strtrimSafe(S0.subj{r,8}); catch, end
+        if isempty(bf) || exist(bf,'file') ~= 2, return; end
+        try
+            [G,cacheOut] = callMap('getCachedGroupBundle',S0.cache,bf);
+            S0.cache = cacheOut;
+            nZ = inferMapSliceCountFromBundleLocal(G);
+            if ~isfinite(nZ) || nZ < 1, nZ = 1; end
+            S0.mapCurrentSliceMax = nZ;
+            if ~isfield(S0,'mapCurrentSlice') || ~isfinite(S0.mapCurrentSlice) || S0.mapCurrentSlice < 1 || S0.mapCurrentSlice > nZ
+                S0.mapCurrentSlice = defaultMapSliceFromBundleLocal(G,nZ);
+            end
+            S0.mapCurrentSlice = max(1,min(nZ,round(S0.mapCurrentSlice)));
+            updateMapSliceTextLocal(S0);
+        catch
+        end
+    end
+
+    function updateMapSliceTextLocal(S0)
+        try
+            if isfield(S0,'hMapSliceText') && ishghandle(S0.hMapSliceText)
+                if isfield(S0,'mapCurrentSliceMax') && isfinite(S0.mapCurrentSliceMax) && S0.mapCurrentSliceMax > 1
+                    set(S0.hMapSliceText,'String',sprintf('%d/%d',round(S0.mapCurrentSlice),round(S0.mapCurrentSliceMax)));
+                elseif isfield(S0,'mapCurrentSlice') && isfinite(S0.mapCurrentSlice)
+                    set(S0.hMapSliceText,'String',sprintf('%d/1',round(S0.mapCurrentSlice)));
+                else
+                    set(S0.hMapSliceText,'String','-');
+                end
+            end
+        catch
+        end
+    end
+    function onPreviewSelectedBundle(~,~)
+        S0 = guidata(hFig);
+        r = [];
+        sel = clampSelRows(S0.selectedRows,size(S0.subj,1));
+        if ~isempty(sel)
+            r = sel(1);
+        elseif isfinite(S0.mapPreviewRow)
+            r = S0.mapPreviewRow;
+        end
+        if isempty(r) || r < 1 || r > size(S0.subj,1)
+            errordlg('Select one bundle row first.','Preview');
+            return;
+        end
+        previewBundleRow(r);
+    end
+
+    function onMapPreviewPopup(src,~)
+        rows = get(src,'UserData');
+        if isempty(rows) || ~all(isfinite(rows)), return; end
+        v = get(src,'Value');
+        v = max(1,min(numel(rows),v));
+        r = rows(v);
+        S0 = guidata(hFig);
+        S0.mapPreviewRow = r;
+        guidata(hFig,S0);
+        syncMapPreviewSideUI(r);
+        previewBundleRow(r);
+    end
+
+    function onMapPreviewSideChanged(src,~)
+        S0 = guidata(hFig);
+        S0 = ensureRowPacapSideSize(S0);
+        r = S0.mapPreviewRow;
+        if isempty(r) || ~isfinite(r) || r < 1 || r > size(S0.subj,1)
+            return;
+        end
+        items = get(src,'String');
+        S0.rowPacapSide{r} = items{get(src,'Value')};
+        guidata(hFig,S0);
+        updateMapSideSummaryTable();
+        setStatusText(sprintf('Injection side set for row %d: %s',r,S0.rowPacapSide{r}));
+    end
+
+    function onComputeGroupMaps(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        S0 = readMapSettingsFromUI(S0);
+        [mapIdx,missingIdx] = findActiveBundleRowsLocal(S0);
+        if ~isempty(mapIdx)
+            S0 = ensureMapSliceStateForRowLocal(S0,mapIdx(1));
+            guidata(hFig,S0);
+        end
+        if isempty(mapIdx)
+            errordlg('No valid bundle rows found. Use Add Bundles first.','Group Maps');
+            return;
+        end
+        setStatus(false);
+        setStatusText(sprintf('Computing group maps from %d bundle row(s)...',numel(mapIdx)));
+        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
+drawnow;
+        try
+            subjActive = S0.subj(mapIdx,:);
+            [R,cacheOut] = callMap('runPSCMapAnalysis',S0,subjActive,mapIdx,S0.cache);
+            S0 = guidata(hFig);
+            S0.cache = cacheOut;
+            S0.lastMAP = R;
+            
+            S0.previewForceMode = 'MAP';
+S0.activeTab = 'MAP';
+            S0.mode = 'Group Maps';
+            guidata(hFig,S0);
+            updateManualTabs();
+            updateMapTabPreview();
+            if ~isempty(missingIdx)
+                setStatusText(sprintf('Group map complete. Skipped %d active row(s) without valid bundle.',numel(missingIdx)));
+            else
+                setStatusText('Group map analysis complete.');
+            end
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            setStatusText(['Group map failed: ' ME.message]);
+            errordlg(ME.message,'Group Maps');
+        end
+        setStatus(true);
+    end
+
+    function onExportGroupMapData(~,~)
+        try
+            setStatusText('Exporting multi-slice GA video bundle...');
+            outFile = localGA_motorExportIntegratedV6('video',hFig);
+            if isempty(outFile)
+                setStatusText('Group video export cancelled.');
+            else
+                setStatusText(['Group video bundle saved: ' outFile]);
+            end
+        catch ME
+            try, GA_printErrorLocal(ME,'onExportGroupMapData integrated V6'); catch, end
+            setStatusText(['Group video export failed: ' ME.message]);
+            errordlg(ME.message,'Export Group Data for Video');
+        end
+    end
+
+    function onExportGroupMapDataSCM(~,~)
+        try
+            setStatusText('Exporting multi-slice SCM data bundle...');
+            outFile = localGA_motorExportIntegratedV6('scm',hFig);
+            if isempty(outFile)
+                setStatusText('Export Data SCM cancelled.');
+            else
+                setStatusText(['SCM data export saved: ' outFile]);
+            end
+        catch ME
+            try, GA_scm_print_error(ME,'onExportGroupMapDataSCM integrated V6'); catch, disp(ME.message); end
+            setStatusText(['Export Data SCM failed: ' ME.message]);
+            errordlg(ME.message,'Export Data SCM failed');
+        end
+    end
+
+    function onExportGroupMapPNG(~,~)
+        S0 = guidata(hFig);
+        if ~isfield(S0,'lastMAP') || isempty(fieldnames(S0.lastMAP))
+            errordlg('Compute a group map first.','Export PNG');
+            return;
+        end
+        startDir = getSmartBrowseDir(S0);
+        [f,p] = uiputfile({'*.png','PNG (*.png)'}, ...
+            'Save Group Map PNG',fullfile(startDir,['GroupMap_' datestr(now,'yyyymmdd_HHMMSS') '.png']));
+        if isequal(f,0), return; end
+        outFile = fullfile(p,f);
+        try
+            D = buildCurrentMapDisplayLocal(S0);
+            callMap('exportMapDisplayPNG',outFile,D,'Dark');
+            setStatusText(['Group map PNG saved: ' outFile]);
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            errordlg(ME.message,'Export PNG');
+        end
+    end
+
+    function onExportGroupMapPPT(~,~)
+        try
+            setStatusText('Exporting multi-slice SCM PowerPoint...');
+            outFile = localGA_motorExportIntegratedV6('ppt',hFig);
+            if isempty(outFile)
+                setStatusText('Export PPT cancelled.');
+            else
+                setStatusText(['Group SCM PPT saved: ' outFile]);
+            end
+        catch ME
+            try, GA_scm_print_error(ME,'onExportGroupMapPPT integrated V6'); catch, disp(ME.message); end
+            setStatusText(['Export PPT failed: ' ME.message]);
+            errordlg(ME.message,'Export Group Map PPT failed');
+        end
+    end
+
+    function onLoadFCAtlasLabels(~,~)
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        [f,p] = uigetfile({'*.txt;*.label;*.csv','Atlas label/name files (*.txt, *.label, *.csv)'; '*.*','All files'}, ...
+            'Select Allen/Waxholm label-name file',startPath);
+        if isequal(f,0), return; end
+        S0.fcAtlasLabelFile = fullfile(p,f);
+        guidata(hFig,S0);
+        try, set(S0.hFCInfo,'String',sprintf('FC atlas labels: %s',S0.fcAtlasLabelFile)); catch, end
+        setStatusText(['Loaded FC atlas label file: ' S0.fcAtlasLabelFile]);
+    end
+
+    function onPickFCRegionV14(~,~)
+        S0 = guidata(hFig);
+        labels = []; names = {};
+        try
+            if isfield(S0,'lastFC') && isfield(S0.lastFC,'labels') && ~isempty(S0.lastFC.labels)
+                labels = S0.lastFC.labels(:);
+                names = S0.lastFC.names(:);
+            elseif isfield(S0,'FC') && isfield(S0.FC,'subjects') && ~isempty(S0.FC.subjects)
+                labels = S0.FC.subjects(1).labels(:);
+                names = S0.FC.subjects(1).names(:);
+            end
+        catch
+        end
+        if isempty(labels)
+            errordlg('Load/compute FC first so available regions are known.','Pick FC region');
+            return;
+        end
+        choices = cell(numel(labels),1);
+        for ii = 1:numel(labels)
+            nm = '';
+            try, nm = names{ii}; catch, nm = sprintf('ROI_%g',labels(ii)); end
+            choices{ii} = sprintf('%g | %s',labels(ii),nm);
+        end
+        [sel,ok] = listdlg('PromptString','Choose seed / ROI region:', ...
+            'SelectionMode','single', ...
+            'ListString',choices, ...
+            'ListSize',[520 520], ...
+            'Name','FC seed / region');
+        if ok && ~isempty(sel)
+            set(S0.hFCSeedRegion,'String',num2str(labels(sel)));
+            S0.fcSeedRegion = num2str(labels(sel));
+            guidata(hFig,S0);
+            updateFCTabPreview();
+        end
+    end
+
+    function onFCHelpV14(~,~)
+        msg = sprintf(['Seed/region box:\n' ...
+            '  - enter an atlas label number, e.g. 105\n' ...
+            '  - or type part of a region name, e.g. cortex, thalamus, hippocampus\n' ...
+            '  - or click Pick Region to choose from the available ROI list.\n\n' ...
+            'Views:\n' ...
+            '  Matrix summary = one large FC matrix for selected group/difference.\n' ...
+            '  Seed profile = strongest connections from selected seed/region.\n' ...
+            '  Max connections = strongest ROI-to-ROI edges.\n' ...
+            '  ROI time course = full stored ROI time course from the FC bundle, if meanTS exists.\n' ...
+            '  Subject heatmap = subject-by-region seed connectivity.\n\n' ...
+            'Hide |r| < is only a visual threshold. It does not recompute statistics.']);
+        helpdlg(msg,'Functional Connectivity help');
+    end
+
+    function onFCRegionChangedV15(~,~)
+        S0 = guidata(hFig);
+        try
+            reg = getSelectedPopupString(S0.hFCRegion1);
+            lab = regexp(reg,'^\s*([+-]?\d+\.?\d*)','tokens','once');
+            if ~isempty(lab)
+                set(S0.hFCSeedRegion,'String',lab{1});
+                S0.fcSeedRegion = lab{1};
+            else
+                set(S0.hFCSeedRegion,'String',reg);
+                S0.fcSeedRegion = reg;
+            end
+            guidata(hFig,S0);
+        catch
+        end
+        updateFCTabPreview();
+    end
+
+    function onRefreshFCRegionMenusV15(~,~)
+        S0 = guidata(hFig);
+        S0 = refreshFCRegionPopupsV15(S0);
+        guidata(hFig,S0);
+        updateFCTabPreview();
+    end
+
+    function onFCHelpV15(~,~)
+        msg = sprintf(['Functional Connectivity Group Analysis\n\n' ...
+            'Region 1 / seed:\n' ...
+            '  Main seed region used for Seed profile, ROI time course, Subject heatmap, and Region graph.\n\n' ...
+            'Region 2 / target:\n' ...
+            '  Optional second region used for Pair correlation.\n\n' ...
+            'Hemisphere mode:\n' ...
+            '  All/Merged = use all available regions.\n' ...
+            '  Left only / Right only = uses region names containing left/right markers if present.\n' ...
+            '  Left vs Right = rows are left regions and columns are right regions.\n\n' ...
+            'Hide |r| <:\n' ...
+            '  Visual threshold only. It hides weak plotted edges but does not change statistics.\n\n' ...
+            'Max connections:\n' ...
+            '  Ranks strongest ROI-to-ROI edges. Useful QC and discovery view.\n\n' ...
+            'Subject heatmap:\n' ...
+            '  Rows = subjects, columns = target regions. With one subject, it is only a single-row QC view.\n\n' ...
+            'Region graph:\n' ...
+            '  Network-style FC visualization. If atlas coordinates are not stored in the bundle, it uses a circular layout instead of anatomical overlay.']);
+        helpdlg(msg,'FC Group Analysis Help');
+    end
+
+    function onLoadFCGroupBundles(~,~)
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        [f,p] = uigetfile({'FC_GroupBundle_*.mat;*.mat','FC group bundles (*.mat)'}, ...
+            'Select FC_GroupBundle MAT files',startPath,'MultiSelect','on');
+        if isequal(f,0), return; end
+        if ischar(f), f = {f}; end
+        fileList = cell(numel(f),1);
+        for ii = 1:numel(f)
+            fileList{ii} = fullfile(p,f{ii});
+        end
+        loadFCFileListIntoState(fileList);
+    end
+
+    function onScanFCGroupFolder(~,~)
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        rootDir = uigetdir(startPath,'Select folder to scan for FC_GroupBundle_*.mat');
+        if isequal(rootDir,0), return; end
+        try
+            fileList = callFC('findFCBundlesRecursive',rootDir);
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            errordlg(ME.message,'Scan FC folder');
+            return;
+        end
+        if isempty(fileList)
+            errordlg('No FC_GroupBundle_*.mat files found.','Functional Connectivity');
+            return;
+        end
+        loadFCFileListIntoState(fileList);
+    end
+
+    function loadFCFileListIntoState(fileList)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        S0 = ensureFCRowFilesSizeV13(S0);
+        setStatus(false);
+        setStatusText('Loading FC bundles...');
+        drawnow;
+        try
+            fileList = fileList(:);
+            selectedRows = [];
+            try, selectedRows = S0.selectedRows(:); catch, selectedRows = []; end
+            selectedRows = selectedRows(isfinite(selectedRows) & selectedRows >= 1 & selectedRows <= size(S0.subj,1));
+            selectedRows = unique(selectedRows,'stable');
+            if ~isempty(selectedRows)
+                nAssign = min(numel(selectedRows),numel(fileList));
+                for ii = 1:nAssign
+                    r = selectedRows(ii);
+                    fp = fileList{ii};
+                    S0.fcRowFiles{r,1} = fp;
+                    S0.subj{r,1} = true;
+                    if isempty(strtrimSafe(S0.subj{r,2})) || strcmpi(strtrimSafe(S0.subj{r,2}),'N/A')
+                        S0.subj{r,2} = guessSubjectID(fp);
+                    end
+                end
+                S0 = localGA_buildFCFromTableRowsV13(S0);
+                msg = sprintf('Assigned %d FC bundle(s) to selected row(s). Loaded %d FC subject(s).',nAssign,S0.FC.nSubjects);
+            else
+                [FC,cacheOut] = localGA_loadFCFilesV13(fileList,S0.cache);
+                S0.cache = cacheOut;
+                S0.FC = FC;
+                S0.FC.loaded = true;
+                S0 = localGA_autoAttachFCFilesToRowsV13(S0,FC);
+                msg = sprintf('Loaded %d FC subject(s) from %d file(s). No row selected, auto-matched where possible.',FC.nSubjects,numel(fileList));
+            end
+            S0 = localGA_autoFCAtlasFileV13(S0,false);
+            S0.lastFC = struct();
+            S0.activeTab = 'FC';
+            S0.mode = 'Functional Connectivity';
+            S0 = ensureFCRowFilesSizeV13(S0);
+            guidata(hFig,S0);
+            refreshTable(); refreshFCGroupPopups(); updateManualTabs();
+            try, set(S0.hFCInfo,'String',msg); catch, end
+            setStatusText(msg);
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            errordlg(ME.message,'Load FC bundles');
+            setStatusText(['FC loading failed: ' ME.message]);
+        end
+        setStatus(true);
+    end
+
+    function refreshFCGroupPopups()
+        S0 = guidata(hFig);
+        groups = S0.groupList;
+        try
+            if isfield(S0,'FC') && isfield(S0.FC,'subjects') && ~isempty(S0.FC.subjects)
+                g = cell(numel(S0.FC.subjects),1);
+                for ii = 1:numel(S0.FC.subjects)
+                    g{ii} = strtrimSafe(S0.FC.subjects(ii).group);
+                    if isempty(g{ii}), g{ii} = 'Unassigned'; end
+                end
+                groups = uniqueStable(g);
+            end
+        catch
+        end
+        if isempty(groups), groups = {'Unassigned'}; end
+        try, set(S0.hFCGroupA,'String',groups,'Value',min(get(S0.hFCGroupA,'Value'),numel(groups))); catch, end
+        try, set(S0.hFCGroupB,'String',groups,'Value',min(max(1,min(2,numel(groups))),numel(groups))); catch, end
+        try
+            activeChoices = groups(:);
+            if numel(groups) >= 2
+                activeChoices{end+1,1} = 'Difference A-B';
+            end
+            oldVal = 1;
+            try, oldVal = get(S0.hFCActiveGroup,'Value'); catch, end
+            set(S0.hFCActiveGroup,'String',activeChoices,'Value',min(oldVal,numel(activeChoices)));
+        catch
+        end
+        S0 = refreshFCRegionPopupsV15(S0);
+        guidata(hFig,S0);
+    end
+function onComputeGroupFC(varargin)
+% FC_DATA_RECOVERY_COMPUTE_V32
+try
+    S0 = guidata(hFig);
+    if ~isstruct(S0) || ~isfield(S0,'FC') || ~isstruct(S0.FC) || ~isfield(S0.FC,'subjects') || isempty(S0.FC.subjects)
+        localGA_fcSetInfoV32(S0,'Load FC bundle(s) first.');
+        return;
+    end
+
+    groupA = localGA_fcPopupV32(S0,'hFCGroupA','');
+    groupB = localGA_fcPopupV32(S0,'hFCGroupB','');
+    [R,FC2] = localGA_fcBuildResultV32(S0.FC,groupA,groupB);
+    S0.FC = FC2;
+    S0.lastFC = R;
+    S0.activeTab = 'FC';
+    S0.mode = 'Functional Connectivity';
+
+    try
+        if isfield(S0,'hFCActiveGroup') && isgraphics(S0.hFCActiveGroup)
+            if R.singleGroup
+                set(S0.hFCActiveGroup,'String',{R.groupA},'Value',1);
+            else
+                set(S0.hFCActiveGroup,'String',{R.groupA,R.groupB,'Difference A-B'},'Value',1);
+            end
+        end
+    catch
+    end
+
+    guidata(hFig,S0);
+    try, refreshFCRegionPopupsV15(S0); catch, end
+    updateFCTabPreview();
+
+    localGA_fcSetInfoV32(guidata(hFig),R.note);
+catch ME
+    try, localGA_fcSetInfoV32(guidata(hFig),['FC compute error: ' ME.message]); catch, end
+    errordlg(ME.message,'FC compute error');
+end
+end
+function updateFCTabPreview(varargin)
+% FC_DATA_RECOVERY_PREVIEW_V32
+try
+    S0 = guidata(hFig);
+    if ~isstruct(S0) || ~isfield(S0,'axFCA') || ~isgraphics(S0.axFCA)
+        return;
+    end
+    ax = S0.axFCA;
+    C = localGA_fcColorsV32();
+
+    if ~isfield(S0,'lastFC') || ~isstruct(S0.lastFC) || ~isfield(S0.lastFC,'meanRA')
+        if isfield(S0,'FC') && isstruct(S0.FC) && isfield(S0.FC,'subjects') && ~isempty(S0.FC.subjects)
+            [R,FC2] = localGA_fcBuildResultV32(S0.FC,localGA_fcPopupV32(S0,'hFCGroupA',''),localGA_fcPopupV32(S0,'hFCGroupB',''));
+            S0.FC = FC2;
+            S0.lastFC = R;
+            guidata(hFig,S0);
+        else
+            localGA_fcTextV32(ax,'Load FC bundle(s), then click Compute FC.',C);
+            return;
+        end
+    end
+
+    R = S0.lastFC;
+    FC = S0.FC;
+    viewMode = localGA_fcPopupV32(S0,'hFCView','Matrix summary');
+    activeGroup = localGA_fcPopupV32(S0,'hFCActiveGroup','Group A');
+    hemiMode = localGA_fcPopupV32(S0,'hFCHemiMode','All / merged');
+    dispMode = localGA_fcPopupV32(S0,'hFCDisplay','Pearson r');
+    reg1 = localGA_fcPopupV32(S0,'hFCRegion1','');
+    reg2 = localGA_fcPopupV32(S0,'hFCRegion2','');
+    thr = 0;
+    try
+        if isfield(S0,'hFCThreshold') && isgraphics(S0.hFCThreshold)
+            thr = str2double(get(S0.hFCThreshold,'String'));
+            if ~isfinite(thr), thr = 0; end
+        end
+    catch
+    end
+
+    localGA_fcPlotViewV32(ax,FC,R,viewMode,activeGroup,hemiMode,dispMode,reg1,reg2,thr,C);
+catch ME
+    try
+        localGA_fcTextV32(guidata(hFig).axFCA,['FC preview error: ' ME.message],localGA_fcColorsV32());
+        localGA_fcSetInfoV32(guidata(hFig),['FC preview error: ' ME.message]);
+    catch
+    end
+end
+end
+
+
+
+
+
+    function onExportGroupFC(~,~)
+        S0 = guidata(hFig);
+        if ~isfield(S0,'lastFC') || isempty(fieldnames(S0.lastFC))
+            errordlg('Compute FC first.','FC export');
+            return;
+        end
+        try
+            try, S0.fcRegion1 = getSelectedPopupString(S0.hFCRegion1); catch, end
+            try, S0.fcRegion2 = getSelectedPopupString(S0.hFCRegion2); catch, end
+            try, S0.fcHemiMode = getSelectedPopupString(S0.hFCHemiMode); catch, end
+            try, S0.fcActiveGroup = getSelectedPopupString(S0.hFCActiveGroup); catch, end
+            try, S0.fcDisplayMode = getSelectedPopupString(S0.hFCDisplay); catch, end
+            try, S0.fcViewMode = getSelectedPopupString(S0.hFCView); catch, end
+            try
+                lab = regexp(S0.fcRegion1,'^\s*([+-]?\d+\.?\d*)','tokens','once');
+                if ~isempty(lab), S0.fcSeedRegion = lab{1}; else, S0.fcSeedRegion = S0.fcRegion1; end
+            catch
+            end
+            guidata(hFig,S0);
+            callFC('exportGroupFCResults',S0);
+            setStatusText('FC export complete.');
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            errordlg(ME.message,'FC export');
+        end
+    end
+
+    function onStatsChanged(~,~)
+        S0 = guidata(hFig);
+        try
+            items = get(S0.hTest,'String');
+            S0.testType = items{get(S0.hTest,'Value')};
+        catch
+        end
+        try
+            S0.alpha = safeNum(get(S0.hAlpha,'String'),S0.alpha);
+        catch
+        end
+        try
+            items = get(S0.hAnnotMode,'String');
+            S0.annotMode = items{get(S0.hAnnotMode,'Value')};
+        catch
+        end
+        try, S0.showPText = logical(get(S0.hShowPText,'Value')); catch, end
+        guidata(hFig,S0);
+        updatePreview();
+    end
+
+    function onDetectOutliers(~,~)
+        S0 = guidata(hFig);
+        try
+            [keysOut,info] = callCommon('detectOutliers',double(S0.lastROI.metricVals(:)),S0.lastROI.subjTable,S0);
+            S0.outlierKeys = keysOut;
+            S0.outlierInfo = info;
+            guidata(hFig,S0);
+            updateOutlierBox();
+            updatePreview();
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            errordlg(ME.message,'Outliers');
+        end
+    end
+
+    function onExcludeOutliers(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        if isempty(S0.outlierKeys)
+            errordlg('No outliers detected.','Exclude outliers');
+            return;
+        end
+        keysAll = makeRowKeysLocal(S0.subj);
+        for i = 1:numel(S0.outlierKeys)
+            hit = find(strcmp(keysAll,S0.outlierKeys{i}),1,'first');
+            if ~isempty(hit)
+                S0.subj{hit,1} = false;
+                S0.subj{hit,9} = 'EXCLUDED (outlier)';
+            end
+        end
+        S0.lastROI = struct();
+        S0.lastMAP = struct();
+        guidata(hFig,S0);
+        refreshTable();
+        clearPreview();
+        setStatusText('Outliers excluded. Run analysis again.');
+    end
+
+    function onRun(~,~)
+        syncSubjFromTable();
+        S0 = guidata(hFig);
+        if strcmpi(S0.activeTab,'FC')
+            onComputeGroupFC([],[]);
+            return;
+        end
+        if strcmpi(S0.activeTab,'MAP') || strcmpi(S0.mode,'Group Maps')
+            onComputeGroupMaps([],[]);
+            return;
+        end
+
+        roiIdx = findActiveROIRowsLocal(S0.subj);
+        if isempty(roiIdx)
+            errordlg('No valid ROI rows found.','ROI Analysis');
+            return;
+        end
+
+        S0 = readROISettingsFromUI(S0);
+        S0 = readStatsSettingsFromUI(S0);
+        S0 = readPlotScaleSettingsFromUI(S0);
+        subjActive = S0.subj(roiIdx,:);
+
+        setStatus(false);
+        setStatusText(sprintf('Running ROI analysis for %d row(s)...',numel(roiIdx)));
+        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
+drawnow;
+        try
+            [R,cacheOut] = callCommon('runROITimecourseAnalysis',S0,subjActive,S0.cache);
+            S0 = guidata(hFig);
+            S0.cache = cacheOut;
+            S0.lastROI = R;
+            
+            S0.previewForceMode = 'ROI';
+            S0.activeTab = 'PREV';
+S0.activeTab = 'PREV';
+            S0.mode = 'ROI Timecourse';
+            guidata(hFig,S0);
+            updateManualTabs();
+            updatePreview();
+            setStatusText('ROI analysis complete.');
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            errordlg(ME.message,'ROI Analysis');
+            setStatusText(['ROI analysis failed: ' ME.message]);
+        end
+        setStatus(true);
+    end
+
+    function onExport(~,~)
+        S0 = guidata(hFig);
+        if strcmpi(S0.activeTab,'FC')
+            onExportGroupFC([],[]);
+            return;
+        end
+        R = struct();
+        if strcmpi(S0.mode,'Group Maps')
+            if isfield(S0,'lastMAP'), R = S0.lastMAP; end
+        else
+            if isfield(S0,'lastROI'), R = S0.lastROI; end
+        end
+        if isempty(fieldnames(R))
+            errordlg('Run analysis first.','Export');
+            return;
+        end
+        outParent = uigetdir(getSmartBrowseDir(S0),'Choose export folder');
+        if isequal(outParent,0), return; end
+        outFolder = fullfile(outParent,['GroupAnalysis_' datestr(now,'yyyymmdd_HHMMSS')]);
+        if exist(outFolder,'dir') ~= 7, mkdir(outFolder); end
+        save(fullfile(outFolder,'Results.mat'),'R','-v7.3');
+        setStatusText(['Exported: ' outFolder]);
+    end
+
+    function onExportExcel(~,~)
+        S0 = guidata(hFig);
+        startPath = getSmartBrowseDir(S0);
+        [f,p] = uiputfile({'*.xlsx','Excel workbook (*.xlsx)'}, ...
+            'Save Group Analysis Excel',fullfile(startPath,['GroupAnalysisExport_' datestr(now,'yyyymmdd_HHMMSS') '.xlsx']));
+        if isequal(f,0), return; end
+        try
+            callCommon('exportGroupAnalysisExcelWorkbook',fullfile(p,f),S0);
+            setStatusText(['Excel exported: ' fullfile(p,f)]);
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            errordlg(ME.message,'Excel export');
+        end
+    end
+    function onExportPreviewPNG(which)
+        S0 = guidata(hFig);
+        S0 = readPlotScaleSettingsFromUI(S0);
+        guidata(hFig,S0);
+
+        outDir = uigetdir(getSmartBrowseDir(S0),'Choose folder to save preview PNG(s)');
+        if isequal(outDir,0)
+            return;
+        end
+
+        try
+            ts = datestr(now,'yyyymmdd_HHMMSS');
+
+            if which == 1 || which == 3
+                outTop = fullfile(outDir,['ROIPreview_Top_' ts '.png']);
+                savePreviewPNGLocal(outTop, 1, S0);
+            end
+
+            if which == 2 || which == 3
+                outBot = fullfile(outDir,['ROIPreview_Bottom_' ts '.png']);
+                savePreviewPNGLocal(outBot, 2, S0);
+            end
+
+            setStatusText(['Preview PNG saved to: ' outDir]);
+
+        catch ME
+            try
+                GA_printErrorLocal(ME,'caught error in GroupAnalysis.m');
+            catch
+                disp(getReport(ME,'extended'));
+            end
+            errordlg(ME.message,'Preview export');
+        end
+    end
+
+%%% =====================================================================
+%%% GUI UPDATE HELPERS
+%%% =====================================================================
+
+    function updateManualTabs()
+        S0 = guidata(hFig);
+
+        set(S0.tabROI,'Visible','off');
+        set(S0.tabMAP,'Visible','off');
+        set(S0.tabFC,'Visible','off');
+        set(S0.tabSTATS,'Visible','off');
+        set(S0.tabPREV,'Visible','off');
+
+        tabOff = [0.18 0.18 0.18];
+        tabOn  = [0.34 0.34 0.34];
+
+        set(S0.hTabROI,'BackgroundColor',tabOff);
+        set(S0.hTabMAP,'BackgroundColor',tabOff);
+        set(S0.hTabFC,'BackgroundColor',tabOff);
+        set(S0.hTabSTATS,'BackgroundColor',tabOff);
+        set(S0.hTabPREV,'BackgroundColor',tabOff);
+
+        switch upper(S0.activeTab)
+            case 'ROI'
+                set(S0.tabROI,'Visible','on');
+                set(S0.hTabROI,'BackgroundColor',tabOn);
+            case 'MAP'
+                set(S0.tabMAP,'Visible','on');
+                set(S0.hTabMAP,'BackgroundColor',tabOn);
+            case 'FC'
+                set(S0.tabFC,'Visible','on');
+                set(S0.hTabFC,'BackgroundColor',tabOn);
+            case 'STATS'
+                set(S0.tabSTATS,'Visible','on');
+                set(S0.hTabSTATS,'BackgroundColor',tabOn);
+            case 'PREV'
+                set(S0.tabPREV,'Visible','on');
+                set(S0.hTabPREV,'BackgroundColor',tabOn);
+        end
+    end
+
+    function refreshTable()
+        S0 = guidata(hFig);
+        S0 = sanitizeTableStruct(S0);
+        S0 = ensureRowPacapSideSize(S0);
+
+        S0.groupList = mergeUniqueStable(S0.groupList,uniqueStable(colAsStr(S0.subj,3)));
+        S0.condList  = mergeUniqueStable(S0.condList, uniqueStable(colAsStr(S0.subj,4)));
+
+        colFmt = {'logical','char','char','char',S0.groupList,S0.condList,'char','char','char','char'};
+        dispData = makeUITableDisplayData(S0.subj,S0.tableMinRows,localGA_getFCRowFilesV12(S0));
+
+        try
+            set(S0.hTable,'Data',dispData);
+            set(S0.hTable,'ColumnFormat',colFmt);
+            set(S0.hTable,'BackgroundColor',buildTableRowColorsDisplay(S0.subj,S0.tableMinRows));
+            set(S0.hTable,'ColumnWidth',S0.tableColWidths);
+        catch
+        end
+
+        try
+            set(S0.hQuickGroup,'String',S0.groupList);
+            set(S0.hQuickCond,'String',S0.condList);
+            set(S0.hFCGroupA,'String',S0.groupList);
+            set(S0.hFCGroupB,'String',S0.groupList);
+        catch
+        end
+
+        guidata(hFig,S0);
+        updateSelLabel();
+        updateMapSideSummaryTable();
+    end
+
+    function syncSubjFromTable()
+        S0 = guidata(hFig);
+        try
+            dt = get(S0.hTable,'Data');
+            if iscell(dt)
+                dt = stripUITablePlaceholders(dt);
+                S0.subj = applyUITableToSubj(S0.subj,dt);
+            end
+        catch
+        end
+        S0 = sanitizeTableStruct(S0);
+        guidata(hFig,S0);
+    end
+
+    function updateSelLabel()
+        S0 = guidata(hFig);
+        sel = clampSelRows(S0.selectedRows,size(S0.subj,1));
+        if isempty(sel)
+            set(S0.hSelInfo,'String','Selected: none');
+        else
+            set(S0.hSelInfo,'String',sprintf('Selected: %d row(s)',numel(sel)));
+        end
+    end
+
+    function updateOutlierBox()
+        S0 = guidata(hFig);
+        if isempty(S0.outlierInfo)
+            msg = {'No outliers detected yet.'};
+        else
+            msg = S0.outlierInfo(:);
+        end
+        try
+            set(S0.hOutInfo,'String',msg,'Value',1);
+        catch
+        end
+    end
+
+    function clearPreview()
+        S0 = guidata(hFig);
+
+        try, deleteAllColorbars(hFig); catch, end
+
+        try
+            if isfield(S0,'ax1') && ishghandle(S0.ax1)
+                hardClearAx(S0.ax1, S0.previewStyle, S0.previewShowGrid, 'Top plot');
+            end
+        catch
+            try, cla(S0.ax1); catch, end
+        end
+
+        try
+            if isfield(S0,'ax2') && ishghandle(S0.ax2)
+                hardClearAx(S0.ax2, S0.previewStyle, S0.previewShowGrid, 'Bottom plot');
+            end
+        catch
+            try, cla(S0.ax2); catch, end
+        end
+
+        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
+drawnow limitrate;
+    end
+    function updatePreview()
+        S0 = guidata(hFig);
+
+        try
+            % Always refresh UI settings first
+            try
+                S0 = readROISettingsFromUI(S0);
+            catch
+            end
+
+            try
+                S0 = readStatsSettingsFromUI(S0);
+            catch
+            end
+
+            try
+                items = get(S0.hPrevStyle,'String');
+                S0.previewStyle = items{get(S0.hPrevStyle,'Value')};
+            catch
+                if ~isfield(S0,'previewStyle') || isempty(S0.previewStyle)
+                    S0.previewStyle = 'Dark';
+                end
+            end
+
+            try
+                S0.previewShowGrid = logical(get(S0.hPrevGrid,'Value'));
+            catch
+                if ~isfield(S0,'previewShowGrid')
+                    S0.previewShowGrid = false;
+                end
+            end
+
+            try
+                S0.tc_previewSmooth = logical(get(S0.hSmoothEnable,'Value'));
+            catch
+            end
+
+            try
+                S0.tc_previewSmoothWinSec = safeNum(get(S0.hSmoothWin,'String'),S0.tc_previewSmoothWinSec);
+            catch
+            end
+
+            
+            try, S0 = readPreviewAxisControlsLocal(S0); catch, end
+try, S0 = readPlotScaleSettingsFromUI(S0); catch, end
+            try, applyPreviewLightDarkToUI(S0); catch, end
+
+            guidata(hFig,S0);
+
+            % IMPORTANT: actually redraw both ROI preview axes.
+            if isfield(S0,'ax1') && ishghandle(S0.ax1)
+                exportOnePreview(S0.ax1,1,S0,S0.previewStyle);
+            end
+
+            if isfield(S0,'ax2') && ishghandle(S0.ax2)
+                exportOnePreview(S0.ax2,2,S0,S0.previewStyle);
+            end
+
+            try
+                setStatusText('ROI preview plotted.');
+            catch
+            end
+
+        catch ME_prev
+            try
+                GA_printErrorLocal(ME_prev,'updatePreview / ROI preview');
+            catch
+                disp(getReport(ME_prev,'extended'));
+            end
+
+            try
+                setStatusText(['ROI preview failed: ' ME_prev.message]);
+            catch
+            end
+
+            try
+                clearPreview();
+            catch
+            end
+        end
+    end
+
+
+    function refreshMapBundlePopup()
+        S0 = guidata(hFig);
+        rows = findBundleDisplayRowsLocal(S0);
+        labels = {};
+        if isempty(rows)
+            labels = {'No bundle rows'};
+            rows = NaN;
+        else
+            for i = 1:numel(rows)
+                r = rows(i);
+                info = extractRowMetaLight(S0.subj(r,:));
+                labels{end+1} = sprintf('Row %d | %s | %s | %s', ...
+                    r,info.animalID,info.session,displayScanID(info.scanID)); %#ok<AGROW>
+            end
+        end
+        try
+            set(S0.hMapPreviewPopup,'String',labels,'UserData',rows,'Value',1);
+        catch
+        end
+        if all(isfinite(rows))
+            S0.mapPreviewRow = rows(1);
+        else
+            S0.mapPreviewRow = NaN;
+        end
+        guidata(hFig,S0);
+    end
+
+    function syncMapPreviewSideUI(r)
+        S0 = guidata(hFig);
+        S0 = ensureRowPacapSideSize(S0);
+        if r >= 1 && r <= numel(S0.rowPacapSide)
+            setPopupToString(S0.hMapPreviewSide,S0.rowPacapSide{r});
+        end
+        guidata(hFig,S0);
+    end
+
+    function updateMapSideSummaryTable()
+        S0 = guidata(hFig);
+        if ~isfield(S0,'hMapSideTable') || ~ishghandle(S0.hMapSideTable)
+            return;
+        end
+        S0 = ensureRowPacapSideSize(S0);
+        rows = findBundleDisplayRowsLocal(S0);
+        if isempty(rows)
+            data = {'-','-','-','-'};
+        else
+            data = cell(numel(rows),4);
+            for i = 1:numel(rows)
+                r = rows(i);
+                info = extractRowMetaLight(S0.subj(r,:));
+                side = 'Unknown';
+                if r <= numel(S0.rowPacapSide)
+                    side = strtrimSafe(S0.rowPacapSide{r});
+                end
+                data{i,1} = info.animalID;
+                data{i,2} = info.session;
+                data{i,3} = displayScanID(info.scanID);
+                data{i,4} = side;
+            end
+        end
+        try
+            set(S0.hMapSideTable,'Data',data);
+        catch
+        end
+        guidata(hFig,S0);
+    end
+
+    function previewBundleRow(r)
+        S0 = guidata(hFig);
+        if isempty(r) || r < 1 || r > size(S0.subj,1)
+            return;
+        end
+        bf = strtrimSafe(S0.subj{r,8});
+        if isempty(bf) || exist(bf,'file') ~= 2
+            errordlg('Selected row has no valid bundle file.','Preview');
+            return;
+        end
+        S0 = readMapSettingsFromUI(S0);
+        setStatusText(sprintf('Previewing bundle row %d...',r));
+        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
+drawnow;
+        try
+            [G,cacheOut] = callMap('getCachedGroupBundle',S0.cache,bf);
+            S0.cache = cacheOut;
+            S0 = ensureMapSliceStateForRowLocal(S0,r);
+            guidata(hFig,S0);
+            [mapNow,~] = callMap('buildPreviewMapFromBundle',S0,G);
+            underlayNow = callMap('resolvePreviewUnderlay',S0,G,mapNow);
+            D = struct();
+            D.map = mapNow;
+            D.underlay = underlayNow;
+            D.title = sprintf('Row %d preview',r);
+            D.render = makeMapRenderStructLocal(S0);
+
+            cla(S0.axMap1);
+            callMap('renderPSCOverlay',S0.axMap1,D.underlay,D.map,D.render,'Dark',true);
+            title(S0.axMap1,D.title,'Color','w','FontWeight','bold');
+
+            S0.lastMapDisplay = D;
+            S0.mapPreviewRow = r;
+            guidata(hFig,S0);
+            setStatusText('Bundle preview updated.');
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            errordlg(ME.message,'Bundle preview');
+            setStatusText(['Preview failed: ' ME.message]);
+        end
+    end
+
+    function updateMapTabPreview()
+        S0 = guidata(hFig);
+        if ~isfield(S0,'lastMAP') || isempty(fieldnames(S0.lastMAP))
+            return;
+        end
+        try
+            D = buildCurrentMapDisplayLocal(S0);
+            cla(S0.axMap1);
+            callMap('renderPSCOverlay',S0.axMap1,D.underlay,D.map,D.render,'Dark',true);
+            title(S0.axMap1,D.title,'Color','w','FontWeight','bold');
+            S0.lastMapDisplay = D;
+            guidata(hFig,S0);
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            setStatusText(['Map preview failed: ' ME.message]);
+        end
+    end
+
+%%% =====================================================================
+%%% MODULE CALL WRAPPERS
+%%% =====================================================================
+
+    function varargout = callMap(action,varargin)
+        try
+            [varargout{1:nargout}] = GroupAnalysis_Map(action,varargin{:});
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            error('GroupAnalysis_Map action "%s" failed: %s',action,ME.message);
+        end
+    end
+
+    function varargout = callFC(action,varargin)
+        % GA_FC_PARAMETER_NAME_FIX_20260504
+        % Adaptive wrapper for GroupAnalysis_FC.
+        % Some GroupAnalysis_FC versions expect positional inputs, others expect
+        % name-value inputs. This wrapper supports both and prevents folder paths
+        % like Z:...dataset from being interpreted as parameter names.
+        
+        try
+            [varargout{1:nargout}] = GroupAnalysis_FC(action,varargin{:});
+            return;
+        catch ME1
+            msg1 = lower(ME1.message);
+            shouldRetry = false;
+            if ~isempty(strfind(msg1,'unmatched parameter name')) || ...
+               ~isempty(strfind(msg1,'parameter name')) || ...
+               ~isempty(strfind(msg1,'field name')) || ...
+               ~isempty(strfind(msg1,'name-value'))
+                shouldRetry = true;
+            end
+            
+            if shouldRetry
+                try
+                    act = lower(strtrimSafe(action));
+                    switch act
+                        case 'findfcbundlesrecursive'
+                            if numel(varargin) < 1
+                                error('Missing root folder for findFCBundlesRecursive.');
+                            end
+                            rootDir = varargin{1};
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'rootDir',rootDir);
+                                return;
+                            catch
+                            end
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'folder',rootDir);
+                                return;
+                            catch
+                            end
+                            [varargout{1:nargout}] = GroupAnalysis_FC(action,'rootFolder',rootDir);
+                            return;
+                            
+                        case 'loadfcgroupbundlesfromfiles'
+                            fileList = {};
+                            cacheIn = struct();
+                            if numel(varargin) >= 1, fileList = varargin{1}; end
+                            if numel(varargin) >= 2, cacheIn = varargin{2}; end
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'fileList',fileList,'cache',cacheIn);
+                                return;
+                            catch
+                            end
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'files',fileList,'cache',cacheIn);
+                                return;
+                            catch
+                            end
+                            [varargout{1:nargout}] = GroupAnalysis_FC(action,'files',fileList,'cacheIn',cacheIn);
+                            return;
+                            
+                        case 'alignfcsubjectstocommonrois'
+                            if numel(varargin) < 1
+                                error('Missing FC struct for alignFCSubjectsToCommonROIs.');
+                            end
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'FC',varargin{1});
+                                return;
+                            catch
+                            end
+                            [varargout{1:nargout}] = GroupAnalysis_FC(action,'fc',varargin{1});
+                            return;
+                            
+                        case 'computegroupfcstats'
+                            if numel(varargin) < 3
+                                error('Missing G/groupA/groupB for computeGroupFCStats.');
+                            end
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'G',varargin{1},'groupA',varargin{2},'groupB',varargin{3});
+                                return;
+                            catch
+                            end
+                            [varargout{1:nargout}] = GroupAnalysis_FC(action,'aligned',varargin{1},'groupA',varargin{2},'groupB',varargin{3});
+                            return;
+                            
+                        case 'fcplotmatrix'
+                            if numel(varargin) < 6
+                                error('Missing inputs for fcPlotMatrix.');
+                            end
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'ax',varargin{1},'M',varargin{2},'clim',varargin{3},'titleStr',varargin{4},'names',varargin{5},'C',varargin{6});
+                                return;
+                            catch
+                            end
+                            [varargout{1:nargout}] = GroupAnalysis_FC(action,'ax',varargin{1},'matrix',varargin{2},'clim',varargin{3},'titleStr',varargin{4},'names',varargin{5},'C',varargin{6});
+                            return;
+                            
+                        case 'fcplotpmatrix'
+                            if numel(varargin) < 5
+                                error('Missing inputs for fcPlotPMatrix.');
+                            end
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'ax',varargin{1},'P',varargin{2},'titleStr',varargin{3},'names',varargin{4},'C',varargin{5});
+                                return;
+                            catch
+                            end
+                            [varargout{1:nargout}] = GroupAnalysis_FC(action,'ax',varargin{1},'pMat',varargin{2},'titleStr',varargin{3},'names',varargin{4},'C',varargin{5});
+                            return;
+                            
+                        case 'exportgroupfcresults'
+                            if numel(varargin) < 1
+                                error('Missing S struct for exportGroupFCResults.');
+                            end
+                            try
+                                [varargout{1:nargout}] = GroupAnalysis_FC(action,'S',varargin{1});
+                                return;
+                            catch
+                            end
+                            [varargout{1:nargout}] = GroupAnalysis_FC(action,'state',varargin{1});
+                            return;
+                    end
+                catch ME2
+                    try, GA_printErrorLocal(ME2,'GroupAnalysis_FC adaptive retry failed'); catch, end
+                    error('GroupAnalysis_FC action "%s" failed. Original: %s | Retry: %s',action,ME1.message,ME2.message);
+                end
+            end
+            
+            try, GA_printErrorLocal(ME1,'caught error in GroupAnalysis.m'); catch, end
+            error('GroupAnalysis_FC action "%s" failed: %s',action,ME1.message);
+        end
+    end
+
+    function varargout = callCommon(action,varargin)
+        try
+            [varargout{1:nargout}] = GroupAnalysis_Common(action,varargin{:});
+        catch ME
+            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            error('GroupAnalysis_Common action "%s" failed: %s',action,ME.message);
+        end
+    end
+
+%%% =====================================================================
+%%% LOCAL CORE HELPERS
+%%% =====================================================================
+
+    function setStatusText(txt)
+        S0 = guidata(hFig);
+        try
+            set(S0.hStatus,'String',txt);
+        catch
+        end
+        try
+            set(S0.hMapExportStatus,'String',txt);
+        catch
+        end
+        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
+drawnow limitrate;
+    end
+
+    function setStatus(isReady)
+        try
+            if ~isempty(opt.statusFcn)
+                opt.statusFcn(logical(isReady));
+            end
+        catch
+        end
+    end
+
+end
+
+%%% =====================================================================
+%%% FILE-LEVEL LOCAL FUNCTIONS
+%%% =====================================================================
+
+function h = mkBtn(parent,txt,pos,bg,cb)
+h = uicontrol(parent,'Style','pushbutton','String',txt, ...
+    'Units','normalized','Position',pos, ...
+    'BackgroundColor',bg,'ForegroundColor','w', ...
+    'FontWeight','bold','FontSize',12,'Callback',cb);
+end
+
+function h = mkTabBtn(parent,txt,pos,cb)
+h = uicontrol(parent,'Style','pushbutton','String',txt, ...
+    'Units','normalized','Position',pos, ...
+    'BackgroundColor',[0.18 0.18 0.18], ...
+    'ForegroundColor','w', ...
+    'FontWeight','bold','FontSize',11,'Callback',cb);
+end
+
+function d = defaultOutDir(opt)
+d = pwd;
+try
+    if isfield(opt,'studio') && isstruct(opt.studio)
+        if isfield(opt.studio,'exportPath') && exist(opt.studio.exportPath,'dir') == 7
+            d = fullfile(opt.studio.exportPath,'GroupAnalysis');
+        end
+    end
+catch
+end
+try
+    if exist(d,'dir') ~= 7
+        mkdir(d);
+    end
+catch
+    d = pwd;
+end
+end
+
+function [hAuto,hZero,hStep,hYmin,hYmax] = mkYControlsSimple(parent,y0,label,cfg,C,cb)
+bg = get(parent,'BackgroundColor');
+rowH = 0.18;
+
+uicontrol(parent,'Style','text','String',[label ':'], ...
+    'Units','normalized','Position',[0.02 y0 0.08 rowH], ...
+    'BackgroundColor',bg,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+hAuto = uicontrol(parent,'Style','checkbox','String','Auto', ...
+    'Units','normalized','Position',[0.11 y0 0.12 rowH], ...
+    'Value',double(cfg.auto),'BackgroundColor',bg,'ForegroundColor','w','Callback',cb);
+
+hZero = uicontrol(parent,'Style','checkbox','String','Force 0', ...
+    'Units','normalized','Position',[0.24 y0 0.14 rowH], ...
+    'Value',double(cfg.forceZero),'BackgroundColor',bg,'ForegroundColor','w','Callback',cb);
+
+uicontrol(parent,'Style','text','String','Step:', ...
+    'Units','normalized','Position',[0.40 y0 0.06 rowH], ...
+    'BackgroundColor',bg,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+hStep = uicontrol(parent,'Style','edit','String',num2str(cfg.step), ...
+    'Units','normalized','Position',[0.46 y0+0.01 0.06 rowH], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cb);
+
+uicontrol(parent,'Style','text','String','Ymin:', ...
+    'Units','normalized','Position',[0.54 y0 0.06 rowH], ...
+    'BackgroundColor',bg,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+hYmin = uicontrol(parent,'Style','edit','String',num2str(cfg.ymin), ...
+    'Units','normalized','Position',[0.60 y0+0.01 0.08 rowH], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cb);
+
+uicontrol(parent,'Style','text','String','Ymax:', ...
+    'Units','normalized','Position',[0.70 y0 0.06 rowH], ...
+    'BackgroundColor',bg,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+
+hYmax = uicontrol(parent,'Style','edit','String',num2str(cfg.ymax), ...
+    'Units','normalized','Position',[0.76 y0+0.01 0.08 rowH], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cb);
+end
+
+function [h0,h1] = addPairEditsDark(parent,y,label,v0,v1,C,cb)
+bg = get(parent,'BackgroundColor');
+
+uicontrol(parent,'Style','text','String',label, ...
+    'Units','normalized','Position',[0.02 y 0.35 0.12], ...
+    'BackgroundColor',bg,'ForegroundColor','w', ...
+    'HorizontalAlignment','left','FontWeight','bold');
+
+h0 = uicontrol(parent,'Style','edit','String',num2str(v0), ...
+    'Units','normalized','Position',[0.38 y 0.12 0.12], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cb);
+
+h1 = uicontrol(parent,'Style','edit','String',num2str(v1), ...
+    'Units','normalized','Position',[0.52 y 0.12 0.12], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cb);
+end
+
+function s = strtrimSafe(x)
+try
+    if isempty(x)
+        s = '';
+    else
+        s = strtrim(char(x));
+    end
+catch
+    s = '';
+end
+end
+
+function v = safeNum(str,fallback)
+v = str2double(str);
+if isnan(v) || ~isfinite(v)
+    v = fallback;
+end
+end
+
+function v = logicalCellValue(x)
+try
+    if islogical(x)
+        v = x;
+    elseif isnumeric(x)
+        v = x ~= 0;
+    elseif ischar(x)
+        s = lower(strtrim(x));
+        v = any(strcmp(s,{'1','true','yes','y','on'}));
+    else
+        v = logical(x);
+    end
+catch
+    v = false;
+end
+end
+
+function sel = clampSelRows(sel,nRows)
+if isempty(sel)
+    sel = [];
+    return;
+end
+sel = unique(sel(:)');
+sel = sel(sel >= 1 & sel <= nRows);
+end
+
+function tf = logicalCol(tbl,col)
+tf = false(size(tbl,1),1);
+for i = 1:size(tbl,1)
+    tf(i) = logicalCellValue(tbl{i,col});
+end
+end
+
+function col = colAsStr(C,j)
+col = cell(size(C,1),1);
+for i = 1:size(C,1)
+    col{i} = strtrimSafe(C{i,j});
+end
+end
+
+function u = uniqueStable(C)
+C = C(:);
+C = C(~cellfun(@isempty,C));
+u = {};
+for i = 1:numel(C)
+    if ~any(strcmpi(u,C{i}))
+        u{end+1,1} = C{i}; %#ok<AGROW>
+    end
+end
+end
+
+function out = mergeUniqueStable(a,b)
+if isempty(a), a = {}; end
+if isempty(b), b = {}; end
+out = a(:).';
+for i = 1:numel(b)
+    if isempty(b{i}), continue; end
+    if ~any(strcmpi(out,b{i}))
+        out{end+1} = b{i}; %#ok<AGROW>
+    end
+end
+end
+
+function setPopupToString(h,desired)
+try
+    items = get(h,'String');
+    v = 1;
+    for k = 1:numel(items)
+        if strcmpi(items{k},desired)
+            v = k;
+            break;
+        end
+    end
+    set(h,'Value',v);
+catch
+end
+end
+
+function s = getSelectedPopupString(h)
+s = '';
+try
+    items = get(h,'String');
+    val = get(h,'Value');
+    if iscell(items)
+        val = max(1,min(numel(items),val));
+        s = strtrimSafe(items{val});
+    else
+        s = strtrimSafe(items(val,:));
+    end
+catch
+end
+end
+
+function S = sanitizeTableStruct(S)
+% SANITIZE_TABLE_STRUCT_GUARD_V17
+if ~isstruct(S)
+    S = struct();
+end
+if ~isfield(S,'subj') || isempty(S.subj)
+    S.subj = cell(0,9);
+end
+if ~isfield(S,'groupList') || isempty(S.groupList)
+    S.groupList = {'PACAP','Vehicle','Control','Other'};
+end
+if ~isfield(S,'condList') || isempty(S.condList)
+    S.condList = {'Condition 1','Condition 2','Other'};
+end
+if ~isfield(S,'rowPacapSide') || isempty(S.rowPacapSide)
+    S.rowPacapSide = cell(size(S.subj,1),1);
+end
+if ~isfield(S,'fcRowFiles') || isempty(S.fcRowFiles)
+    S.fcRowFiles = cell(size(S.subj,1),1);
+end
+if ~isfield(S,'selectedRows')
+    S.selectedRows = [];
+end
+if ~isfield(S,'tableMinRows') || isempty(S.tableMinRows)
+    S.tableMinRows = max(6,size(S.subj,1));
+end
+
+if isempty(S.subj)
+    return;
+end
+
+if size(S.subj,2) < 9
+    S.subj(:,end+1:9) = {''};
+elseif size(S.subj,2) > 9
+    S.subj = S.subj(:,1:9);
+end
+
+for r = 1:size(S.subj,1)
+    S.subj{r,1} = logicalCellValue(S.subj{r,1});
+
+    meta = extractMetaFromSources(S.subj{r,2},S.subj{r,6},S.subj{r,7},S.subj{r,8});
+    if ~isempty(meta.animalID) && ~strcmpi(meta.animalID,'N/A')
+        S.subj{r,2} = meta.animalID;
+    elseif isempty(strtrimSafe(S.subj{r,2}))
+        S.subj{r,2} = ['S' num2str(r)];
+    end
+
+    if isempty(strtrimSafe(S.subj{r,3}))
+        S.subj{r,3} = S.defaultGroup;
+    end
+    if isempty(strtrimSafe(S.subj{r,4}))
+        S.subj{r,4} = S.defaultCond;
+    end
+    if isempty(strtrimSafe(S.subj{r,5})) && logicalCellValue(S.subj{r,1})
+        S.subj{r,5} = S.subj{r,2};
+    end
+end
+end
+
+function S = ensureRowPacapSideSize(S)
+n = size(S.subj,1);
+if ~isfield(S,'rowPacapSide') || isempty(S.rowPacapSide)
+    S.rowPacapSide = repmat({'Unknown'},n,1);
+end
+if numel(S.rowPacapSide) < n
+    S.rowPacapSide(end+1:n,1) = {'Unknown'};
+elseif numel(S.rowPacapSide) > n
+    S.rowPacapSide = S.rowPacapSide(1:n);
+end
+for i = 1:n
+    s = strtrimSafe(S.rowPacapSide{i});
+    if strcmpi(s,'L'), s = 'Left'; end
+    if strcmpi(s,'R'), s = 'Right'; end
+    if ~any(strcmpi(s,{'Unknown','Left','Right'}))
+        s = 'Unknown';
+    end
+    S.rowPacapSide{i} = s;
+end
+end
+
+function V = makeUITableDisplayData(subj,minRows,fcRowFiles)
+if nargin < 2, minRows = 0; end
+if nargin < 3, fcRowFiles = cell(size(subj,1),1); end
+V = subjToUITable(subj,fcRowFiles);
+n = size(V,1);
+if minRows > 0 && n < minRows
+    pad = cell(minRows-n,10);
+    for i = 1:size(pad,1)
+        pad{i,1} = false;
+        for j = 2:10, pad{i,j} = ''; end
+    end
+    V = [V; pad];
+end
+end
+
+function V = subjToUITable(subj,fcRowFiles)
+if nargin < 2, fcRowFiles = cell(size(subj,1),1); end
+n = size(subj,1);
+if numel(fcRowFiles) < n, fcRowFiles(end+1:n,1) = {''}; end
+V = cell(n,10);
+for i = 1:n
+    meta = extractMetaFromSources(subj{i,2},subj{i,6},subj{i,7},subj{i,8});
+    V{i,1} = logicalCellValue(subj{i,1});
+    V{i,2} = meta.animalID;
+    V{i,3} = meta.session;
+    V{i,4} = displayScanID(meta.scanID);
+    V{i,5} = strtrimSafe(subj{i,3});
+    V{i,6} = strtrimSafe(subj{i,4});
+    V{i,7} = simplifyFileLabel(strtrimSafe(subj{i,7}));
+    V{i,8} = bundlePresenceLabel(strtrimSafe(subj{i,8}));
+    V{i,9} = fcBundlePresenceLabelV13(fcRowFiles{i});
+    V{i,10} = deriveRowStatusWithFCV13(subj(i,:),fcRowFiles{i});
+end
+end
+
+function subj = applyUITableToSubj(subj,V)
+n = size(V,1);
+if isempty(subj)
+    subj = cell(n,9);
+end
+if size(subj,1) < n
+    subj(end+1:n,1:9) = {''};
+elseif size(subj,1) > n
+    subj = subj(1:n,:);
+end
+for i = 1:n
+    subj{i,1} = logicalCellValue(V{i,1});
+    subj{i,2} = strtrimSafe(V{i,2});
+    subj{i,3} = strtrimSafe(V{i,5});
+    subj{i,4} = strtrimSafe(V{i,6});
+end
+end
+
+function V = stripUITablePlaceholders(V)
+if isempty(V), return; end
+keep = false(size(V,1),1);
+for i = 1:size(V,1)
+    useVal = logicalCellValue(V{i,1});
+    hasContent = false;
+    for j = 2:size(V,2)
+        if ~isempty(strtrimSafe(V{i,j}))
+            hasContent = true;
+            break;
+        end
+    end
+    keep(i) = useVal || hasContent;
+end
+V = V(keep,:);
+end
+
+function colors = buildTableRowColorsDisplay(subj,minRows)
+if nargin < 2, minRows = 0; end
+neutral = [0.12 0.12 0.12];
+excluded = [0.30 0.12 0.12];
+n = size(subj,1);
+nOut = max(max(n,2),minRows);
+colors = repmat(neutral,nOut,1);
+for i = 1:n
+    use = logicalCellValue(subj{i,1});
+    st = lower(strtrimSafe(subj{i,9}));
+    grp = upper(strtrimSafe(subj{i,3}));
+    cond = upper(strtrimSafe(subj{i,4}));
+    if contains(st,'excluded') || ~use
+        colors(i,:) = excluded;
+    elseif contains(grp,'PACAP') || contains(cond,'CONDA') || contains(grp,'GROUPA')
+        colors(i,:) = [0.22 0.42 0.22];
+    elseif contains(grp,'VEH') || contains(grp,'CONTROL') || contains(cond,'CONDB') || contains(grp,'GROUPB')
+        colors(i,:) = [0.08 0.22 0.10];
+    else
+        colors(i,:) = [0.12 0.30 0.16];
+    end
+end
+end
+
+function S = ensureFCRowFilesSizeV13(S)
+n = size(S.subj,1);
+if ~isfield(S,'fcRowFiles') || isempty(S.fcRowFiles), S.fcRowFiles = cell(n,1); end
+S.fcRowFiles = S.fcRowFiles(:);
+if numel(S.fcRowFiles) < n, S.fcRowFiles(end+1:n,1) = {''}; end
+if numel(S.fcRowFiles) > n, S.fcRowFiles = S.fcRowFiles(1:n); end
+for ii=1:n, S.fcRowFiles{ii,1} = strtrimSafe(S.fcRowFiles{ii,1}); end
+end
+
+function S = ensureFCRowFilesSizeV12(S), S = ensureFCRowFilesSizeV13(S); end
+
+function fcRowFiles = localGA_getFCRowFilesV13(S)
+try, S = ensureFCRowFilesSizeV13(S); fcRowFiles = S.fcRowFiles; catch, fcRowFiles = cell(size(S.subj,1),1); end
+end
+
+function fcRowFiles = localGA_getFCRowFilesV12(S), fcRowFiles = localGA_getFCRowFilesV13(S); end
+
+function s = fcBundlePresenceLabelV13(fp)
+fp = strtrimSafe(fp);
+if isempty(fp), s = ''; elseif exist(fp,'file')==2, s = 'Exists'; else, s = 'Missing'; end
+end
+
+function s = fcBundlePresenceLabelV12(fp), s = fcBundlePresenceLabelV13(fp); end
+
+% LOCAL_FC_COMPUTE_DISPLAY_HELPERS_V31
+
+function R = localGA_fcBuildResultV31(FC,groupA,groupB)
+if ~isstruct(FC) || ~isfield(FC,'subjects') || isempty(FC.subjects)
+    error('No loaded FC subjects found.');
+end
+subs = FC.subjects;
+baseIdx = [];
+for ii = 1:numel(subs)
+    if isfield(subs(ii),'R') && ~isempty(subs(ii).R) && isfield(subs(ii),'labels') && ~isempty(subs(ii).labels)
+        baseIdx = ii;
+        break;
+    end
+end
+if isempty(baseIdx), error('Loaded FC bundle has no usable R matrices.'); end
+labels = double(subs(baseIdx).labels(:));
+nR = numel(labels);
+names = localGA_fcNamesV31(subs(baseIdx),labels);
+Zstack = []; groups = {}; subjectNames = {}; sourceFiles = {};
+for ii = 1:numel(subs)
+    if ~isfield(subs(ii),'R') || isempty(subs(ii).R), continue; end
+    if ~isfield(subs(ii),'labels') || isempty(subs(ii).labels), continue; end
+    labs = double(subs(ii).labels(:));
+    [tf,ord] = ismember(labels,labs);
+    if any(~tf), continue; end
+    M = double(subs(ii).R);
+    if size(M,1) ~= numel(labs) || size(M,2) ~= numel(labs), continue; end
+    M = M(ord,ord);
+    if isfield(subs(ii),'Z') && ~isempty(subs(ii).Z)
+        Z = double(subs(ii).Z);
+        if size(Z,1) == numel(labs) && size(Z,2) == numel(labs)
+            Z = Z(ord,ord);
+        else
+            Z = atanh(max(-0.999999,min(0.999999,M)));
+        end
+    else
+        Z = atanh(max(-0.999999,min(0.999999,M)));
+    end
+    Zstack(:,:,end+1) = Z;
+    if isfield(subs(ii),'group'), g = localGA_fcStrV31(subs(ii).group); else, g = ''; end
+    if isempty(g), g = 'Unassigned'; end
+    groups{end+1,1} = g;
+    if isfield(subs(ii),'name'), subjectNames{end+1,1} = localGA_fcStrV31(subs(ii).name); else, subjectNames{end+1,1} = sprintf('Subject_%02d',ii); end
+    if isfield(subs(ii),'sourceFile'), sourceFiles{end+1,1} = localGA_fcStrV31(subs(ii).sourceFile); else, sourceFiles{end+1,1} = ''; end
+end
+if isempty(Zstack), error('Could not build FC stack from loaded bundle.'); end
+u = localGA_fcUniqueV31(groups);
+groupA = localGA_fcStrV31(groupA);
+groupB = localGA_fcStrV31(groupB);
+if isempty(groupA) || strcmpi(groupA,'Group A') || ~any(strcmpi(groups,groupA)), groupA = u{1}; end
+idxA = strcmpi(groups,groupA);
+if isempty(groupB) || strcmpi(groupB,'Group B') || strcmpi(groupB,groupA) || ~any(strcmpi(groups,groupB))
+    groupB = 'None';
+    for ii = 1:numel(u)
+        if ~strcmpi(u{ii},groupA), groupB = u{ii}; break; end
+    end
+end
+idxB = strcmpi(groups,groupB);
+singleGroup = ~any(idxB);
+meanZA = localGA_fcMean3V31(Zstack(:,:,idxA));
+meanRA = tanh(meanZA);
+if singleGroup
+    meanZB = nan(nR,nR); meanRB = nan(nR,nR); diffZ = nan(nR,nR); diffR = nan(nR,nR);
+else
+    meanZB = localGA_fcMean3V31(Zstack(:,:,idxB));
+    meanRB = tanh(meanZB);
+    diffZ = meanZA - meanZB;
+    diffR = meanRA - meanRB;
+end
+R = struct();
+R.mode = 'Functional Connectivity';
+R.singleGroup = singleGroup;
+R.groupA = groupA; R.groupB = groupB; R.nA = sum(idxA); R.nB = sum(idxB);
+R.labels = labels; R.names = names(:);
+R.meanZA = meanZA; R.meanZB = meanZB; R.meanRA = meanRA; R.meanRB = meanRB;
+R.diffZ = diffZ; R.diffR = diffR; R.pMat = nan(nR,nR); R.tMat = nan(nR,nR);
+R.groups = groups; R.subjectNames = subjectNames; R.sourceFiles = sourceFiles;
+end
+
+function localGA_fcPlotViewV31(ax,FC,R,viewMode,activeGroup,hemiMode,dispMode,reg1,reg2,thr,C)
+try, cla(ax); set(ax,'Visible','on','Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); catch, end
+v = lower(localGA_fcStrV31(viewMode));
+try
+    if ~isempty(strfind(v,'seed'))
+        localGA_fcPlotSeedV31(ax,R,activeGroup,dispMode,reg1,thr,C);
+    elseif ~isempty(strfind(v,'pair'))
+        localGA_fcPlotPairV31(ax,R,activeGroup,dispMode,reg1,reg2,C);
+    elseif ~isempty(strfind(v,'max'))
+        localGA_fcPlotMaxV31(ax,R,activeGroup,hemiMode,dispMode,thr,C);
+    elseif ~isempty(strfind(v,'time'))
+        localGA_fcPlotTimeV31(ax,FC,R,activeGroup,reg1,C);
+    elseif ~isempty(strfind(v,'heat'))
+        localGA_fcPlotHeatV31(ax,FC,R,activeGroup,hemiMode,dispMode,reg1,thr,C);
+    elseif ~isempty(strfind(v,'graph'))
+        localGA_fcPlotGraphV31(ax,R,activeGroup,dispMode,reg1,thr,C);
+    else
+        localGA_fcPlotMatrixV31(ax,R,activeGroup,hemiMode,dispMode,thr,C);
+    end
+catch ME
+    localGA_fcTextV31(ax,['FC view error: ' ME.message],C);
+end
+end
+
+function localGA_fcPlotMatrixV31(ax,R,activeGroup,hemiMode,dispMode,thr,C)
+[M,namesX,namesY,titleText,climVal,msg] = localGA_fcMatrixV31(R,activeGroup,hemiMode,dispMode);
+if isempty(M), localGA_fcTextV31(ax,msg,C); return; end
+if thr > 0, M(abs(M) < thr) = 0; end
+imagesc(ax,M); colormap(ax,localGA_fcCmapV31(256)); caxis(ax,climVal);
+cb = colorbar(ax); try, cb.Color = C.txt; catch, end
+title(ax,[titleText ' | ' localGA_fcStrV31(hemiMode)],'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+ix = localGA_fcTickV31(numel(namesX)); iy = localGA_fcTickV31(numel(namesY));
+set(ax,'XTick',ix,'XTickLabel',localGA_fcAbbrevV31(namesX(ix),14),'YTick',iy,'YTickLabel',localGA_fcAbbrevV31(namesY(iy),14));
+try, xtickangle(ax,90); catch, end
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',9);
+end
+
+function localGA_fcPlotSeedV31(ax,R,activeGroup,dispMode,reg1,thr,C)
+[M,namesX,~,titleText,~,msg] = localGA_fcMatrixV31(R,activeGroup,'All / merged',dispMode);
+if isempty(M), localGA_fcTextV31(ax,msg,C); return; end
+idx = max(1,min(size(M,1),localGA_fcRegionIdxV31(R,reg1)));
+vals = M(idx,:); vals(idx) = NaN;
+if thr > 0, vals(abs(vals) < thr) = NaN; end
+[~,ord] = sort(abs(vals),'descend'); ord = ord(isfinite(vals(ord))); ord = ord(1:min(35,numel(ord)));
+if isempty(ord), localGA_fcTextV31(ax,'No seed connections pass the current filter.',C); return; end
+barh(ax,flipud(vals(ord(:))));
+set(ax,'YTick',1:numel(ord),'YTickLabel',flipud(localGA_fcAbbrevV31(namesX(ord),32)));
+grid(ax,'on');
+title(ax,sprintf('Seed profile: %g | %s | %s',R.labels(idx),R.names{idx},titleText),'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',9);
+end
+
+function localGA_fcPlotPairV31(ax,R,activeGroup,dispMode,reg1,reg2,C)
+[M,~,~,titleText,~,msg] = localGA_fcMatrixV31(R,activeGroup,'All / merged',dispMode);
+if isempty(M), localGA_fcTextV31(ax,msg,C); return; end
+i1 = max(1,min(size(M,1),localGA_fcRegionIdxV31(R,reg1)));
+i2 = max(1,min(size(M,2),localGA_fcRegionIdxV31(R,reg2)));
+s = sprintf('Pair correlation\n\nROI 1: %g | %s\nROI 2: %g | %s\n\n%s\nValue: %.4f',R.labels(i1),R.names{i1},R.labels(i2),R.names{i2},titleText,M(i1,i2));
+localGA_fcTextV31(ax,s,C);
+end
+
+function localGA_fcPlotMaxV31(ax,R,activeGroup,hemiMode,dispMode,thr,C)
+[M,namesX,~,titleText,~,msg] = localGA_fcMatrixV31(R,activeGroup,hemiMode,dispMode);
+if isempty(M), localGA_fcTextV31(ax,msg,C); return; end
+n = min(size(M,1),size(M,2)); vals = []; labs = {};
+for i = 1:n
+    for j = i+1:n
+        vv = M(i,j);
+        if isfinite(vv) && abs(vv) >= thr
+            vals(end+1,1) = vv;
+            labs{end+1,1} = [localGA_fcShortV31(namesX{i},18) ' <-> ' localGA_fcShortV31(namesX{j},18)];
+        end
+    end
+end
+if isempty(vals), localGA_fcTextV31(ax,'No connections pass threshold.',C); return; end
+[~,ord] = sort(abs(vals),'descend'); ord = ord(1:min(35,numel(ord)));
+barh(ax,flipud(vals(ord))); set(ax,'YTick',1:numel(ord),'YTickLabel',flipud(labs(ord))); grid(ax,'on');
+title(ax,['Strongest connections | ' titleText],'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',8);
+end
+
+function localGA_fcPlotTimeV31(ax,FC,R,activeGroup,reg1,C)
+idx = localGA_fcRegionIdxV31(R,reg1); label = R.labels(idx);
+[T,msg] = localGA_fcCollectTCV31(FC,R,label,activeGroup);
+if isempty(T), localGA_fcTextV31(ax,msg,C); return; end
+plot(ax,T,'Color',[0.55 0.55 0.55]); hold(ax,'on');
+m = localGA_fcMean2V31(T); plot(ax,m,'LineWidth',3); hold(ax,'off'); grid(ax,'on');
+title(ax,sprintf('ROI time course: %g | %s',label,R.names{idx}),'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+xlabel(ax,'Frame stored in FC bundle'); ylabel(ax,'ROI signal');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',10);
+end
+
+function localGA_fcPlotHeatV31(ax,FC,R,activeGroup,hemiMode,dispMode,reg1,thr,C)
+idx = localGA_fcRegionIdxV31(R,reg1); label = R.labels(idx);
+[H,namesUse,msg] = localGA_fcCollectHeatV31(FC,R,label,activeGroup,hemiMode,dispMode);
+if isempty(H), localGA_fcTextV31(ax,msg,C); return; end
+if thr > 0, H(abs(H) < thr) = 0; end
+imagesc(ax,H); colormap(ax,localGA_fcCmapV31(256)); caxis(ax,[-1 1]);
+cb = colorbar(ax); try, cb.Color = C.txt; catch, end
+ix = localGA_fcTickV31(size(H,2));
+set(ax,'XTick',ix,'XTickLabel',localGA_fcAbbrevV31(namesUse(ix),14),'YTick',1:size(H,1));
+try, xtickangle(ax,90); catch, end
+title(ax,sprintf('Subject heatmap: seed %g | %s',label,R.names{idx}),'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',8);
+end
+
+function localGA_fcPlotGraphV31(ax,R,activeGroup,dispMode,reg1,thr,C)
+[M,namesX,~,titleText,~,msg] = localGA_fcMatrixV31(R,activeGroup,'All / merged',dispMode);
+if isempty(M), localGA_fcTextV31(ax,msg,C); return; end
+idx = localGA_fcRegionIdxV31(R,reg1); vals = M(idx,:); vals(idx) = NaN;
+if thr > 0, vals(abs(vals) < thr) = NaN; end
+[~,ord] = sort(abs(vals),'descend'); ord = ord(isfinite(vals(ord))); ord = ord(1:min(20,numel(ord)));
+if isempty(ord), localGA_fcTextV31(ax,'No graph edges pass threshold.',C); return; end
+nodes = [idx transpose(ord(:))];
+n = numel(nodes); th = linspace(0,2*pi,n+1); th(end) = []; x = cos(th); y = sin(th);
+cla(ax); hold(ax,'on'); axis(ax,'equal'); axis(ax,'off'); set(ax,'Color',C.axisBg);
+for k = 2:n
+    j = nodes(k); vv = M(idx,j); lw = 0.5 + 4*min(1,abs(vv));
+    if vv >= 0, col = [1 0.35 0.15]; else, col = [0.25 0.55 1]; end
+    plot(ax,[x(1) x(k)],[y(1) y(k)],'Color',col,'LineWidth',lw);
+end
+scatter(ax,x,y,120,'filled','MarkerFaceColor',[0.9 0.9 0.9],'MarkerEdgeColor',[0 0 0]);
+for k = 1:n
+    text(ax,x(k)*1.15,y(k)*1.15,localGA_fcShortV31(namesX{nodes(k)},16),'Color',C.txt,'FontSize',8,'Interpreter','none');
+end
+title(ax,['Region graph | ' titleText],'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold'); hold(ax,'off');
+end
+
+function [M,namesX,namesY,titleText,climVal,msg] = localGA_fcMatrixV31(R,activeGroup,hemiMode,dispMode)
+M = []; namesX = {}; namesY = {}; titleText = ''; climVal = [-1 1]; msg = '';
+g = localGA_fcResolveGroupV31(R,activeGroup); useZ = strcmpi(localGA_fcStrV31(dispMode),'Fisher z'); gl = lower(g);
+if ~isempty(strfind(gl,'diff'))
+    if isfield(R,'singleGroup') && R.singleGroup, msg = 'Difference unavailable: this is single-group FC summary.'; return; end
+    if useZ, M = R.diffZ; else, M = R.diffR; end
+    titleText = [R.groupA ' - ' R.groupB];
+elseif strcmpi(g,R.groupB) && ~(isfield(R,'singleGroup') && R.singleGroup)
+    if useZ, M = R.meanZB; climVal = [-2.5 2.5]; else, M = R.meanRB; climVal = [-1 1]; end
+    titleText = [R.groupB ' mean FC'];
+else
+    if useZ, M = R.meanZA; climVal = [-2.5 2.5]; else, M = R.meanRA; climVal = [-1 1]; end
+    titleText = [R.groupA ' mean FC'];
+end
+[M,namesX,namesY,msgH] = localGA_fcApplyHemiV31(M,R.names,hemiMode); if isempty(M), msg = msgH; end
+end
+
+function [M2,namesX,namesY,msg] = localGA_fcApplyHemiV31(M,names,hemiMode)
+M2 = M; namesX = names(:); namesY = names(:); msg = ''; h = lower(localGA_fcStrV31(hemiMode));
+if isempty(h) || ~isempty(strfind(h,'all')) || ~isempty(strfind(h,'merged')), return; end
+L = localGA_fcHemiMaskV31(names,'left'); Rr = localGA_fcHemiMaskV31(names,'right');
+if ~any(L) && ~any(Rr), return; end
+if ~isempty(strfind(h,'left vs right'))
+    if ~any(L) || ~any(Rr), M2=[]; namesX={}; namesY={}; msg='Left-vs-right requires both left and right labels.'; return; end
+    M2 = M(L,Rr); namesY = names(L); namesX = names(Rr);
+elseif ~isempty(strfind(h,'left'))
+    if ~any(L), M2=[]; namesX={}; namesY={}; msg='No left ROI labels detected.'; return; end
+    M2 = M(L,L); namesX = names(L); namesY = names(L);
+elseif ~isempty(strfind(h,'right'))
+    if ~any(Rr), M2=[]; namesX={}; namesY={}; msg='No right ROI labels detected.'; return; end
+    M2 = M(Rr,Rr); namesX = names(Rr); namesY = names(Rr);
+end
+end
+
+function mask = localGA_fcHemiMaskV31(names,side)
+mask = false(numel(names),1);
+for ii = 1:numel(names)
+    s = lower(localGA_fcStrV31(names{ii}));
+    if strcmpi(side,'left')
+        mask(ii) = ~isempty(strfind(s,'left')) || ~isempty(strfind(s,'_l_')) || ~isempty(strfind(s,'-l-'));
+    else
+        mask(ii) = ~isempty(strfind(s,'right')) || ~isempty(strfind(s,'_r_')) || ~isempty(strfind(s,'-r-'));
+    end
+end
+end
+
+function g = localGA_fcResolveGroupV31(R,activeGroup)
+g = localGA_fcStrV31(activeGroup);
+if isempty(g) || strcmpi(g,'Group A'), g = R.groupA; return; end
+if strcmpi(g,'Group B'), g = R.groupB; return; end
+if ~isempty(strfind(lower(g),'diff')), g = 'Difference A-B'; return; end
+end
+
+function idx = localGA_fcRegionIdxV31(R,txt0)
+idx = 1; s = localGA_fcStrV31(txt0); if isempty(s), return; end
+tok = regexp(s,'^\s*([+-]?\d+\.?\d*)','tokens','once');
+if ~isempty(tok), lab = str2double(tok{1}); else, lab = str2double(s); end
+if isfinite(lab)
+    hit = find(double(R.labels(:)) == lab,1,'first'); if ~isempty(hit), idx = hit; return; end
+end
+s2 = lower(regexprep(s,'^\s*[+-]?\d+\.?\d*\s*\|\s*',''));
+for ii = 1:numel(R.names)
+    if ~isempty(strfind(lower(localGA_fcStrV31(R.names{ii})),s2)), idx = ii; return; end
+end
+end
+
+function [T,msg] = localGA_fcCollectTCV31(FC,R,label,activeGroup)
+T = []; msg = 'No ROI time courses stored in this FC bundle.';
+if ~isstruct(FC) || ~isfield(FC,'subjects'), return; end
+g = localGA_fcResolveGroupV31(R,activeGroup);
+for ii = 1:numel(FC.subjects)
+    s = FC.subjects(ii); if isfield(s,'group') && ~strcmpi(localGA_fcStrV31(s.group),g), continue; end
+    X = [];
+    if isfield(s,'meanTS') && isnumeric(s.meanTS), X = s.meanTS; end
+    if isempty(X) && isfield(s,'roiTS') && isnumeric(s.roiTS), X = s.roiTS; end
+    if isempty(X) && isfield(s,'timeCourses') && isnumeric(s.timeCourses), X = s.timeCourses; end
+    if isempty(X), continue; end
+    labs = double(s.labels(:)); hit = find(labs == double(label),1,'first'); if isempty(hit), continue; end
+    if size(X,2) == numel(labs), tc = X(:,hit); elseif size(X,1) == numel(labs), tc = transpose(X(hit,:)); else, continue; end
+    if isempty(T), T = double(tc(:)); elseif numel(tc) == size(T,1), T(:,end+1) = double(tc(:)); end
+end
+end
+
+function [H,namesUse,msg] = localGA_fcCollectHeatV31(FC,R,label,activeGroup,hemiMode,dispMode)
+H = []; namesUse = R.names; msg = 'No subject FC matrices available for heatmap.';
+if ~isstruct(FC) || ~isfield(FC,'subjects'), return; end
+g = localGA_fcResolveGroupV31(R,activeGroup); keep = true(numel(R.labels),1); h = lower(localGA_fcStrV31(hemiMode));
+if ~isempty(strfind(h,'left')) && isempty(strfind(h,'left vs right')), keep = localGA_fcHemiMaskV31(R.names,'left'); end
+if ~isempty(strfind(h,'right')), keep = localGA_fcHemiMaskV31(R.names,'right'); end
+if ~any(keep), keep = true(numel(R.labels),1); end
+namesUse = R.names(keep);
+for ii = 1:numel(FC.subjects)
+    s = FC.subjects(ii); if isfield(s,'group') && ~strcmpi(localGA_fcStrV31(s.group),g), continue; end
+    labs = double(s.labels(:)); hit = find(labs == double(label),1,'first'); if isempty(hit), continue; end
+    if strcmpi(localGA_fcStrV31(dispMode),'Fisher z') && isfield(s,'Z'), M = s.Z; else, M = s.R; end
+    [tf,ord] = ismember(double(R.labels(keep)),labs); if any(~tf), continue; end
+    H(end+1,:) = double(M(hit,ord));
+end
+end
+
+function m = localGA_fcMean2V31(X)
+m = nan(size(X,1),1);
+for ii = 1:size(X,1), v = X(ii,:); v = v(isfinite(v)); if ~isempty(v), m(ii) = mean(v); end; end
+end
+
+function M = localGA_fcMean3V31(X)
+[a,b,~] = size(X); M = nan(a,b);
+for i = 1:a
+    for j = 1:b
+        v = squeeze(X(i,j,:)); v = v(isfinite(v)); if ~isempty(v), M(i,j) = mean(v); end
+    end
+end
+end
+
+function names = localGA_fcNamesV31(subj,labels)
+if isfield(subj,'names') && ~isempty(subj.names), names = subj.names(:); else, names = {}; end
+if numel(names) < numel(labels)
+    for ii = numel(names)+1:numel(labels), names{ii,1} = sprintf('ROI_%g',labels(ii)); end
+end
+names = names(1:numel(labels));
+end
+
+function u = localGA_fcUniqueV31(c)
+u = {};
+for ii = 1:numel(c), s = localGA_fcStrV31(c{ii}); if isempty(s), s = 'Unassigned'; end; if ~any(strcmpi(u,s)), u{end+1,1} = s; end; end
+end
+
+function val = localGA_fcPopupV31(S,fieldName,fb)
+val = fb;
+try
+    if isfield(S,fieldName) && isgraphics(S.(fieldName))
+        h = S.(fieldName); strs = get(h,'String'); vv = get(h,'Value');
+        if iscell(strs), val = strs{max(1,min(numel(strs),vv))}; else, Cc = cellstr(strs); val = Cc{max(1,min(numel(Cc),vv))}; end
+    end
+catch, val = fb; end
+end
+
+function localGA_fcSetInfoV31(S,msg)
+try, if isstruct(S) && isfield(S,'hFCInfo') && isgraphics(S.hFCInfo), set(S.hFCInfo,'String',msg); end; catch, end
+end
+
+function C = localGA_fcColorsV31()
+C = struct(); C.bg = [0.04 0.04 0.04]; C.axisBg = [0.02 0.02 0.02]; C.txt = [1 1 1]; C.muted = [0.75 0.75 0.75];
+end
+
+function localGA_fcTextV31(ax,msg,C)
+cla(ax); axis(ax,'off'); try, set(ax,'Color',C.axisBg); catch, end
+text(ax,0.5,0.5,msg,'Units','normalized','HorizontalAlignment','center','VerticalAlignment','middle','Color',C.txt,'FontSize',12,'Interpreter','none');
+end
+
+function cmap = localGA_fcCmapV31(n)
+if nargin < 1, n = 256; end
+n = max(8,round(n)); h = floor(n/2);
+b = [transpose(linspace(0,1,h)) transpose(linspace(0,1,h)) ones(h,1)];
+r = [ones(n-h,1) transpose(linspace(1,0,n-h)) transpose(linspace(1,0,n-h))];
+cmap = [b; r];
+end
+
+function idx = localGA_fcTickV31(n)
+if n <= 12, idx = 1:n; else, idx = unique(round(linspace(1,n,12))); end
+end
+
+function out = localGA_fcAbbrevV31(names,maxLen)
+out = cell(size(names)); for ii = 1:numel(names), out{ii} = localGA_fcShortV31(names{ii},maxLen); end
+end
+
+function s = localGA_fcShortV31(s,maxLen)
+s = localGA_fcStrV31(s); if numel(s) > maxLen, s = [s(1:max(1,maxLen-3)) '...']; end
+end
+
+function s = localGA_fcStrV31(x)
+s = '';
+try
+    if nargin < 1 || isempty(x), return; end
+    if ischar(x), s = strtrim(x);
+    elseif iscell(x), if ~isempty(x), s = localGA_fcStrV31(x{1}); end
+    elseif isnumeric(x) || islogical(x), if isscalar(x), s = strtrim(num2str(x)); else, s = strtrim(mat2str(x)); end
+    else, try, s = strtrim(char(x)); catch, s = ''; end
+    end
+catch, s = ''; end
+end
+
+% END_LOCAL_FC_COMPUTE_DISPLAY_HELPERS_V31
+
+% LOCAL_FC_DATA_RECOVERY_HELPERS_V32
+
+function [R,FC] = localGA_fcBuildResultV32(FC,groupA,groupB)
+if ~isstruct(FC) || ~isfield(FC,'subjects') || isempty(FC.subjects)
+    error('No loaded FC subjects found.');
+end
+
+subs = FC.subjects;
+valid = [];
+for ii = 1:numel(subs)
+    [M,Z,labs,nms] = localGA_fcSubjectMatrixV32(subs(ii));
+    if ~isempty(M) && ~isempty(labs)
+        valid(end+1) = ii;
+        FC.subjects(ii).R = M;
+        FC.subjects(ii).Z = Z;
+        FC.subjects(ii).labels = labs;
+        FC.subjects(ii).names = nms;
+    end
+end
+
+if isempty(valid)
+    error('Loaded FC bundle contains subjects, but no usable FC matrix fields were found. Expected fields: R, Z, displayMatrix, displayZ, corrMatrix, fcMatrix, or matrix.');
+end
+
+base = valid(1);
+labels = double(FC.subjects(base).labels(:));
+names = FC.subjects(base).names(:);
+nR = numel(labels);
+
+Zstack = []; groups = {}; subjectNames = {}; sourceFiles = {};
+for kk = 1:numel(valid)
+    ii = valid(kk);
+    labs = double(FC.subjects(ii).labels(:));
+    [tf,ord] = ismember(labels,labs);
+    if any(~tf), continue; end
+    Z = double(FC.subjects(ii).Z);
+    if size(Z,1) ~= numel(labs) || size(Z,2) ~= numel(labs), continue; end
+    Zstack(:,:,end+1) = Z(ord,ord);
+
+    g = '';
+    try, g = localGA_fcStrV32(FC.subjects(ii).group); catch, end
+    if isempty(g), g = localGA_fcInferGroupV32(FC.subjects(ii)); end
+    if isempty(g), g = 'Unassigned'; end
+    groups{end+1,1} = g;
+
+    try, subjectNames{end+1,1} = localGA_fcStrV32(FC.subjects(ii).name); catch, subjectNames{end+1,1} = sprintf('Subject_%02d',ii); end
+    try, sourceFiles{end+1,1} = localGA_fcStrV32(FC.subjects(ii).sourceFile); catch, sourceFiles{end+1,1} = ''; end
+end
+
+if isempty(Zstack)
+    error('Could not align FC matrices across subjects.');
+end
+
+u = localGA_fcUniqueV32(groups);
+groupA = localGA_fcStrV32(groupA);
+groupB = localGA_fcStrV32(groupB);
+if isempty(groupA) || strcmpi(groupA,'Group A') || ~any(strcmpi(groups,groupA)), groupA = u{1}; end
+idxA = strcmpi(groups,groupA);
+if isempty(groupB) || strcmpi(groupB,'Group B') || strcmpi(groupB,groupA) || ~any(strcmpi(groups,groupB))
+    groupB = 'None';
+    for ii = 1:numel(u)
+        if ~strcmpi(u{ii},groupA), groupB = u{ii}; break; end
+    end
+end
+idxB = strcmpi(groups,groupB);
+singleGroup = ~any(idxB);
+
+meanZA = localGA_fcMean3V32(Zstack(:,:,idxA));
+meanRA = tanh(meanZA);
+if singleGroup
+    meanZB = nan(nR,nR); meanRB = nan(nR,nR); diffZ = nan(nR,nR); diffR = nan(nR,nR);
+else
+    meanZB = localGA_fcMean3V32(Zstack(:,:,idxB));
+    meanRB = tanh(meanZB);
+    diffZ = meanZA - meanZB;
+    diffR = meanRA - meanRB;
+end
+
+R = struct();
+R.mode = 'Functional Connectivity';
+R.singleGroup = singleGroup;
+R.groupA = groupA; R.groupB = groupB; R.nA = sum(idxA); R.nB = sum(idxB);
+R.labels = labels; R.names = names(:);
+R.meanZA = meanZA; R.meanZB = meanZB; R.meanRA = meanRA; R.meanRB = meanRB;
+R.diffZ = diffZ; R.diffR = diffR; R.pMat = nan(nR,nR); R.tMat = nan(nR,nR);
+R.groups = groups; R.subjectNames = subjectNames; R.sourceFiles = sourceFiles;
+R.note = sprintf('FC data recovered: %d usable subject(s), %d ROI(s). Group A=%s n=%d, Group B=%s n=%d.',size(Zstack,3),nR,R.groupA,R.nA,R.groupB,R.nB);
+end
+
+function [M,Z,labels,names] = localGA_fcSubjectMatrixV32(subj)
+M = []; Z = []; labels = []; names = {};
+
+labels = localGA_fcGetNumericVectorV32(subj,{'labels','displayLabels','roiLabels','regionLabels','parcelLabels'});
+
+% Prefer true correlation matrix fields.
+M = localGA_fcGetNumericMatrixV32(subj,{'R','displayMatrix','corrMatrix','correlationMatrix','fcMatrix','FCmatrix','matrix','connMatrix'});
+Z = localGA_fcGetNumericMatrixV32(subj,{'Z','displayZ','zMatrix','fisherZ','fisherZMatrix'});
+
+if isempty(M) && ~isempty(Z)
+    M = tanh(Z);
+end
+if isempty(Z) && ~isempty(M)
+    Z = atanh(max(-0.999999,min(0.999999,M)));
+end
+
+% Search nested metadata if top-level fields were not enough.
+if isempty(M)
+    [M,Z,labels2,names2] = localGA_fcSearchNestedV32(subj,0);
+    if isempty(labels) && ~isempty(labels2), labels = labels2; end
+    if isempty(names) && ~isempty(names2), names = names2; end
+end
+
+if isempty(M), return; end
+if size(M,1) ~= size(M,2), M = []; Z = []; return; end
+
+if isempty(labels) || numel(labels) ~= size(M,1)
+    labels = transpose(1:size(M,1));
+end
+labels = double(labels(:));
+
+if isempty(Z) || any(size(Z) ~= size(M))
+    Z = atanh(max(-0.999999,min(0.999999,M)));
+end
+
+names = localGA_fcGetNamesV32(subj,labels,names);
+end
+
+function [M,Z,labels,names] = localGA_fcSearchNestedV32(S,depth)
+M = []; Z = []; labels = []; names = {};
+if depth > 3 || ~isstruct(S), return; end
+f = fieldnames(S);
+for ii = 1:numel(f)
+    x = S.(f{ii});
+    if isnumeric(x) && ndims(x) == 2 && size(x,1) == size(x,2) && size(x,1) > 1
+        nm = lower(f{ii});
+        if ~isempty(strfind(nm,'corr')) || strcmpi(nm,'R') || ~isempty(strfind(nm,'matrix')) || ~isempty(strfind(nm,'fc'))
+            M = double(x);
+            Z = atanh(max(-0.999999,min(0.999999,M)));
+            labels = transpose(1:size(M,1));
+            return;
+        elseif strcmpi(nm,'Z') || ~isempty(strfind(nm,'zmatrix'))
+            Z = double(x); M = tanh(Z); labels = transpose(1:size(M,1)); return;
+        end
+    elseif isstruct(x)
+        [M,Z,labels,names] = localGA_fcSearchNestedV32(x,depth+1);
+        if ~isempty(M), return; end
+    end
+end
+end
+
+function localGA_fcPlotViewV32(ax,FC,R,viewMode,activeGroup,hemiMode,dispMode,reg1,reg2,thr,C)
+try, cla(ax); set(ax,'Visible','on','Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); catch, end
+v = lower(localGA_fcStrV32(viewMode));
+try
+    if ~isempty(strfind(v,'seed'))
+        localGA_fcPlotSeedV32(ax,R,activeGroup,dispMode,reg1,thr,C);
+    elseif ~isempty(strfind(v,'pair'))
+        localGA_fcPlotPairV32(ax,R,activeGroup,dispMode,reg1,reg2,C);
+    elseif ~isempty(strfind(v,'max'))
+        localGA_fcPlotMaxV32(ax,R,activeGroup,hemiMode,dispMode,thr,C);
+    elseif ~isempty(strfind(v,'time'))
+        localGA_fcPlotTimeV32(ax,FC,R,activeGroup,reg1,C);
+    elseif ~isempty(strfind(v,'heat'))
+        localGA_fcPlotHeatV32(ax,FC,R,activeGroup,hemiMode,dispMode,reg1,thr,C);
+    elseif ~isempty(strfind(v,'graph'))
+        localGA_fcPlotGraphV32(ax,R,activeGroup,dispMode,reg1,thr,C);
+    else
+        localGA_fcPlotMatrixV32(ax,R,activeGroup,hemiMode,dispMode,thr,C);
+    end
+catch ME
+    localGA_fcTextV32(ax,['FC view error: ' ME.message],C);
+end
+end
+
+function localGA_fcPlotMatrixV32(ax,R,activeGroup,hemiMode,dispMode,thr,C)
+[M,namesX,namesY,titleText,climVal,msg] = localGA_fcMatrixV32(R,activeGroup,hemiMode,dispMode);
+if isempty(M), localGA_fcTextV32(ax,msg,C); return; end
+if thr > 0, M(abs(M) < thr) = 0; end
+imagesc(ax,M); colormap(ax,localGA_fcCmapV32(256)); caxis(ax,climVal);
+cb = colorbar(ax); try, cb.Color = C.txt; catch, end
+title(ax,[titleText ' | ' localGA_fcStrV32(hemiMode)],'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+ix = localGA_fcTickV32(numel(namesX)); iy = localGA_fcTickV32(numel(namesY));
+set(ax,'XTick',ix,'XTickLabel',localGA_fcAbbrevV32(namesX(ix),14),'YTick',iy,'YTickLabel',localGA_fcAbbrevV32(namesY(iy),14));
+try, xtickangle(ax,90); catch, end
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',9);
+end
+
+function localGA_fcPlotSeedV32(ax,R,activeGroup,dispMode,reg1,thr,C)
+[M,namesX,~,titleText,~,msg] = localGA_fcMatrixV32(R,activeGroup,'All / merged',dispMode);
+if isempty(M), localGA_fcTextV32(ax,msg,C); return; end
+idx = max(1,min(size(M,1),localGA_fcRegionIdxV32(R,reg1)));
+vals = M(idx,:); vals(idx) = NaN;
+if thr > 0, vals(abs(vals) < thr) = NaN; end
+[~,ord] = sort(abs(vals),'descend'); ord = ord(isfinite(vals(ord))); ord = ord(1:min(35,numel(ord)));
+if isempty(ord), localGA_fcTextV32(ax,'No seed connections pass the current filter.',C); return; end
+barh(ax,flipud(vals(ord(:))));
+set(ax,'YTick',1:numel(ord),'YTickLabel',flipud(localGA_fcAbbrevV32(namesX(ord),32)));
+grid(ax,'on');
+title(ax,sprintf('Seed profile: %g | %s | %s',R.labels(idx),R.names{idx},titleText),'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',9);
+end
+
+function localGA_fcPlotPairV32(ax,R,activeGroup,dispMode,reg1,reg2,C)
+[M,~,~,titleText,~,msg] = localGA_fcMatrixV32(R,activeGroup,'All / merged',dispMode);
+if isempty(M), localGA_fcTextV32(ax,msg,C); return; end
+i1 = max(1,min(size(M,1),localGA_fcRegionIdxV32(R,reg1)));
+i2 = max(1,min(size(M,2),localGA_fcRegionIdxV32(R,reg2)));
+s = sprintf('Pair correlation\n\nROI 1: %g | %s\nROI 2: %g | %s\n\n%s\nValue: %.4f',R.labels(i1),R.names{i1},R.labels(i2),R.names{i2},titleText,M(i1,i2));
+localGA_fcTextV32(ax,s,C);
+end
+
+function localGA_fcPlotMaxV32(ax,R,activeGroup,hemiMode,dispMode,thr,C)
+[M,namesX,~,titleText,~,msg] = localGA_fcMatrixV32(R,activeGroup,hemiMode,dispMode);
+if isempty(M), localGA_fcTextV32(ax,msg,C); return; end
+n = min(size(M,1),size(M,2)); vals = []; labs = {};
+for i = 1:n
+    for j = i+1:n
+        vv = M(i,j);
+        if isfinite(vv) && abs(vv) >= thr
+            vals(end+1,1) = vv;
+            labs{end+1,1} = [localGA_fcShortV32(namesX{i},18) ' <-> ' localGA_fcShortV32(namesX{j},18)];
+        end
+    end
+end
+if isempty(vals), localGA_fcTextV32(ax,'No connections pass threshold.',C); return; end
+[~,ord] = sort(abs(vals),'descend'); ord = ord(1:min(35,numel(ord)));
+barh(ax,flipud(vals(ord))); set(ax,'YTick',1:numel(ord),'YTickLabel',flipud(labs(ord))); grid(ax,'on');
+title(ax,['Strongest connections | ' titleText],'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',8);
+end
+
+function localGA_fcPlotHeatV32(ax,FC,R,activeGroup,hemiMode,dispMode,reg1,thr,C)
+idx = localGA_fcRegionIdxV32(R,reg1); label = R.labels(idx);
+[H,namesUse,msg] = localGA_fcCollectHeatV32(FC,R,label,activeGroup,hemiMode,dispMode);
+if isempty(H), localGA_fcTextV32(ax,msg,C); return; end
+if thr > 0, H(abs(H) < thr) = 0; end
+imagesc(ax,H); colormap(ax,localGA_fcCmapV32(256)); caxis(ax,[-1 1]);
+cb = colorbar(ax); try, cb.Color = C.txt; catch, end
+ix = localGA_fcTickV32(size(H,2));
+set(ax,'XTick',ix,'XTickLabel',localGA_fcAbbrevV32(namesUse(ix),14),'YTick',1:size(H,1));
+try, xtickangle(ax,90); catch, end
+title(ax,sprintf('Subject heatmap: seed %g | %s',label,R.names{idx}),'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',8);
+end
+
+function localGA_fcPlotGraphV32(ax,R,activeGroup,dispMode,reg1,thr,C)
+[M,namesX,~,titleText,~,msg] = localGA_fcMatrixV32(R,activeGroup,'All / merged',dispMode);
+if isempty(M), localGA_fcTextV32(ax,msg,C); return; end
+idx = localGA_fcRegionIdxV32(R,reg1); vals = M(idx,:); vals(idx) = NaN;
+if thr > 0, vals(abs(vals) < thr) = NaN; end
+[~,ord] = sort(abs(vals),'descend'); ord = ord(isfinite(vals(ord))); ord = ord(1:min(20,numel(ord)));
+if isempty(ord), localGA_fcTextV32(ax,'No graph edges pass threshold.',C); return; end
+nodes = [idx transpose(ord(:))]; n = numel(nodes); th = linspace(0,2*pi,n+1); th(end) = []; x = cos(th); y = sin(th);
+cla(ax); hold(ax,'on'); axis(ax,'equal'); axis(ax,'off'); set(ax,'Color',C.axisBg);
+for k = 2:n
+    j = nodes(k); vv = M(idx,j); lw = 0.5 + 4*min(1,abs(vv));
+    if vv >= 0, col = [1 0.35 0.15]; else, col = [0.25 0.55 1]; end
+    plot(ax,[x(1) x(k)],[y(1) y(k)],'Color',col,'LineWidth',lw);
+end
+scatter(ax,x,y,120,'filled','MarkerFaceColor',[0.9 0.9 0.9],'MarkerEdgeColor',[0 0 0]);
+for k = 1:n
+    text(ax,x(k)*1.15,y(k)*1.15,localGA_fcShortV32(namesX{nodes(k)},16),'Color',C.txt,'FontSize',8,'Interpreter','none');
+end
+title(ax,['Region graph | ' titleText],'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold'); hold(ax,'off');
+end
+
+function localGA_fcPlotTimeV32(ax,FC,R,activeGroup,reg1,C)
+idx = localGA_fcRegionIdxV32(R,reg1); label = R.labels(idx);
+[T,msg] = localGA_fcCollectTCV32(FC,R,label,activeGroup);
+if isempty(T), localGA_fcTextV32(ax,msg,C); return; end
+plot(ax,T,'Color',[0.55 0.55 0.55]); hold(ax,'on');
+m = localGA_fcMean2V32(T); plot(ax,m,'LineWidth',3); hold(ax,'off'); grid(ax,'on');
+title(ax,sprintf('ROI time course: %g | %s',label,R.names{idx}),'Color',C.txt,'Interpreter','none','FontSize',14,'FontWeight','bold');
+xlabel(ax,'Frame stored in FC bundle'); ylabel(ax,'ROI signal');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',10);
+end
+
+function [M,namesX,namesY,titleText,climVal,msg] = localGA_fcMatrixV32(R,activeGroup,hemiMode,dispMode)
+M = []; namesX = {}; namesY = {}; titleText = ''; climVal = [-1 1]; msg = '';
+g = localGA_fcResolveGroupV32(R,activeGroup); useZ = strcmpi(localGA_fcStrV32(dispMode),'Fisher z'); gl = lower(g);
+if ~isempty(strfind(gl,'diff'))
+    if R.singleGroup, msg = 'Difference unavailable: this is single-group FC summary.'; return; end
+    if useZ, M = R.diffZ; else, M = R.diffR; end
+    titleText = [R.groupA ' - ' R.groupB];
+elseif strcmpi(g,R.groupB) && ~R.singleGroup
+    if useZ, M = R.meanZB; climVal = [-2.5 2.5]; else, M = R.meanRB; climVal = [-1 1]; end
+    titleText = [R.groupB ' mean FC'];
+else
+    if useZ, M = R.meanZA; climVal = [-2.5 2.5]; else, M = R.meanRA; climVal = [-1 1]; end
+    titleText = [R.groupA ' mean FC'];
+end
+[M,namesX,namesY,msgH] = localGA_fcApplyHemiV32(M,R.names,hemiMode); if isempty(M), msg = msgH; end
+end
+
+function [M2,namesX,namesY,msg] = localGA_fcApplyHemiV32(M,names,hemiMode)
+M2 = M; namesX = names(:); namesY = names(:); msg = ''; h = lower(localGA_fcStrV32(hemiMode));
+if isempty(h) || ~isempty(strfind(h,'all')) || ~isempty(strfind(h,'merged')), return; end
+L = localGA_fcHemiMaskV32(names,'left'); Rr = localGA_fcHemiMaskV32(names,'right');
+if ~any(L) && ~any(Rr), return; end
+if ~isempty(strfind(h,'left vs right'))
+    if ~any(L) || ~any(Rr), M2=[]; namesX={}; namesY={}; msg='Left-vs-right requires both left and right labels.'; return; end
+    M2 = M(L,Rr); namesY = names(L); namesX = names(Rr);
+elseif ~isempty(strfind(h,'left'))
+    if ~any(L), M2=[]; namesX={}; namesY={}; msg='No left ROI labels detected.'; return; end
+    M2 = M(L,L); namesX = names(L); namesY = names(L);
+elseif ~isempty(strfind(h,'right'))
+    if ~any(Rr), M2=[]; namesX={}; namesY={}; msg='No right ROI labels detected.'; return; end
+    M2 = M(Rr,Rr); namesX = names(Rr); namesY = names(Rr);
+end
+end
+
+function [T,msg] = localGA_fcCollectTCV32(FC,R,label,activeGroup)
+T = []; msg = 'No ROI time courses stored in this FC bundle. Matrix-based FC views should still work.';
+if ~isstruct(FC) || ~isfield(FC,'subjects'), return; end
+g = localGA_fcResolveGroupV32(R,activeGroup);
+for ii = 1:numel(FC.subjects)
+    s = FC.subjects(ii); if isfield(s,'group') && ~strcmpi(localGA_fcStrV32(s.group),g), continue; end
+    [X,labs] = localGA_fcFindTimecourseV32(s);
+    if isempty(X) || isempty(labs), continue; end
+    hit = find(double(labs(:)) == double(label),1,'first'); if isempty(hit), continue; end
+    if size(X,2) == numel(labs), tc = X(:,hit); elseif size(X,1) == numel(labs), tc = transpose(X(hit,:)); else, continue; end
+    if isempty(T), T = double(tc(:)); elseif numel(tc) == size(T,1), T(:,end+1) = double(tc(:)); end
+end
+end
+
+function [H,namesUse,msg] = localGA_fcCollectHeatV32(FC,R,label,activeGroup,hemiMode,dispMode)
+H = []; namesUse = R.names; msg = 'No subject FC matrices available for heatmap.';
+if ~isstruct(FC) || ~isfield(FC,'subjects'), return; end
+g = localGA_fcResolveGroupV32(R,activeGroup); keep = true(numel(R.labels),1);
+h = lower(localGA_fcStrV32(hemiMode));
+if ~isempty(strfind(h,'left')) && isempty(strfind(h,'left vs right')), keep = localGA_fcHemiMaskV32(R.names,'left'); end
+if ~isempty(strfind(h,'right')), keep = localGA_fcHemiMaskV32(R.names,'right'); end
+if ~any(keep), keep = true(numel(R.labels),1); end
+namesUse = R.names(keep);
+for ii = 1:numel(FC.subjects)
+    s = FC.subjects(ii); if isfield(s,'group') && ~strcmpi(localGA_fcStrV32(s.group),g), continue; end
+    [M,Z,labs] = localGA_fcSubjectMatrixV32(s);
+    if strcmpi(localGA_fcStrV32(dispMode),'Fisher z'), X = Z; else, X = M; end
+    hit = find(double(labs(:)) == double(label),1,'first'); if isempty(hit), continue; end
+    [tf,ord] = ismember(double(R.labels(keep)),double(labs)); if any(~tf), continue; end
+    H(end+1,:) = double(X(hit,ord));
+end
+end
+
+function v = localGA_fcGetNumericVectorV32(S,fields)
+v = [];
+for ii = 1:numel(fields)
+    try
+        if isfield(S,fields{ii}) && isnumeric(S.(fields{ii})) && ~isempty(S.(fields{ii}))
+            v = double(S.(fields{ii})(:)); return;
+        end
+    catch
+    end
+end
+end
+
+function M = localGA_fcGetNumericMatrixV32(S,fields)
+M = [];
+for ii = 1:numel(fields)
+    try
+        if isfield(S,fields{ii}) && isnumeric(S.(fields{ii})) && ndims(S.(fields{ii})) == 2 && size(S.(fields{ii}),1) > 1 && size(S.(fields{ii}),2) > 1
+            M = double(S.(fields{ii})); return;
+        end
+    catch
+    end
+end
+end
+
+function names = localGA_fcGetNamesV32(S,labels,fallback)
+names = fallback;
+fields = {'names','displayNames','roiNames','regionNames','parcelNames','labelNames'};
+for ii = 1:numel(fields)
+    try
+        if isfield(S,fields{ii}) && ~isempty(S.(fields{ii}))
+            x = S.(fields{ii});
+            if iscell(x), names = x(:); elseif ischar(x), names = cellstr(x); end
+            break;
+        end
+    catch
+    end
+end
+if isempty(names), names = {}; end
+if numel(names) < numel(labels)
+    for ii = numel(names)+1:numel(labels), names{ii,1} = sprintf('ROI_%g',labels(ii)); end
+end
+names = names(1:numel(labels));
+end
+
+function [X,labs] = localGA_fcFindTimecourseV32(S)
+X = []; labs = [];
+try, labs = double(S.labels(:)); catch, labs = []; end
+fields = {'meanTS','roiTS','timeCourses','roiTimeCourses','TS','tc','signal','signals'};
+for ii = 1:numel(fields)
+    try
+        if isfield(S,fields{ii}) && isnumeric(S.(fields{ii})) && ~isempty(S.(fields{ii}))
+            Y = double(S.(fields{ii}));
+            if ndims(Y) == 2 && ~isempty(labs) && (size(Y,1) == numel(labs) || size(Y,2) == numel(labs)) && ~(size(Y,1) == numel(labs) && size(Y,2) == numel(labs))
+                X = Y; return;
+            end
+        end
+    catch
+    end
+end
+try
+    if isfield(S,'fcMeta') && isstruct(S.fcMeta)
+        [X,labs] = localGA_fcFindTimecourseV32(S.fcMeta);
+    end
+catch
+end
+end
+
+function mask = localGA_fcHemiMaskV32(names,side)
+mask = false(numel(names),1);
+for ii = 1:numel(names)
+    s = lower(localGA_fcStrV32(names{ii}));
+    if strcmpi(side,'left')
+        mask(ii) = ~isempty(strfind(s,'left')) || ~isempty(strfind(s,'_l_')) || ~isempty(strfind(s,'-l-'));
+    else
+        mask(ii) = ~isempty(strfind(s,'right')) || ~isempty(strfind(s,'_r_')) || ~isempty(strfind(s,'-r-'));
+    end
+end
+end
+
+function g = localGA_fcResolveGroupV32(R,activeGroup)
+g = localGA_fcStrV32(activeGroup);
+if isempty(g) || strcmpi(g,'Group A'), g = R.groupA; return; end
+if strcmpi(g,'Group B'), g = R.groupB; return; end
+if ~isempty(strfind(lower(g),'diff')), g = 'Difference A-B'; return; end
+end
+
+function g = localGA_fcInferGroupV32(S)
+g = '';
+try, g = localGA_fcStrV32(S.group); if ~isempty(g), return; end; catch, end
+t = '';
+try, t = [t ' ' localGA_fcStrV32(S.name)]; catch, end
+try, t = [t ' ' localGA_fcStrV32(S.sourceFile)]; catch, end
+t = lower(t);
+if ~isempty(strfind(t,'vehicle')) || ~isempty(strfind(t,'veh')) || ~isempty(strfind(t,'pbs')) || ~isempty(strfind(t,'acsf')), g = 'Vehicle';
+elseif ~isempty(strfind(t,'pacap')), g = 'PACAP';
+elseif ~isempty(strfind(t,'control')) || ~isempty(strfind(t,'ctrl')), g = 'Control';
+else, g = 'Unassigned'; end
+end
+
+function idx = localGA_fcRegionIdxV32(R,txt0)
+idx = 1; s = localGA_fcStrV32(txt0); if isempty(s), return; end
+tok = regexp(s,'^\s*([+-]?\d+\.?\d*)','tokens','once');
+if ~isempty(tok), lab = str2double(tok{1}); else, lab = str2double(s); end
+if isfinite(lab), hit = find(double(R.labels(:)) == lab,1,'first'); if ~isempty(hit), idx = hit; return; end; end
+s2 = lower(regexprep(s,'^\s*[+-]?\d+\.?\d*\s*\|\s*',''));
+for ii = 1:numel(R.names), if ~isempty(strfind(lower(localGA_fcStrV32(R.names{ii})),s2)), idx = ii; return; end; end
+end
+
+function m = localGA_fcMean2V32(X)
+m = nan(size(X,1),1);
+for ii = 1:size(X,1), v = X(ii,:); v = v(isfinite(v)); if ~isempty(v), m(ii) = mean(v); end; end
+end
+
+function M = localGA_fcMean3V32(X)
+[a,b,~] = size(X); M = nan(a,b);
+for i = 1:a, for j = 1:b, v = squeeze(X(i,j,:)); v = v(isfinite(v)); if ~isempty(v), M(i,j) = mean(v); end; end; end
+end
+
+function u = localGA_fcUniqueV32(c)
+u = {};
+for ii = 1:numel(c), s = localGA_fcStrV32(c{ii}); if isempty(s), s = 'Unassigned'; end; if ~any(strcmpi(u,s)), u{end+1,1} = s; end; end
+end
+
+function val = localGA_fcPopupV32(S,fieldName,fb)
+val = fb;
+try
+    if isfield(S,fieldName) && isgraphics(S.(fieldName))
+        h = S.(fieldName); strs = get(h,'String'); vv = get(h,'Value');
+        if iscell(strs), val = strs{max(1,min(numel(strs),vv))}; else, Cc = cellstr(strs); val = Cc{max(1,min(numel(Cc),vv))}; end
+    end
+catch, val = fb; end
+end
+
+function localGA_fcSetInfoV32(S,msg)
+try, if isstruct(S) && isfield(S,'hFCInfo') && isgraphics(S.hFCInfo), set(S.hFCInfo,'String',msg); end; catch, end
+end
+
+function C = localGA_fcColorsV32()
+C = struct(); C.bg = [0.04 0.04 0.04]; C.axisBg = [0.02 0.02 0.02]; C.txt = [1 1 1]; C.muted = [0.75 0.75 0.75];
+end
+
+function localGA_fcTextV32(ax,msg,C)
+cla(ax); axis(ax,'off'); try, set(ax,'Color',C.axisBg); catch, end
+text(ax,0.5,0.5,msg,'Units','normalized','HorizontalAlignment','center','VerticalAlignment','middle','Color',C.txt,'FontSize',12,'Interpreter','none');
+end
+
+function cmap = localGA_fcCmapV32(n)
+if nargin < 1, n = 256; end
+n = max(8,round(n)); h = floor(n/2);
+b = [transpose(linspace(0,1,h)) transpose(linspace(0,1,h)) ones(h,1)];
+r = [ones(n-h,1) transpose(linspace(1,0,n-h)) transpose(linspace(1,0,n-h))];
+cmap = [b; r];
+end
+
+function idx = localGA_fcTickV32(n)
+if n <= 12, idx = 1:n; else, idx = unique(round(linspace(1,n,12))); end
+end
+
+function out = localGA_fcAbbrevV32(names,maxLen)
+out = cell(size(names)); for ii = 1:numel(names), out{ii} = localGA_fcShortV32(names{ii},maxLen); end
+end
+
+function s = localGA_fcShortV32(s,maxLen)
+s = localGA_fcStrV32(s); if numel(s) > maxLen, s = [s(1:max(1,maxLen-3)) '...']; end
+end
+
+function s = localGA_fcStrV32(x)
+s = '';
+try
+    if nargin < 1 || isempty(x), return; end
+    if ischar(x), s = strtrim(x);
+    elseif iscell(x), if ~isempty(x), s = localGA_fcStrV32(x{1}); end
+    elseif isnumeric(x) || islogical(x), if isscalar(x), s = strtrim(num2str(x)); else, s = strtrim(mat2str(x)); end
+    else, try, s = strtrim(char(x)); catch, s = ''; end
+    end
+catch, s = ''; end
+end
+
+% END_LOCAL_FC_DATA_RECOVERY_HELPERS_V32
+
+function s = deriveRowStatusWithFCV13(row,fcFile)
+fcFile = strtrimSafe(fcFile);
+st = lower(strtrimSafe(row{9}));
+use = logicalCellValue(row{1});
+if contains(st,'excluded'), s = 'Excluded';
+elseif ~use, s = 'Not used';
+elseif ~isempty(fcFile) && exist(fcFile,'file')==2, s = 'FC OK';
+elseif ~isempty(strtrimSafe(row{7})) || ~isempty(strtrimSafe(row{8})), s = 'OK';
+else, s = 'Not set'; end
+end
+
+function s = deriveRowStatusWithFCV12(row,fcFile), s = deriveRowStatusWithFCV13(row,fcFile); end
+
+function [FC,cache] = localGA_loadFCFilesV13(fileList,cache)
+[FC,cache] = GroupAnalysis_FC('loadFCGroupBundlesFromFiles',fileList,cache);
+end
+
+function [FC,cache] = localGA_loadFCFilesV12(fileList,cache), [FC,cache] = localGA_loadFCFilesV13(fileList,cache); end
+
+function S = localGA_buildFCFromTableRowsV13(S)
+S = ensureFCRowFilesSizeV13(S);
+rows = []; files = {};
+for r=1:size(S.subj,1)
+    try, useRow = logicalCellValue(S.subj{r,1}); catch, useRow = true; end
+    fp = strtrimSafe(S.fcRowFiles{r});
+    if useRow && ~isempty(fp) && exist(fp,'file')==2
+        rows(end+1,1)=r; files{end+1,1}=fp; %#ok<AGROW>
+    end
+end
+if isempty(rows), error('No active rows with existing FC files.'); end
+FCout = struct(); FCout.files = unique(files,'stable'); FCout.subjects = struct([]); FCout.nSubjects = 0;
+cache = S.cache;
+for ii=1:numel(rows)
+    r = rows(ii); fp = files{ii};
+    [FCtmp,cache] = localGA_loadFCFilesV13({fp},cache);
+    if ~isfield(FCtmp,'subjects') || isempty(FCtmp.subjects), continue; end
+    pick = localGA_pickFCSubjectForRowV13(FCtmp.subjects,S.subj(r,:),fp);
+    subj = FCtmp.subjects(pick);
+    animal = strtrimSafe(S.subj{r,2});
+    if isempty(animal) || strcmpi(animal,'N/A'), animal = guessSubjectID(fp); end
+    subj.name = animal; subj.animalID = animal;
+    subj.group = strtrimSafe(S.subj{r,3});
+    if isempty(subj.group), subj.group = 'Unassigned'; end
+    subj.condition = strtrimSafe(S.subj{r,4});
+    subj.rowIndex = r; subj.sourceFile = fp;
+    FCout.nSubjects = FCout.nSubjects + 1;
+    if FCout.nSubjects == 1, FCout.subjects = subj; else, FCout.subjects(FCout.nSubjects) = subj; end
+end
+if FCout.nSubjects < 1, error('FC files were found but no valid FC subject could be read.'); end
+FCout.loaded = true; S.cache = cache; S.FC = FCout;
+end
+
+function S = localGA_buildFCFromTableRowsV12(S), S = localGA_buildFCFromTableRowsV13(S); end
+
+function pick = localGA_pickFCSubjectForRowV13(subjects,row,fp)
+pick = 1; animal = lower(strtrimSafe(row{2}));
+if isempty(animal) || strcmpi(animal,'n/a'), animal = lower(guessSubjectID(fp)); end
+bestScore = -Inf;
+for kk=1:numel(subjects)
+    score = 0; nm = ''; sf = '';
+    try, nm = lower(strtrimSafe(subjects(kk).name)); catch, end
+    try, sf = lower(strtrimSafe(subjects(kk).sourceFile)); catch, end
+    if ~isempty(animal)
+        if strcmp(nm,animal), score=score+100; end
+        if contains(nm,animal), score=score+50; end
+        if contains(lower(fp),animal), score=score+25; end
+        if contains(sf,animal), score=score+15; end
+    end
+    if score > bestScore, bestScore = score; pick = kk; end
+end
+end
+
+function S = localGA_autoAttachFCFilesToRowsV13(S,FC)
+S = ensureFCRowFilesSizeV13(S);
+if ~isfield(FC,'subjects') || isempty(FC.subjects), return; end
+for ii=1:numel(FC.subjects)
+    fp=''; nm='';
+    try, fp=strtrimSafe(FC.subjects(ii).sourceFile); catch, end
+    try, nm=strtrimSafe(FC.subjects(ii).name); catch, end
+    if isempty(fp), continue; end
+    hit = localGA_findMatchingTableRowForFCV13(S,nm,fp);
+    if ~isempty(hit), S.fcRowFiles{hit,1}=fp; end
+end
+end
+
+function S = localGA_autoAttachFCFilesToRowsV12(S,FC), S = localGA_autoAttachFCFilesToRowsV13(S,FC); end
+
+function hit = localGA_findMatchingTableRowForFCV13(S,nameText,fp)
+hit=[]; nameText=lower(strtrimSafe(nameText)); fpLow=lower(strtrimSafe(fp));
+for r=1:size(S.subj,1)
+    animal=lower(strtrimSafe(S.subj{r,2}));
+    if isempty(animal) || strcmpi(animal,'n/a'), continue; end
+    if strcmp(animal,nameText) || contains(nameText,animal) || contains(fpLow,animal), hit=r; return; end
+end
+end
+
+function S = localGA_autoFCAtlasFileV13(S,askUser)
+if nargin < 2, askUser = false; end
+try
+    if isfield(S,'fcAtlasLabelFile') && ~isempty(S.fcAtlasLabelFile) && exist(S.fcAtlasLabelFile,'file')==2
+        return;
+    end
+catch
+end
+found = '';
+try
+    roots = {};
+    if isfield(S,'fcRowFiles')
+        for i=1:numel(S.fcRowFiles)
+            fp = strtrimSafe(S.fcRowFiles{i});
+            if ~isempty(fp), roots{end+1}=fileparts(fp); end %#ok<AGROW>
+        end
+    end
+    if isfield(S,'FC') && isfield(S.FC,'files')
+        for i=1:numel(S.FC.files)
+            fp = strtrimSafe(S.FC.files{i});
+            if ~isempty(fp), roots{end+1}=fileparts(fp); end %#ok<AGROW>
+        end
+    end
+    roots = unique(roots,'stable');
+    pats = {'*.label','*label*.txt','*atlas*.txt','*Allen*.txt','*WHS*.txt','*WHS*.label'};
+    for rr=1:numel(roots)
+        d = roots{rr};
+        for up=1:4
+            if isempty(d) || exist(d,'dir')~=7, break; end
+            for pp=1:numel(pats)
+                L = dir(fullfile(d,pats{pp}));
+                if ~isempty(L)
+                    [~,ord] = sort([L.bytes],'descend');
+                    found = fullfile(d,L(ord(1)).name);
+                    break;
+                end
+            end
+            if ~isempty(found), break; end
+            nd = fileparts(d);
+            if strcmp(nd,d), break; end
+            d = nd;
+        end
+        if ~isempty(found), break; end
+    end
+catch
+end
+if isempty(found) && askUser
+    startPath = getSmartBrowseDir(S);
+    [f,p] = uigetfile({'*.txt;*.label;*.csv','Atlas label/name files (*.txt, *.label, *.csv)'; '*.*','All files'}, ...
+        'Select complete atlas label/name TXT file',startPath);
+    if ~isequal(f,0), found = fullfile(p,f); end
+end
+if ~isempty(found)
+    S.fcAtlasLabelFile = found;
+    try, set(S.hFCInfo,'String',sprintf('FC atlas labels: %s',found)); catch, end
+    try, setStatusText(['FC atlas labels: ' found]); catch, end
+end
+end
+
+
+function S = refreshFCRegionPopupsV15(S)
+labels = []; names = {};
+try
+    if isfield(S,'lastFC') && isfield(S.lastFC,'labels') && ~isempty(S.lastFC.labels)
+        labels = S.lastFC.labels(:);
+        names = S.lastFC.names(:);
+    elseif isfield(S,'FC') && isfield(S.FC,'subjects') && ~isempty(S.FC.subjects)
+        labels = S.FC.subjects(1).labels(:);
+        names = S.FC.subjects(1).names(:);
+    end
+catch
+end
+if isempty(labels)
+    choices = {'Compute/load FC first'};
+else
+    choices = cell(numel(labels),1);
+    for ii = 1:numel(labels)
+        nm = '';
+        try, nm = strtrimSafe(names{ii}); catch, nm = sprintf('ROI_%g',labels(ii)); end
+        choices{ii} = sprintf('%g | %s',labels(ii),nm);
+    end
+end
+try
+    old1 = 1; old2 = 1;
+    try, old1 = get(S.hFCRegion1,'Value'); catch, end
+    try, old2 = get(S.hFCRegion2,'Value'); catch, end
+    set(S.hFCRegion1,'String',choices,'Value',min(old1,numel(choices)));
+    set(S.hFCRegion2,'String',choices,'Value',min(max(1,old2),numel(choices)));
+catch
+end
+end
+
+function s = deriveRowStatus(row)
+roi = strtrimSafe(row{7});
+bundle = strtrimSafe(row{8});
+st = lower(strtrimSafe(row{9}));
+use = logicalCellValue(row{1});
+if contains(st,'excluded')
+    s = 'Excluded';
+elseif ~use
+    s = 'Not used';
+elseif ~isempty(roi) || ~isempty(bundle)
+    s = 'OK';
+else
+    s = 'Not set';
+end
+end
+
+function s = simplifyFileLabel(fp)
+fp = strtrimSafe(fp);
+if isempty(fp)
+    s = '';
+else
+    [~,name,ext] = fileparts(fp);
+    s = [name ext];
+end
+end
+
+function s = bundlePresenceLabel(fp)
+fp = strtrimSafe(fp);
+if isempty(fp)
+    s = '';
+elseif exist(fp,'file') == 2
+    s = 'Exists';
+else
+    s = 'Missing';
+end
+end
+
+function rows = getTargetRows(S)
+sel = clampSelRows(S.selectedRows,size(S.subj,1));
+if ~isempty(sel)
+    rows = sel;
+elseif S.applyAllIfNoneSelected
+    rows = find(logicalCol(S.subj,1));
+else
+    rows = [];
+end
+end
+
+function c = mapConditionFromGroup(S,g)
+c = '';
+g0 = upper(strtrimSafe(g));
+try
+    if isa(S.groupToCondMap,'containers.Map') && isKey(S.groupToCondMap,g0)
+        c = S.groupToCondMap(g0);
+        return;
+    end
+catch
+end
+if contains(g0,'PACAP') || contains(g0,'GROUPA') || strcmp(g0,'A')
+    c = 'CondA';
+elseif contains(g0,'VEH') || contains(g0,'CONTROL') || contains(g0,'GROUPB') || strcmp(g0,'B')
+    c = 'CondB';
+end
+end
+
+function d = getSmartBrowseDir(S)
+d = '';
+try
+    sel = clampSelRows(S.selectedRows,size(S.subj,1));
+    rows = [sel(:).' setdiff(1:size(S.subj,1),sel(:).','stable')];
+    for k = 1:numel(rows)
+        r = rows(k);
+        fpList = {S.subj{r,8},S.subj{r,7},S.subj{r,6}};
+        for j = 1:numel(fpList)
+            fp = strtrimSafe(fpList{j});
+            if exist(fp,'file') == 2
+                d0 = fileparts(fp);
+                if exist(d0,'dir') == 7
+                    d = d0;
+                    return;
+                end
+            end
+        end
+    end
+catch
+end
+try
+    if isempty(d) && isfield(S.opt,'startDir') && exist(S.opt.startDir,'dir') == 7
+        d = S.opt.startDir;
+    end
+catch
+end
+if isempty(d) || exist(d,'dir') ~= 7
+    d = pwd;
+end
+end
+
+function S = addFileSmartLight(S,fp)
+[~,~,ext] = fileparts(fp);
+ext = lower(ext);
+
+subj = guessSubjectID(fp);
+gdef = getDefaultGroupLocal(S);
+cdef = getDefaultCondLocal(S);
+
+if strcmp(ext,'.txt')
+    row = {true,subj,gdef,cdef,subj,'',fp,'',''};
+elseif strcmp(ext,'.mat')
+    if isLikelyBundleFile(fp)
+        row = {true,subj,gdef,cdef,subj,'','',fp,''};
+    else
+        row = {true,subj,gdef,cdef,subj,fp,'','',''};
+    end
+else
+    row = {true,subj,gdef,cdef,subj,fp,'','',''};
+end
+
+S.subj(end+1,:) = row;
+S = sanitizeTableStruct(S);
+end
+
+function S = addBundleAsNewRow(S,fp)
+subj = guessSubjectID(fp);
+gdef = getDefaultGroupLocal(S);
+cdef = getDefaultCondLocal(S);
+row = {true,subj,gdef,cdef,subj,'','',fp,''};
+S.subj(end+1,:) = row;
+S = sanitizeTableStruct(S);
+end
+
+function S = assignBundleToRow(S,r,fp)
+if r < 1 || r > size(S.subj,1), return; end
+S.subj{r,8} = fp;
+S.subj{r,1} = true;
+if isempty(strtrimSafe(S.subj{r,2}))
+    S.subj{r,2} = guessSubjectID(fp);
+end
+if isempty(strtrimSafe(S.subj{r,5}))
+    S.subj{r,5} = S.subj{r,2};
+end
+end
+
+function g = getDefaultGroupLocal(S)
+g = S.defaultGroup;
+try
+    g2 = getSelectedPopupString(S.hQuickGroup);
+    if ~isempty(g2), g = g2; end
+catch
+end
+end
+
+function c = getDefaultCondLocal(S)
+c = S.defaultCond;
+try
+    c2 = getSelectedPopupString(S.hQuickCond);
+    if ~isempty(c2), c = c2; end
+catch
+end
+end
+
+function tf = isLikelyBundleFile(fp)
+tf = false;
+[~,nm,ext] = fileparts(fp);
+if ~strcmpi(ext,'.mat'), return; end
+if ~isempty(regexpi(nm,'SCM_GroupExport|GroupBundle|GroupExport','once'))
+    tf = true;
+    return;
+end
+try
+    info = whos('-file',fp);
+    vars = {info.name};
+    tf = any(strcmp(vars,'G')) || any(strcmp(vars,'fcBundle'));
+catch
+    tf = false;
+end
+end
+
+function idx = findActiveROIRowsLocal(subj)
+idx = [];
+for i = 1:size(subj,1)
+    if ~logicalCellValue(subj{i,1}), continue; end
+    roi = strtrimSafe(subj{i,7});
+    if ~isempty(roi) && exist(roi,'file') == 2
+        idx(end+1) = i; %#ok<AGROW>
+    end
+end
+end
+
+function [idx,missingIdx] = findActiveBundleRowsLocal(S)
+idx = [];
+missingIdx = [];
+rows = findBundleDisplayRowsLocal(S);
+for i = 1:numel(rows)
+    r = rows(i);
+    if ~logicalCellValue(S.subj{r,1})
+        continue;
+    end
+    bf = strtrimSafe(S.subj{r,8});
+    if ~isempty(bf) && exist(bf,'file') == 2
+        idx(end+1) = r; %#ok<AGROW>
+    else
+        missingIdx(end+1) = r; %#ok<AGROW>
+    end
+end
+end
+
+function rows = findBundleDisplayRowsLocal(S)
+rows = [];
+for r = 1:size(S.subj,1)
+    bf = strtrimSafe(S.subj{r,8});
+    if ~isempty(bf)
+        rows(end+1) = r; %#ok<AGROW>
+    end
+end
+end
+
+function S = readPreviewAxisControlsLocal(S)
+% Reads ROI-tab Y controls first, then optional compact Preview-tab overrides.
+try, S.plotTop.auto      = logical(get(S.hTopAuto,'Value')); catch, end
+try, S.plotTop.forceZero = logical(get(S.hTopZero,'Value')); catch, end
+try, S.plotTop.step      = safeNum(get(S.hTopStep,'String'),S.plotTop.step); catch, end
+try, S.plotTop.ymin      = safeNum(get(S.hTopYmin,'String'),S.plotTop.ymin); catch, end
+try, S.plotTop.ymax      = safeNum(get(S.hTopYmax,'String'),S.plotTop.ymax); catch, end
+
+try, S.plotBot.auto      = logical(get(S.hBotAuto,'Value')); catch, end
+try, S.plotBot.forceZero = logical(get(S.hBotZero,'Value')); catch, end
+try, S.plotBot.step      = safeNum(get(S.hBotStep,'String'),S.plotBot.step); catch, end
+try, S.plotBot.ymin      = safeNum(get(S.hBotYmin,'String'),S.plotBot.ymin); catch, end
+try, S.plotBot.ymax      = safeNum(get(S.hBotYmax,'String'),S.plotBot.ymax); catch, end
+
+if ~isfield(S,'plotX') || ~isstruct(S.plotX)
+    S.plotX = struct('auto',true,'xmin',NaN,'xmax',NaN);
+end
+
+% Preview compact controls override only when numeric. auto/blank leaves ROI-tab settings.
+v = previewAxisNumLocal(S,'hPrevTopYmax');
+if isfinite(v)
+    S.plotTop.auto = false;
+    S.plotTop.ymax = v;
+    try, set(S.hTopAuto,'Value',0); catch, end
+    try, set(S.hTopYmax,'String',num2str(v)); catch, end
+end
+
+v = previewAxisNumLocal(S,'hPrevTopStep');
+if isfinite(v) && v >= 0
+    S.plotTop.step = v;
+    try, set(S.hTopStep,'String',num2str(v)); catch, end
+end
+
+v = previewAxisNumLocal(S,'hPrevBotYmax');
+if isfinite(v)
+    S.plotBot.auto = false;
+    S.plotBot.ymax = v;
+    try, set(S.hBotAuto,'Value',0); catch, end
+    try, set(S.hBotYmax,'String',num2str(v)); catch, end
+end
+
+v = previewAxisNumLocal(S,'hPrevBotStep');
+if isfinite(v) && v >= 0
+    S.plotBot.step = v;
+    try, set(S.hBotStep,'String',num2str(v)); catch, end
+end
+
+x0 = previewAxisNumLocal(S,'hPrevXMin');
+x1 = previewAxisNumLocal(S,'hPrevXMax');
+if isfinite(x0) || isfinite(x1)
+    S.plotX.auto = false;
+    S.plotX.xmin = x0;
+    S.plotX.xmax = x1;
+else
+    S.plotX.auto = true;
+    S.plotX.xmin = NaN;
+    S.plotX.xmax = NaN;
+end
+
+if ~isfield(S,'plotTop') || ~isstruct(S.plotTop)
+    S.plotTop = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
+end
+if ~isfield(S,'plotBot') || ~isstruct(S.plotBot)
+    S.plotBot = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
+end
+end
+
+function v = previewAxisNumLocal(S,fieldName)
+v = NaN;
+try
+    if ~isfield(S,fieldName) || ~ishghandle(S.(fieldName))
+        return;
+    end
+    s = strtrim(char(get(S.(fieldName),'String')));
+    if isempty(s) || strcmpi(s,'auto')
+        return;
+    end
+    v = str2double(s);
+    if ~isfinite(v)
+        v = NaN;
+    end
+catch
+    v = NaN;
+end
+end
+
+function S = readROISettingsFromUI(S)
+try, S.tc_computePSC = logical(get(S.hTC_ComputePSC,'Value')); catch, end
+try, S.tc_baseMin0 = safeNum(get(S.hBase0,'String'),S.tc_baseMin0); catch, end
+try, S.tc_baseMin1 = safeNum(get(S.hBase1,'String'),S.tc_baseMin1); catch, end
+try, S.tc_injMin0 = safeNum(get(S.hInj0,'String'),S.tc_injMin0); catch, end
+try, S.tc_injMin1 = safeNum(get(S.hInj1,'String'),S.tc_injMin1); catch, end
+try, S.tc_peakSearchMin0 = safeNum(get(S.hPkS0,'String'),S.tc_peakSearchMin0); catch, end
+try, S.tc_peakSearchMin1 = safeNum(get(S.hPkS1,'String'),S.tc_peakSearchMin1); catch, end
+try, S.tc_plateauMin0 = safeNum(get(S.hPlat0,'String'),S.tc_plateauMin0); catch, end
+try, S.tc_plateauMin1 = safeNum(get(S.hPlat1,'String'),S.tc_plateauMin1); catch, end
+try, S.tc_peakWinMin = safeNum(get(S.hTC_PeakWin,'String'),S.tc_peakWinMin); catch, end
+try, S.tc_trimPct = safeNum(get(S.hTC_Trim,'String'),S.tc_trimPct); catch, end
+try
+    items = get(S.hTC_Metric,'String');
+    S.tc_metric = items{get(S.hTC_Metric,'Value')};
+catch
+end
+end
+
+function S = readStatsSettingsFromUI(S)
+try
+    items = get(S.hTest,'String');
+    S.testType = items{get(S.hTest,'Value')};
+catch
+end
+try, S.alpha = safeNum(get(S.hAlpha,'String'),S.alpha); catch, end
+try
+    items = get(S.hAnnotMode,'String');
+    S.annotMode = items{get(S.hAnnotMode,'Value')};
+catch
+end
+try, S.showPText = logical(get(S.hShowPText,'Value')); catch, end
+end
+
+function S = readPlotScaleSettingsFromUI(S)
+% Read ROI Preview Y-axis controls directly from the GUI.
+try, S.plotTop.auto      = logical(get(S.hTopAuto,'Value')); catch, end
+try, S.plotTop.forceZero = logical(get(S.hTopZero,'Value')); catch, end
+try, S.plotTop.step      = max(0, safeNum(get(S.hTopStep,'String'), S.plotTop.step)); catch, end
+try, S.plotTop.ymin      = safeNum(get(S.hTopYmin,'String'), S.plotTop.ymin); catch, end
+try, S.plotTop.ymax      = safeNum(get(S.hTopYmax,'String'), S.plotTop.ymax); catch, end
+
+try, S.plotBot.auto      = logical(get(S.hBotAuto,'Value')); catch, end
+try, S.plotBot.forceZero = logical(get(S.hBotZero,'Value')); catch, end
+try, S.plotBot.step      = max(0, safeNum(get(S.hBotStep,'String'), S.plotBot.step)); catch, end
+try, S.plotBot.ymin      = safeNum(get(S.hBotYmin,'String'), S.plotBot.ymin); catch, end
+try, S.plotBot.ymax      = safeNum(get(S.hBotYmax,'String'), S.plotBot.ymax); catch, end
+
+if ~isfield(S,'plotTop') || ~isstruct(S.plotTop)
+    S.plotTop = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
+end
+if ~isfield(S,'plotBot') || ~isstruct(S.plotBot)
+    S.plotBot = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
+end
+
+if ~isfinite(S.plotTop.step), S.plotTop.step = 0; end
+if ~isfinite(S.plotBot.step), S.plotBot.step = 0; end
+
+if ~isfinite(S.plotTop.ymin), S.plotTop.ymin = 0; end
+if ~isfinite(S.plotTop.ymax), S.plotTop.ymax = S.plotTop.ymin + max(1,S.plotTop.step); end
+if S.plotTop.ymax <= S.plotTop.ymin
+    S.plotTop.ymax = S.plotTop.ymin + max(1,S.plotTop.step);
+end
+
+if ~isfinite(S.plotBot.ymin), S.plotBot.ymin = 0; end
+if ~isfinite(S.plotBot.ymax), S.plotBot.ymax = S.plotBot.ymin + max(1,S.plotBot.step); end
+if S.plotBot.ymax <= S.plotBot.ymin
+    S.plotBot.ymax = S.plotBot.ymin + max(1,S.plotBot.step);
+end
+
+try, set(S.hTopStep,'String',num2str(S.plotTop.step)); catch, end
+try, set(S.hTopYmin,'String',num2str(S.plotTop.ymin)); catch, end
+try, set(S.hTopYmax,'String',num2str(S.plotTop.ymax)); catch, end
+try, set(S.hBotStep,'String',num2str(S.plotBot.step)); catch, end
+try, set(S.hBotYmin,'String',num2str(S.plotBot.ymin)); catch, end
+try, set(S.hBotYmax,'String',num2str(S.plotBot.ymax)); catch, end
+end
+
+function applyPreviewLightDarkToUI(S)
+% Apply Light/Dark preview mode to the actual ROI Preview tab widgets.
+styleName = 'Dark';
+try, styleName = char(S.previewStyle); catch, end
+
+if strcmpi(styleName,'Light')
+    bgMain = [1 1 1];
+    bgTop  = [0.96 0.96 0.96];
+    fg     = [0 0 0];
+    editBg = [1 1 1];
+    btnBg  = [0.86 0.86 0.86];
+else
+    bgMain = S.C.bg;
+    bgTop  = S.C.panel2;
+    fg     = [1 1 1];
+    editBg = S.C.editBg;
+    btnBg  = S.C.btnSecondary;
+end
+
+try, set(S.hPrevBG,'BackgroundColor',bgMain); catch, end
+try, set(S.hPrevTop,'BackgroundColor',bgTop,'ForegroundColor',fg); catch, end
+try, set(S.ax1,'Color',bgMain,'XColor',fg,'YColor',fg); catch, end
+try, set(S.ax2,'Color',bgMain,'XColor',fg,'YColor',fg); catch, end
+
+btns = {'hPrevExportTop','hPrevExportBot','hPrevExportBoth'};
+for kk = 1:numel(btns)
+    try
+        h = S.(btns{kk});
+        if ishghandle(h)
+            set(h,'BackgroundColor',btnBg,'ForegroundColor',fg,'FontWeight','bold');
+        end
+    catch
+    end
+end
+
+texts = {'hPrevLblView','hPrevLblWin'};
+for kk = 1:numel(texts)
+    try
+        h = S.(texts{kk});
+        if ishghandle(h)
+            set(h,'BackgroundColor',bgTop,'ForegroundColor',fg);
+        end
+    catch
+    end
+end
+
+edits = {'hPrevStyle','hSmoothWin','hPrevColorA','hPrevColorB'};
+for kk = 1:numel(edits)
+    try
+        h = S.(edits{kk});
+        if ishghandle(h)
+            set(h,'BackgroundColor',editBg,'ForegroundColor',fg);
+        end
+    catch
+    end
+end
+
+checks = {'hPrevGrid','hSmoothEnable','hPrevAnimalLabels'};
+for kk = 1:numel(checks)
+    try
+        h = S.(checks{kk});
+        if ishghandle(h)
+            set(h,'BackgroundColor',bgTop,'ForegroundColor',fg);
+        end
+    catch
+    end
+end
+end
+
+function S = readMapSettingsFromUI(S)
+try
+    items = get(S.hMapSummary,'String');
+    S.mapSummary = items{get(S.hMapSummary,'Value')};
+catch
+end
+try
+    items = get(S.hMapSource,'String');
+    S.mapSource = items{get(S.hMapSource,'Value')};
+catch
+end
+try
+    items = get(S.hMapColormap,'String');
+    S.mapColormap = items{get(S.hMapColormap,'Value')};
+catch
+end
+try, S.mapBlackBody = logical(get(S.hMapBlackBody,'Value')); catch, end
+try
+    items = get(S.hMapFlipMode,'String');
+    S.mapFlipMode = items{get(S.hMapFlipMode,'Value')};
+catch
+end
+try
+    items = get(S.hMapPolarity,'String');
+    S.mapPolarity = items{get(S.hMapPolarity,'Value')};
+catch
+end
+try, S.mapModMin = safeNum(get(S.hMapModMin,'String'),S.mapModMin); catch, end
+try, S.mapModMax = safeNum(get(S.hMapModMax,'String'),S.mapModMax); catch, end
+try, S.mapSigma = safeNum(get(S.hMapSigma,'String'),S.mapSigma); catch, end
+try
+    caxv = sscanf(get(S.hMapCaxis,'String'),'%f');
+    if numel(caxv) >= 2
+        S.mapCaxis = caxv(1:2).';
+    end
+catch
+end
+try, S.mapUseGlobalWindows = logical(get(S.hMapUseGlobalWin,'Value')); catch, end
+try, S.mapGlobalBaseSec(1) = safeNum(get(S.hMapBase0,'String'),S.mapGlobalBaseSec(1)); catch, end
+try, S.mapGlobalBaseSec(2) = safeNum(get(S.hMapBase1,'String'),S.mapGlobalBaseSec(2)); catch, end
+try, S.mapGlobalSigSec(1) = safeNum(get(S.hMapSig0,'String'),S.mapGlobalSigSec(1)); catch, end
+try, S.mapGlobalSigSec(2) = safeNum(get(S.hMapSig1,'String'),S.mapGlobalSigSec(2)); catch, end
+try
+    items = get(S.hMapUnderlayMode,'String');
+    S.mapUnderlayMode = items{get(S.hMapUnderlayMode,'Value')};
+catch
+end
+try
+    items = get(S.hMapRefSide,'String');
+    S.mapRefPacapSide = items{get(S.hMapRefSide,'Value')};
+catch
+end
+try
+    if isfield(S,'hMapAlphaMod') && ishghandle(S.hMapAlphaMod)
+        S.mapAlphaModOn = logical(get(S.hMapAlphaMod,'Value'));
+    else
+        S.mapAlphaModOn = true;
+    end
+catch
+    S.mapAlphaModOn = true;
+end
+S.mapThreshold = 0;
+end
+
+function nZ = inferMapSliceCountFromBundleLocal(G)
+nZ = 1;
+try
+    if isfield(G,'pscAtlas4D') && ~isempty(G.pscAtlas4D) && isnumeric(G.pscAtlas4D)
+        X = G.pscAtlas4D;
+        if ndims(X) == 4
+            nZ = max(nZ,size(X,3));
+        end
+    end
+catch
+end
+try
+    flds = {'underlayAtlas','underlay2D','scmMapSignedAtlas','scmMapDisplayAtlas'};
+    for ii = 1:numel(flds)
+        if isfield(G,flds{ii}) && ~isempty(G.(flds{ii})) && isnumeric(G.(flds{ii}))
+            A = G.(flds{ii});
+            if ndims(A) == 3 && size(A,3) ~= 3
+                nZ = max(nZ,size(A,3));
+            elseif ndims(A) == 4
+                nZ = max(nZ,size(A,3));
+            end
+        end
+    end
+catch
+end
+try
+    if isfield(G,'underlays') && isstruct(G.underlays)
+        fn = fieldnames(G.underlays);
+        for ii = 1:numel(fn)
+            E = G.underlays.(fn{ii});
+            if isstruct(E) && isfield(E,'data'), A = E.data; else, A = E; end
+            if isnumeric(A) || islogical(A)
+                if ndims(A) == 3 && size(A,3) ~= 3
+                    nZ = max(nZ,size(A,3));
+                elseif ndims(A) == 4
+                    nZ = max(nZ,size(A,3));
+                end
+            end
+        end
+    end
+catch
+end
+try
+    if isfield(G,'nSlices') && isfinite(double(G.nSlices(1)))
+        nZ = max(nZ,round(double(G.nSlices(1))));
+    end
+catch
+end
+nZ = max(1,round(nZ));
+end
+
+function z = defaultMapSliceFromBundleLocal(G,nZ)
+z = round(max(1,nZ)/2);
+try
+    names = {'currentSlice','sliceIdx','zIndex','atlasSliceIndex'};
+    for ii = 1:numel(names)
+        if isfield(G,names{ii}) && ~isempty(G.(names{ii}))
+            zz = round(double(G.(names{ii})(1)));
+            if isfinite(zz) && zz >= 1 && zz <= nZ
+                z = zz;
+                return;
+            end
+        end
+    end
+catch
+end
+z = max(1,min(nZ,round(z)));
+end
+
+function D = buildCurrentMapDisplayLocal(S)
+R = S.lastMAP;
+D = struct();
+D.map = R.groupMap;
+D.underlay = R.commonUnderlay;
+D.render = makeMapRenderStructLocal(S);
+if strcmpi(strtrimSafe(R.mapSummary),'Median')
+    D.title = sprintf('Group median map (n=%d)',R.n);
+else
+    D.title = sprintf('Group mean map (n=%d)',R.n);
+end
+if strcmpi(S.mapUnderlayMode,'Loaded custom underlay') && ~isempty(S.mapLoadedUnderlay)
+    D.underlay = S.mapLoadedUnderlay;
+end
+end
+
+function Rm = makeMapRenderStructLocal(S)
+Rm = struct();
+Rm.threshold = 0;
+Rm.caxis = S.mapCaxis;
+try, Rm.negCaxis = S.mapNegCaxis; catch, Rm.negCaxis = [-max(abs(Rm.caxis)) 0]; end
+try, Rm.alphaModOn = logical(S.mapAlphaModOn); catch, Rm.alphaModOn = true; end
+Rm.modMin = S.mapModMin;
+Rm.modMax = S.mapModMax;
+Rm.blackBody = S.mapBlackBody;
+Rm.colormapName = S.mapColormap;
+try, Rm.polarity = S.mapPolarity; catch, Rm.polarity = 'Positive only'; end
+Rm.flipUDPreview = false; % GA orientation fix: do not force upside-down flip
+try, Rm.alphaPercent = double(S.mapAlphaPercent); catch, Rm.alphaPercent = 100; end
+Rm.overlayMask = [];
+try
+    if isfield(S,'mapLoadedOverlayMask') && ~isempty(S.mapLoadedOverlayMask)
+        Rm.overlayMask = S.mapLoadedOverlayMask;
+    end
+catch
+end
+end
+
+function hardClearAxLocal(ax,styleName,showGrid,ttl)
+try
+    cla(ax,'reset');
+catch
+    cla(ax);
+end
+[bg,fg] = previewColorsLocal(styleName);
+set(ax,'Color',bg,'XColor',fg,'YColor',fg);
+if showGrid
+    grid(ax,'on');
+else
+    grid(ax,'off');
+end
+title(ax,ttl,'Color',fg,'FontWeight','bold');
+end
+
+function [bg,fg] = previewColorsLocal(styleName)
+if strcmpi(styleName,'Light')
+    bg = [1 1 1];
+    fg = [0 0 0];
+else
+    bg = [0 0 0];
+    fg = [1 1 1];
+end
+end
+
+function fcNoDataLocal(ax,titleStr,C)
+cla(ax);
+text(ax,0.5,0.5,'No data', ...
+    'HorizontalAlignment','center','VerticalAlignment','middle', ...
+    'Color',C.txt,'FontName','Arial','FontSize',12,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'XTick',[],'YTick',[]);
+title(ax,titleStr,'Color',C.txt,'FontWeight','bold','Interpreter','none');
+end
+
+function keys = makeRowKeysLocal(tbl)
+n = size(tbl,1);
+keys = cell(n,1);
+for i = 1:n
+    keys{i} = [strtrimSafe(tbl{i,2}) '|' strtrimSafe(tbl{i,3}) '|' strtrimSafe(tbl{i,4}) '|' strtrimSafe(tbl{i,5})];
+end
+end
+
+function s = shortPathForTable(fp,maxLen)
+if nargin < 2, maxLen = 40; end
+s = strtrimSafe(fp);
+[~,name,ext] = fileparts(s);
+s = [name ext];
+if numel(s) > maxLen
+    s = [s(1:maxLen-3) '...'];
+end
+end
+
+function subj = guessSubjectID(txt)
+subj = '';
+try
+    m = parseMetaSingleText(txt);
+    if ~strcmpi(m.animalID,'N/A')
+        subj = m.animalID;
+        return;
+    end
+catch
+end
+try
+    [~,bn,~] = fileparts(txt);
+    subj = bn;
+catch
+end
+if isempty(subj)
+    subj = ['S' datestr(now,'HHMMSS')];
+end
+end
+
+function meta = extractMetaFromSources(subjectTxt,dataFile,roiFile,bundleFile)
+if nargin < 4, bundleFile = ''; end
+meta = struct('animalID','N/A','session','N/A','scanID','N/A');
+cands = {bundleFile,roiFile,dataFile,subjectTxt};
+for i = 1:numel(cands)
+    txt = strtrimSafe(cands{i});
+    if isempty(txt), continue; end
+    m = parseMetaSingleText(txt);
+    if strcmpi(meta.animalID,'N/A') && ~strcmpi(m.animalID,'N/A')
+        meta.animalID = m.animalID;
+    end
+    if strcmpi(meta.session,'N/A') && ~strcmpi(m.session,'N/A')
+        meta.session = m.session;
+    end
+    if strcmpi(meta.scanID,'N/A') && ~strcmpi(m.scanID,'N/A')
+        meta.scanID = m.scanID;
+    end
+end
+end
+
+function meta = parseMetaSingleText(txt)
+meta = struct('animalID','N/A','session','N/A','scanID','N/A');
+txt = strrep(strtrimSafe(txt),'\','/');
+txtU = upper(txt);
+
+% Classic animal/session/scan pattern.
+tok = regexpi(txtU,'([A-Z]{1,8}\d{6}[A-Z]?)_(S\d+)_(FUS_\d+)','tokens','once');
+if ~isempty(tok)
+    meta.animalID = tok{1};
+    meta.session = tok{2};
+    meta.scanID = tok{3};
+    return;
+end
+
+tok = regexpi(txtU,'([A-Z]{1,8}\d{6}[A-Z]?)_(S\d+)','tokens','once');
+if ~isempty(tok)
+    meta.animalID = tok{1};
+    meta.session = tok{2};
+end
+
+% Session_003 / Sess_003 / Session003 from folders or file names.
+tok = regexpi(txtU,'(?:SESSION|SESS)[_\- ]*0*(\d+)','tokens','once');
+if ~isempty(tok)
+    nSess = str2double(tok{1});
+    if isfinite(nSess)
+        meta.session = sprintf('Session_%03d', round(nSess));
+    else
+        meta.session = ['Session_' tok{1}];
+    end
+end
+
+% Scan / FUS id.
+tok = regexpi(txtU,'(FUS_\d+)','tokens','once');
+if ~isempty(tok), meta.scanID = tok{1}; end
+if strcmpi(meta.scanID,'N/A')
+    tok = regexpi(txt,'(scan\d+(?:_[A-Za-z0-9]+)?)','tokens','once');
+    if ~isempty(tok), meta.scanID = tok{1}; end
+end
+
+% PACAP/RGRO pattern: RGRO_260512_1024_MM_B6J_1005 -> animalID = 1005.
+tok = regexpi(txtU,'[A-Z]+[_\-]\d{6}[_\-]\d{3,6}[_\-][A-Z]+[_\-][A-Z0-9]+[_\-](\d{3,6})(?:[_\-. /]|$)','tokens','once');
+if ~isempty(tok), meta.animalID = tok{1}; end
+
+% General sex/strain/ID pattern: MM_B6J_1005.
+if strcmpi(meta.animalID,'N/A')
+    tok = regexpi(txtU,'(?:^|[_/\-])(MM|M|F|MALE|FEMALE)[_/\-]+[A-Z0-9]+[_/\-]+(\d{3,6})(?:[_/\-. ]|$)','tokens','once');
+    if ~isempty(tok), meta.animalID = tok{2}; end
+end
+
+txtTok = regexprep(txt,'[^A-Za-z0-9/_\-]','_');
+parts = regexp(txtTok,'[/_\-]+','split');
+parts = parts(~cellfun(@isempty,parts));
+
+% Session fallback from split parts.
+if strcmpi(meta.session,'N/A')
+    for k = 1:numel(parts)
+        pk = parts{k};
+        if ~isempty(regexpi(pk,'^S\d+$','once'))
+            meta.session = pk;
+            break;
+        end
+        tokS = regexpi(pk,'^Session0*(\d+)$','tokens','once');
+        if ~isempty(tokS)
+            meta.session = sprintf('Session_%03d', round(str2double(tokS{1})));
+            break;
+        end
+        if strcmpi(pk,'Session') && k < numel(parts) && ~isempty(regexpi(parts{k+1},'^\d+$','once'))
+            meta.session = sprintf('Session_%03d', round(str2double(parts{k+1})));
+            break;
+        end
+    end
+end
+
+% Scan fallback from split parts.
+scanIdx = [];
+for k = 1:numel(parts)
+    if ~isempty(regexpi(parts{k},'^scan\d+$','once'))
+        scanIdx = k;
+        scanID = parts{k};
+        if k < numel(parts)
+            nxt = parts{k+1};
+            if ~isempty(regexpi(nxt,'^[A-Za-z]{1,6}[A-Za-z0-9]*$','once')) && isempty(regexpi(nxt,'^S\d+$','once')) && isempty(regexpi(nxt,'^\d+$','once'))
+                scanID = [scanID '_' nxt];
+            end
+        end
+        meta.scanID = scanID;
+        break;
+    end
+end
+
+% Strain marker fallback: B6J / C57BL6J followed by numeric animal ID.
+if strcmpi(meta.animalID,'N/A')
+    for k = 1:numel(parts)-1
+        if ~isempty(regexpi(parts{k},'^(B6J|C57BL6J|C57|BL6J)$','once')) && ~isempty(regexpi(parts{k+1},'^\d{3,6}$','once'))
+            meta.animalID = parts{k+1};
+            break;
+        end
+    end
+end
+
+% Old fallback: number shortly before scan token.
+if strcmpi(meta.animalID,'N/A') && ~isempty(scanIdx)
+    for k = scanIdx-1:-1:max(1,scanIdx-3)
+        if ~isempty(regexpi(parts{k},'^\d{3,6}$','once'))
+            meta.animalID = parts{k};
+            break;
+        end
+    end
+end
+end
+
+function info = extractRowMetaLight(row)
+info = struct();
+info.subject = strtrimSafe(row{2});
+info.group = strtrimSafe(row{3});
+info.condition = strtrimSafe(row{4});
+info.pairID = strtrimSafe(row{5});
+info.dataFile = strtrimSafe(row{6});
+info.roiFile = strtrimSafe(row{7});
+info.bundleFile = strtrimSafe(row{8});
+info.status = strtrimSafe(row{9});
+meta = extractMetaFromSources(info.subject,info.dataFile,info.roiFile,info.bundleFile);
+info.animalID = meta.animalID;
+info.session = meta.session;
+info.scanID = meta.scanID;
+end
+
+
+function s = displayScanID(scanID)
+s = strtrimSafe(scanID);
+s = regexprep(s,'(?i)^FUS_?','');
+s = regexprep(s,'(?i)^SCAN','scan');
+end
+
+
+function key = makeAuditMatchKey(row)
+% Stable matching key for Excel audit export.
+key = '';
+
+try
+    if isempty(row)
+        return;
+    end
+
+    if iscell(row) && size(row,1) > 1
+        row = row(1,:);
+    end
+
+    vals = cell(1,9);
+    for ii = 1:9
+        if iscell(row) && numel(row) >= ii
+            vals{ii} = row{ii};
+        else
+            vals{ii} = '';
+        end
+    end
+
+    animal = strtrimSafe(vals{2});
+    grp    = strtrimSafe(vals{3});
+    cond   = strtrimSafe(vals{4});
+    pairid = strtrimSafe(vals{5});
+    dataf  = strtrimSafe(vals{6});
+    roif   = strtrimSafe(vals{7});
+    bunf   = strtrimSafe(vals{8});
+
+    try
+        meta = extractMetaFromSources(animal, dataf, roif, bunf);
+        if ~isempty(strtrimSafe(meta.animalID)) && ~strcmpi(strtrimSafe(meta.animalID),'N/A')
+            animal = strtrimSafe(meta.animalID);
+        end
+        sess = strtrimSafe(meta.session);
+        scan = strtrimSafe(meta.scanID);
+    catch
+        sess = '';
+        scan = '';
+    end
+
+    [~,roiName,roiExt] = fileparts(roif);
+    roiLeaf = [roiName roiExt];
+
+    key = lower(strjoin({animal,sess,scan,grp,cond,pairid,roiLeaf}, '|'));
+catch
+    key = '';
+end
+end
+
+
+function [mapNow, winInfoTxt] = GA_buildPreviewMapFromBundle_STANDALONE(S0, G)
+% Standalone fallback helper for GroupAnalysis map preview.
+winInfoTxt = '';
+mapNow = [];
+
+if nargin < 2 || ~isstruct(G)
+    error('Invalid group bundle struct.');
+end
+
+useGlobal = false;
+try
+    useGlobal = isfield(S0,'mapUseGlobalWindows') && logical(S0.mapUseGlobalWindows);
+catch
+    useGlobal = false;
+end
+
+src = 'Recompute from exported PSC';
+try
+    if isfield(S0,'mapSource') && ~isempty(S0.mapSource)
+        src = GA_strtrimSafe_STANDALONE(S0.mapSource);
+    end
+catch
+end
+
+sigma = 0;
+try, sigma = double(S0.mapSigma); catch, end
+if ~isfinite(sigma), sigma = 0; end
+
+hasPSC = isfield(G,'pscAtlas4D') && ~isempty(G.pscAtlas4D);
+hasMap = isfield(G,'scmMapAtlas') && ~isempty(G.scmMapAtlas);
+
+if useGlobal
+    if hasPSC
+        bw = double(S0.mapGlobalBaseSec(:)');
+        sw = double(S0.mapGlobalSigSec(:)');
+        mapNow = GA_recomputeScmFromPSC_STANDALONE(G, bw, sw, sigma);
+        winInfoTxt = sprintf('base %.0f-%.0fs | sig %.0f-%.0fs', bw(1), bw(2), sw(1), sw(2));
+    elseif hasMap
+        mapNow = GA_squeezeMap2D_STANDALONE(G.scmMapAtlas);
+        winInfoTxt = 'exported SCM fallback; no PSC series';
+    else
+        error('Bundle has neither pscAtlas4D nor scmMapAtlas.');
+    end
+elseif strcmpi(src,'Use exported SCM map')
+    if hasMap
+        mapNow = GA_squeezeMap2D_STANDALONE(G.scmMapAtlas);
+        winInfoTxt = 'exported SCM map';
+    elseif hasPSC
+        [bw, sw] = GA_defaultBundleWindows_STANDALONE(G, S0);
+        mapNow = GA_recomputeScmFromPSC_STANDALONE(G, bw, sw, sigma);
+        winInfoTxt = sprintf('PSC fallback base %.0f-%.0fs | sig %.0f-%.0fs', bw(1), bw(2), sw(1), sw(2));
+    else
+        error('Bundle has neither exported map nor PSC series.');
+    end
+else
+    if hasPSC
+        [bw, sw] = GA_defaultBundleWindows_STANDALONE(G, S0);
+        mapNow = GA_recomputeScmFromPSC_STANDALONE(G, bw, sw, sigma);
+        winInfoTxt = sprintf('base %.0f-%.0fs | sig %.0f-%.0fs', bw(1), bw(2), sw(1), sw(2));
+    elseif hasMap
+        mapNow = GA_squeezeMap2D_STANDALONE(G.scmMapAtlas);
+        winInfoTxt = 'exported SCM fallback; no PSC series';
+    else
+        error('Bundle has neither pscAtlas4D nor scmMapAtlas.');
+    end
+end
+
+mapNow = double(mapNow);
+mapNow(~isfinite(mapNow)) = 0;
+end
+
+function [bw, sw] = GA_defaultBundleWindows_STANDALONE(G, S0)
+bw = [30 240];
+sw = [840 900];
+try
+    if isfield(G,'baseWindowSec') && numel(G.baseWindowSec) >= 2
+        bw = double(G.baseWindowSec(1:2));
+    elseif isfield(S0,'mapGlobalBaseSec') && numel(S0.mapGlobalBaseSec) >= 2
+        bw = double(S0.mapGlobalBaseSec(1:2));
+    end
+catch
+end
+try
+    if isfield(G,'sigWindowSec') && numel(G.sigWindowSec) >= 2
+        sw = double(G.sigWindowSec(1:2));
+    elseif isfield(S0,'mapGlobalSigSec') && numel(S0.mapGlobalSigSec) >= 2
+        sw = double(S0.mapGlobalSigSec(1:2));
+    end
+catch
+end
+if numel(bw) < 2 || any(~isfinite(bw)), bw = [30 240]; end
+if numel(sw) < 2 || any(~isfinite(sw)), sw = [840 900]; end
+if bw(2) <= bw(1), bw(2) = bw(1) + 1; end
+if sw(2) <= sw(1), sw(2) = sw(1) + 1; end
+end
+
+function map2 = GA_recomputeScmFromPSC_STANDALONE(G, baseWinSec, sigWinSec, sigma)
+if ~isfield(G,'pscAtlas4D') || isempty(G.pscAtlas4D)
+    error('Bundle has no pscAtlas4D.');
+end
+if ~isfield(G,'TR') || isempty(G.TR) || ~isfinite(G.TR) || G.TR <= 0
+    error('Bundle has no valid TR.');
+end
+
+PSC = double(G.pscAtlas4D);
+TR = double(G.TR);
+
+if ndims(PSC) == 3
+    PSCz = PSC;
+elseif ndims(PSC) == 4
+    zSel = round(size(PSC,3)/2);
+    try
+        if isfield(G,'atlasSliceIndex') && ~isempty(G.atlasSliceIndex) && isfinite(G.atlasSliceIndex)
+            zSel = round(G.atlasSliceIndex);
+        elseif isfield(G,'currentSlice') && ~isempty(G.currentSlice) && isfinite(G.currentSlice)
+            zSel = round(G.currentSlice);
+        end
+    catch
+    end
+    zSel = max(1, min(size(PSC,3), zSel));
+    PSCz = squeeze(PSC(:,:,zSel,:));
+else
+    error('pscAtlas4D must be [Y X T] or [Y X Z T].');
+end
+
+if ndims(PSCz) ~= 3
+    error('Selected PSC slice is not [Y X T].');
+end
+
+nT = size(PSCz,3);
+b0 = max(1, min(nT, round(baseWinSec(1)/TR) + 1));
+b1 = max(1, min(nT, round(baseWinSec(2)/TR) + 1));
+s0 = max(1, min(nT, round(sigWinSec(1)/TR) + 1));
+s1 = max(1, min(nT, round(sigWinSec(2)/TR) + 1));
+if b1 < b0, tmp = b0; b0 = b1; b1 = tmp; end
+if s1 < s0, tmp = s0; s0 = s1; s1 = tmp; end
+
+baseMap = mean(PSCz(:,:,b0:b1),3);
+sigMap  = mean(PSCz(:,:,s0:s1),3);
+map2 = sigMap - baseMap;
+
+if isfinite(sigma) && sigma > 0
+    map2 = GA_smooth2D_STANDALONE(map2, sigma);
+end
+
+mask2D = GA_extractMask2D_STANDALONE(G, size(map2));
+if ~isempty(mask2D)
+    try, map2(~mask2D) = 0; catch, end
+end
+
+map2(~isfinite(map2)) = 0;
+end
+
+function M2 = GA_squeezeMap2D_STANDALONE(M)
+M = double(M);
+if isempty(M), M2 = []; return; end
+if ndims(M) == 2
+    M2 = M;
+elseif ndims(M) == 3
+    if size(M,3) == 1
+        M2 = M(:,:,1);
+    else
+        z = max(1, round(size(M,3)/2));
+        M2 = M(:,:,z);
+    end
+else
+    error('Unsupported SCM map dimensionality.');
+end
+M2(~isfinite(M2)) = 0;
+end
+
+function mask2D = GA_extractMask2D_STANDALONE(G, szMap)
+mask2D = [];
+try
+    if isfield(G,'mask2DCurrentSlice') && ~isempty(G.mask2DCurrentSlice)
+        M = logical(G.mask2DCurrentSlice);
+        if isequal(size(M), szMap)
+            mask2D = M;
+            return;
+        end
+    end
+catch
+end
+try
+    if isfield(G,'maskAtlas') && ~isempty(G.maskAtlas)
+        M = logical(G.maskAtlas);
+        if ismatrix(M) && isequal(size(M), szMap)
+            mask2D = M;
+            return;
+        elseif ndims(M) == 3
+            zSel = round(size(M,3)/2);
+            try
+                if isfield(G,'atlasSliceIndex') && ~isempty(G.atlasSliceIndex) && isfinite(G.atlasSliceIndex)
+                    zSel = round(G.atlasSliceIndex);
+                elseif isfield(G,'currentSlice') && ~isempty(G.currentSlice) && isfinite(G.currentSlice)
+                    zSel = round(G.currentSlice);
+                end
+            catch
+            end
+            zSel = max(1, min(size(M,3), zSel));
+            M2 = M(:,:,zSel);
+            if isequal(size(M2), szMap)
+                mask2D = M2;
+                return;
+            end
+        end
+    end
+catch
+end
+end
+
+function B = GA_smooth2D_STANDALONE(A, sigma)
+try
+    B = imgaussfilt(A, sigma);
+    return;
+catch
+end
+if sigma <= 0
+    B = A;
+    return;
+end
+r = max(1, ceil(3*sigma));
+x = -r:r;
+g = exp(-(x.^2)/(2*sigma^2));
+g = g / sum(g);
+B = conv2(conv2(double(A), g, 'same'), g', 'same');
+end
+
+function s = GA_strtrimSafe_STANDALONE(x)
+try
+    if isempty(x)
+        s = '';
+    else
+        s = strtrim(char(x));
+    end
+catch
+    s = '';
+end
+end
+
+
+% GA_ROI_PREVIEW_STANDALONE_START
+function exportOnePreview(ax, whichPlot, S, styleName)
+% Repaired fail-safe ROI preview plotter.
+% - Replots from S.lastROI when available.
+% - Falls back to reading active ROI TXT files from S.subj(:,7).
+% - Fixes light/dark axis colors.
+% - Uses PSC (%) labels.
+% - Removes lower-plot errorbars/legend.
+% - Supports line/shade/color/animal-label controls when visible.
+
+if nargin < 4 || isempty(styleName)
+    styleName = 'Dark';
+end
+try
+    if isfield(S,'previewStyle') && ~isempty(S.previewStyle)
+        styleName = char(S.previewStyle);
+    end
+catch
+end
+
+if isempty(ax) || ~ishandle(ax)
+    return;
+end
+
+figH = ancestor(ax,'figure');
+[lineW, shadeA, colA, colB, showAnimalLabels] = ga_preview_style_from_gui(figH);
+
+cla(ax,'reset');
+hold(ax,'on');
+
+if strcmpi(styleName,'Light')
+    bgCol = [1 1 1];
+    fgCol = [0 0 0];
+else
+    bgCol = [0 0 0];
+    fgCol = [1 1 1];
+end
+
+set(ax,'Color',bgCol,'XColor',fgCol,'YColor',fgCol, ...
+    'FontName','Arial','FontSize',11,'LineWidth',1.2,'Layer','top','Box','off');
+try, set(get(ax,'Title'),'Color',fgCol,'FontName','Arial','FontWeight','bold'); catch, end
+try, set(get(ax,'XLabel'),'Color',fgCol,'FontName','Arial','FontWeight','bold'); catch, end
+try, set(get(ax,'YLabel'),'Color',fgCol,'FontName','Arial','FontWeight','bold'); catch, end
+
+R = ga_get_roi_preview_data(S);
+
+if isempty(R) || ~isstruct(R)
+    text(ax,0.5,0.5,{'No ROI data found.','Check that active rows have ROI TXT files in the ROI File column.'}, ...
+        'Units','normalized','HorizontalAlignment','center','VerticalAlignment','middle', ...
+        'Color',fgCol,'FontName','Arial','FontSize',12,'FontWeight','bold');
+    xlim(ax,[0 1]); ylim(ax,[0 1]);
+    return;
+end
+
+if whichPlot == 1
+    ga_plot_roi_top(ax,R,S,fgCol,bgCol,lineW,shadeA,colA,colB);
+else
+    ga_plot_roi_bottom(ax,R,S,fgCol,bgCol,colA,colB,showAnimalLabels);
+end
+
+try, try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
+drawnow limitrate; catch, end
+end
+
+function R = ga_get_roi_preview_data(S)
+R = [];
+try
+    if isfield(S,'lastROI') && isstruct(S.lastROI) && ~isempty(fieldnames(S.lastROI))
+        LR = S.lastROI;
+        if isfield(LR,'tMin') && isfield(LR,'group') && ~isempty(LR.group)
+            R = LR;
+            return;
+        end
+    end
+catch
+end
+
+R = ga_build_roi_preview_from_txt(S);
+end
+
+function R = ga_build_roi_preview_from_txt(S)
+R = [];
+if ~isfield(S,'subj') || isempty(S.subj)
+    return;
+end
+subj = S.subj;
+if ~iscell(subj) || size(subj,2) < 7
+    return;
+end
+
+rows = [];
+for r = 1:size(subj,1)
+    useRow = true;
+    try, useRow = ga_bool(subj{r,1}); catch, useRow = true; end
+    roiFile = '';
+    try, roiFile = strtrim(char(subj{r,7})); catch, roiFile = ''; end
+    if useRow && ~isempty(roiFile) && exist(roiFile,'file') == 2
+        rows(end+1) = r; %#ok<AGROW>
+    end
+end
+
+if isempty(rows)
+    return;
+end
+
+n = numel(rows);
+tCell = cell(n,1);
+yCell = cell(n,1);
+grp = cell(n,1);
+subjName = cell(n,1);
+
+for i = 1:n
+    r = rows(i);
+    roiFile = strtrim(char(subj{r,7}));
+    [ok,tMin,psc] = ga_read_roi_txt(roiFile);
+    if ~ok
+        tCell{i} = [];
+        yCell{i} = [];
+    else
+        tCell{i} = tMin(:)';
+        yCell{i} = psc(:)';
+    end
+
+    try, grp{i} = strtrim(char(subj{r,3})); catch, grp{i} = ''; end
+    if isempty(grp{i}), grp{i} = 'GroupA'; end
+
+    try, subjName{i} = strtrim(char(subj{r,2})); catch, subjName{i} = ''; end
+    if isempty(subjName{i}), subjName{i} = sprintf('S%d',i); end
+end
+
+okTrace = false(n,1);
+for i = 1:n
+    okTrace(i) = numel(tCell{i}) >= 3 && numel(yCell{i}) == numel(tCell{i});
+end
+
+if ~any(okTrace)
+    return;
+end
+
+rows = rows(okTrace);
+tCell = tCell(okTrace);
+yCell = yCell(okTrace);
+grp = grp(okTrace);
+subjName = subjName(okTrace);
+n = numel(tCell);
+
+t0 = -inf;
+t1 = inf;
+dtList = [];
+for i = 1:n
+    t = tCell{i};
+    t0 = max(t0,min(t));
+    t1 = min(t1,max(t));
+    d = diff(t);
+    d = d(isfinite(d) & d > 0);
+    dtList = [dtList d(:)']; %#ok<AGROW>
+end
+
+if ~isfinite(t0) || ~isfinite(t1) || t1 <= t0
+    tCommon = tCell{1};
+else
+    dt = median(dtList);
+    if ~isfinite(dt) || dt <= 0
+        dt = 0.1;
+    end
+    tCommon = t0:dt:t1;
+end
+
+X = nan(n,numel(tCommon));
+for i = 1:n
+    try
+        X(i,:) = interp1(tCell{i},yCell{i},tCommon,'linear',NaN);
+    catch
+    end
+end
+
+gNames = ga_unique_stable(grp);
+gNames = ga_sort_groups(gNames);
+
+G = struct([]);
+for g = 1:numel(gNames)
+    idx = strcmpi(grp,gNames{g});
+    mu = ga_nanmean(X(idx,:),1);
+    sd = ga_nanstd(X(idx,:),0,1);
+    nn = sum(isfinite(X(idx,:)),1);
+    se = sd ./ sqrt(max(1,nn));
+    G(g).name = gNames{g};
+    G(g).mean = mu;
+    G(g).sem = se;
+    G(g).n = sum(idx);
+end
+
+m0 = NaN; m1 = NaN;
+try, if isfield(S,'tc_plateauMin0'), m0 = double(S.tc_plateauMin0); end, catch, end
+try, if isfield(S,'tc_plateauMin1'), m1 = double(S.tc_plateauMin1); end, catch, end
+if ~isfinite(m0) || ~isfinite(m1) || m1 <= m0
+    ttMax = max(tCommon);
+    if ttMax >= 40
+        m0 = 30; m1 = 40;
+    else
+        m0 = 0.65*ttMax; m1 = ttMax;
+    end
+end
+
+w = tCommon >= m0 & tCommon <= m1;
+if ~any(w)
+    w = true(size(tCommon));
+end
+metricVals = ga_nanmean(X(:,w),2);
+
+stats = struct('p',NaN,'alpha',0.05,'type','Welch fallback');
+if numel(gNames) >= 2
+    a = metricVals(strcmpi(grp,gNames{1}));
+    b = metricVals(strcmpi(grp,gNames{2}));
+    stats.p = ga_welch_p(a,b);
+end
+
+R = struct();
+R.mode = 'ROI Timecourse';
+R.tMin = tCommon;
+R.group = G;
+R.groupNames = gNames;
+R.groupDisplayNames = ga_display_group_names(gNames);
+R.metricVals = metricVals;
+R.metricName = sprintf('Mean PSC %.1f-%.1f min',m0,m1);
+R.stats = stats;
+R.subjTable = subj(rows,:);
+R.subjectNames = subjName;
+R.rawX = X;
+R.rawGroups = grp;
+end
+
+function ga_plot_roi_top(ax,R,S,fgCol,bgCol,lineW,shadeA,colA,colB)
+t = double(R.tMin(:)');
+if isempty(t) || ~isfield(R,'group') || isempty(R.group)
+    text(ax,0.5,0.5,'No top-plot ROI data','Units','normalized','HorizontalAlignment','center','Color',fgCol);
+    return;
+end
+
+allY = [];
+lineHs = [];
+leg = {};
+
+for g = 1:numel(R.group)
+    if g == 1, cc = colA; else, cc = colB; end
+    try
+        nm = lower(char(R.group(g).name));
+        if ~isempty(strfind(nm,'veh')) || ~isempty(strfind(nm,'control')), cc = colB; end
+        if ~isempty(strfind(nm,'pacap')), cc = colA; end
+    catch
+    end
+
+    y = double(R.group(g).mean(:)');
+    e = double(R.group(g).sem(:)');
+    if isempty(y) || numel(y) ~= numel(t)
+        continue;
+    end
+
+    if gaPrevField(S,'tc_previewSmooth',false)
+        try
+            dtSec = median(diff(t))*60;
+            y = gaPrevSmooth(y,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
+            e = gaPrevSmooth(e,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
+        catch
+        end
+    end
+
+    if gaPrevField(S,'tc_showSEM',true) && ~isempty(e) && numel(e) == numel(y)
+        up = y + e;
+        dn = y - e;
+        patch(ax,[t fliplr(t)],[up fliplr(dn)],cc, ...
+            'FaceAlpha',shadeA,'EdgeColor','none','HandleVisibility','off');
+        allY = [allY up(:)' dn(:)']; %#ok<AGROW>
+    end
+
+    dispName = R.group(g).name;
+    try
+        if isfield(R,'groupDisplayNames') && numel(R.groupDisplayNames) >= g
+            dispName = R.groupDisplayNames{g};
+        end
+    catch
+    end
+
+    hLine = plot(ax,t,y,'Color',cc,'LineWidth',lineW,'DisplayName',dispName);
+    lineHs = [lineHs hLine]; %#ok<AGROW>
+    leg{end+1} = sprintf('%s (n=%d)',dispName,R.group(g).n); %#ok<AGROW>
+    allY = [allY y(:)']; %#ok<AGROW>
+end
+
+xlabel(ax,'Time (min)','Color',fgCol,'FontWeight','bold');
+ylabel(ax,'PSC (%)','Color',fgCol,'FontWeight','bold');
+title(ax,'Group ROI timecourse','Color',fgCol,'FontWeight','bold');
+
+ga_apply_preview_x(ax,t,S);
+gaPrevApplyY(ax,allY,gaPrevField(S,'plotTop',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
+ga_draw_injection_box_final(ax,S,fgCol,bgCol);
+
+try
+    if ~isempty(lineHs)
+        lg = legend(ax,lineHs,leg,'Location','northeast','Box','off');
+        set(lg,'TextColor',fgCol,'Color',bgCol,'EdgeColor','none');
+    end
+catch
+end
+
+ga_apply_preview_grid(ax,S,fgCol);
+end
+
+function ga_plot_roi_bottom(ax,R,S,fgCol,bgCol,colA,colB,showAnimalLabels)
+if ~isfield(R,'metricVals') || isempty(R.metricVals)
+    text(ax,0.5,0.5,'No lower-plot metric data','Units','normalized','HorizontalAlignment','center','Color',fgCol);
+    return;
+end
+
+metricVals = double(R.metricVals(:));
+if isfield(R,'subjTable') && ~isempty(R.subjTable)
+    T = R.subjTable;
+else
+    T = {};
+end
+
+if isfield(R,'groupNames') && ~isempty(R.groupNames)
+    gNames = R.groupNames;
+else
+    gNames = {'GroupA'};
+end
+
+dispNames = ga_display_group_names(gNames);
+if isfield(R,'groupDisplayNames') && ~isempty(R.groupDisplayNames)
+    try, dispNames = R.groupDisplayNames; catch, end
+end
+
+grp = cell(numel(metricVals),1);
+for i = 1:numel(metricVals)
+    grp{i} = '';
+    if ~isempty(T) && size(T,2) >= 3
+        try, grp{i} = strtrim(char(T{i,3})); catch, grp{i} = ''; end
+    end
+    if isempty(grp{i})
+        grp{i} = gNames{1};
+    end
+end
+
+allY = [];
+for g = 1:numel(gNames)
+    idxRows = find(strcmpi(grp,gNames{g}) & isfinite(metricVals));
+    vals = metricVals(idxRows);
+    if isempty(vals)
+        continue;
+    end
+
+    if g == 1, cc = colA; else, cc = colB; end
+    try
+        nm = lower(char(gNames{g}));
+        if ~isempty(strfind(nm,'veh')) || ~isempty(strfind(nm,'control')), cc = colB; end
+        if ~isempty(strfind(nm,'pacap')), cc = colA; end
+    catch
+    end
+
+    for k = 1:numel(idxRows)
+        ii = idxRows(k);
+        y = metricVals(ii);
+        x = g + ga_jitter(ii,0.22);
+        scatter(ax,x,y,145, ...
+            'MarkerFaceColor',cc, ...
+            'MarkerEdgeColor',cc, ...
+            'LineWidth',1.3, ...
+            'HandleVisibility','off');
+        allY(end+1) = y; %#ok<AGROW>
+
+        if showAnimalLabels
+            label = sprintf('S%d',ii);
+            try
+                if ~isempty(T) && size(T,2) >= 2
+                    label = char(T{ii,2});
+                end
+            catch
+            end
+            text(ax,x+0.04,y,label, ...
+                'Color',fgCol, ...
+                'FontName','Arial', ...
+                'FontSize',11, ...
+                'FontWeight','bold', ...
+                'Interpreter','none', ...
+                'Clipping','on');
+        end
+    end
+
+    mu = mean(vals);
+    plot(ax,[g-0.28 g+0.28],[mu mu], ...
+        '-', ...
+        'Color',cc, ...
+        'LineWidth',3.8, ...
+        'HandleVisibility','off');
+    allY(end+1) = mu; %#ok<AGROW>
+end
+
+set(ax,'XTick',1:numel(gNames),'XTickLabel',dispNames,'FontSize',11);
+try, xtickangle(ax,20); catch, end
+xlabel(ax,'','Color',fgCol);
+ylabel(ax,'PSC (%)','Color',fgCol,'FontWeight','bold');
+title(ax,'Per-animal ROI metric','Color',fgCol,'FontWeight','bold');
+xlim(ax,[0.4 numel(gNames)+0.6]);
+
+gaPrevApplyY(ax,allY,gaPrevField(S,'plotBot',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
+
+try, legend(ax,'off'); catch, end
+try, delete(findall(ax,'Type','errorbar')); catch, end
+
+try
+    if isfield(R,'stats') && isfield(R.stats,'p') && isfinite(R.stats.p) && numel(gNames) >= 2
+        yl = ylim(ax);
+        y = yl(2) - 0.08*(yl(2)-yl(1));
+        p = R.stats.p;
+        stars = ga_stars(p);
+        text(ax,mean([1 2]),y,sprintf('%s   p = %.3g',stars,p), ...
+            'Color',fgCol,'FontName','Arial','FontSize',12,'FontWeight','bold', ...
+            'HorizontalAlignment','center','VerticalAlignment','top');
+    end
+catch
+end
+
+try
+    ga_draw_sig_bar_lower_plot(ax,R,S,fgCol,numel(gNames));
+catch ME_sigbar
+    try, disp(['ROI preview significance bar skipped: ' ME_sigbar.message]); catch, end
+end
+ga_apply_preview_grid(ax,S,fgCol);
+end
+
+function s = ga_preview_popup_string_local(h)
+s = '';
+try
+    lst = get(h,'String');
+    val = get(h,'Value');
+    if iscell(lst)
+        val = max(1,min(numel(lst),val));
+        s = lst{val};
+    else
+        s = char(lst);
+    end
+catch
+end
+if isempty(s), s = 'PACAP blue'; end
+end
+
+function c = ga_preview_named_color_local(name, cDefault)
+if nargin < 2 || isempty(cDefault), cDefault = [0.5 0.5 0.5]; end
+c = cDefault;
+if isempty(name), return; end
+s = lower(strtrim(name));
+switch s
+    case {'pacap blue','blue'}
+        c = [0.20 0.65 0.96];
+    case 'orange'
+        c = [0.95 0.58 0.20];
+    case 'red'
+        c = [0.87 0.24 0.24];
+    case 'green'
+        c = [0.20 0.72 0.28];
+    case 'purple'
+        c = [0.58 0.36 0.78];
+    case 'magenta'
+        c = [0.90 0.20 0.70];
+    case 'cyan'
+        c = [0.10 0.80 0.85];
+    case 'yellow'
+        c = [0.95 0.85 0.20];
+    case 'teal'
+        c = [0.10 0.65 0.60];
+    case 'dark blue'
+        c = [0.05 0.25 0.60];
+    case 'dark green'
+        c = [0.05 0.45 0.12];
+    case 'dark red'
+        c = [0.55 0.10 0.10];
+    case 'gray'
+        c = [0.60 0.60 0.60];
+    case 'black'
+        c = [0.10 0.10 0.10];
+end
+end
+
+function c = ga_color_name(s,fallback)
+c = fallback;
+try
+    s = lower(char(s));
+    if ~isempty(strfind(s,'pacap')) || ~isempty(strfind(s,'blue'))
+        c = [0.20 0.65 0.90];
+    elseif ~isempty(strfind(s,'vehicle')) || ~isempty(strfind(s,'veh')) || ~isempty(strfind(s,'gray')) || ~isempty(strfind(s,'grey'))
+        c = [0.60 0.60 0.60];
+    elseif ~isempty(strfind(s,'red'))
+        c = [0.90 0.25 0.25];
+    elseif ~isempty(strfind(s,'green'))
+        c = [0.25 0.75 0.45];
+    elseif ~isempty(strfind(s,'purple'))
+        c = [0.60 0.35 0.90];
+    elseif ~isempty(strfind(s,'orange'))
+        c = [0.95 0.55 0.20];
+    elseif ~isempty(strfind(s,'black'))
+        c = [0 0 0];
+    end
+catch
+end
+end
+
+function [ok,tMin,psc] = ga_read_roi_txt(fname)
+ok = false;
+tMin = [];
+psc = [];
+fid = fopen(fname,'r');
+if fid < 0, return; end
+cleanupObj = onCleanup(@()fclose(fid)); %#ok<NASGU>
+while true
+    ln = fgetl(fid);
+    if ~ischar(ln), break; end
+    ln = strtrim(ln);
+    if isempty(ln), continue; end
+    if ln(1) == '#' || ln(1) == '%' || ln(1) == ';'
+        continue;
+    end
+    vals = sscanf(ln,'%f');
+    if numel(vals) >= 3
+        tMin(end+1,1) = vals(2); %#ok<AGROW>
+        psc(end+1,1) = vals(3); %#ok<AGROW>
+    elseif numel(vals) == 2
+        tMin(end+1,1) = vals(1); %#ok<AGROW>
+        psc(end+1,1) = vals(2); %#ok<AGROW>
+    end
+end
+ok = numel(tMin) >= 3 && numel(psc) == numel(tMin);
+end
+
+function ga_draw_optional_window(ax,S)
+try
+    if isfield(S,'tc_peakSearchMin0') && isfield(S,'tc_peakSearchMin1')
+        x0 = double(S.tc_peakSearchMin0);
+        x1 = double(S.tc_peakSearchMin1);
+        if isfinite(x0) && isfinite(x1) && x1 > x0
+            yl = ylim(ax);
+            patch(ax,[x0 x1 x1 x0],[yl(1) yl(1) yl(2) yl(2)],[1 0.9 0.2], ...
+                'FaceAlpha',0.12,'EdgeColor','none','HandleVisibility','off');
+        end
+    end
+catch
+end
+end
+
+function ga_apply_preview_x(ax,t,S)
+try
+    t = double(t(:));
+    t = t(isfinite(t));
+    if isempty(t), return; end
+    xmin = min(t);
+    xmax = max(t);
+    if isfield(S,'plotX') && isstruct(S.plotX) && ~gaPrevField(S.plotX,'auto',true)
+        x0 = gaPrevField(S.plotX,'xmin',NaN);
+        x1 = gaPrevField(S.plotX,'xmax',NaN);
+        if isfinite(x0), xmin = x0; end
+        if isfinite(x1), xmax = x1; end
+    end
+    if isfinite(xmin) && isfinite(xmax) && xmax > xmin
+        xlim(ax,[xmin xmax]);
+    end
+catch
+end
+end
+
+function ga_apply_preview_grid(ax,S,fgCol)
+try
+    showGrid = false;
+    if isfield(S,'previewShowGrid'), showGrid = logical(S.previewShowGrid); end
+    if showGrid
+        grid(ax,'on');
+        try, set(ax,'XGrid','on','YGrid','on'); catch, end
+        try, set(ax,'GridAlpha',0.22); catch, end
+        try, set(ax,'MinorGridAlpha',0.10); catch, end
+        try
+            if all(fgCol > 0.5)
+                set(ax,'GridColor',[0.70 0.70 0.70]);
+            else
+                set(ax,'GridColor',[0.25 0.25 0.25]);
+            end
+        catch
+        end
+    else
+        grid(ax,'off');
+        try, set(ax,'XGrid','off','YGrid','off'); catch, end
+    end
+catch
+end
+end
+
+function ga_draw_injection_box_final(ax,S,fgCol,bgCol)
+try
+    if ~gaPrevField(S,'tc_showInjectionBox',true), return; end
+    x0 = gaPrevField(S,'tc_injMin0',NaN);
+    x1 = gaPrevField(S,'tc_injMin1',NaN);
+    if ~isfinite(x0) || ~isfinite(x1) || x1 <= x0, return; end
+    xl = xlim(ax);
+    yl = ylim(ax);
+    x0 = max(x0,xl(1));
+    x1 = min(x1,xl(2));
+    if x1 <= x0, return; end
+    if all(bgCol > 0.9)
+        faceCol = [0.92 0.86 0.55];
+        edgeCol = [0.78 0.66 0.20];
+        aVal = 0.26;
+    else
+        faceCol = [0.60 0.60 0.60];
+        edgeCol = [0.90 0.90 0.90];
+        aVal = 0.30;
+    end
+    h = patch(ax,[x0 x1 x1 x0],[yl(1) yl(1) yl(2) yl(2)],faceCol, ...
+        'FaceAlpha',aVal,'EdgeColor',edgeCol,'LineWidth',0.8, ...
+        'HandleVisibility','off','HitTest','off','Tag','GA_InjectionPatch');
+    try
+        ann = get(h,'Annotation');
+        leg = get(ann,'LegendInformation');
+        set(leg,'IconDisplayStyle','off');
+    catch
+    end
+    try, uistack(h,'bottom'); catch, end
+    text(ax,(x0+x1)/2,yl(2)-0.035*(yl(2)-yl(1)),'Injection', ...
+        'Color',fgCol,'FontName','Arial','FontSize',8,'FontWeight','bold', ...
+        'HorizontalAlignment','center','VerticalAlignment','top', ...
+        'Clipping','on','HandleVisibility','off');
+catch
+end
+end
+
+function ga_auto_limits(ax)
+try
+    ch = get(ax,'Children');
+    xx = [];
+    yy = [];
+    for i = 1:numel(ch)
+        try
+            x = get(ch(i),'XData');
+            y = get(ch(i),'YData');
+            xx = [xx x(:)']; %#ok<AGROW>
+            yy = [yy y(:)']; %#ok<AGROW>
+        catch
+        end
+    end
+    xx = xx(isfinite(xx));
+    yy = yy(isfinite(yy));
+    if ~isempty(xx)
+        xlim(ax,[min(xx) max(xx)]);
+    end
+    if ~isempty(yy)
+        lo = min(yy); hi = max(yy);
+        if hi <= lo, hi = lo + 1; end
+        pad = 0.12*(hi-lo);
+        ylim(ax,[lo-pad hi+pad]);
+    end
+catch
+end
+end
+
+function tf = ga_bool(x)
+tf = true;
+try
+    if islogical(x)
+        tf = x;
+    elseif isnumeric(x)
+        tf = x ~= 0;
+    else
+        s = lower(strtrim(char(x)));
+        tf = any(strcmp(s,{'1','true','yes','y','on'}));
+    end
+catch
+    tf = true;
+end
+end
+
+function u = ga_unique_stable(C)
+u = {};
+for i = 1:numel(C)
+    s = strtrim(char(C{i}));
+    if isempty(s), continue; end
+    hit = false;
+    for j = 1:numel(u)
+        if strcmpi(u{j},s), hit = true; break; end
+    end
+    if ~hit, u{end+1,1} = s; end %#ok<AGROW>
+end
+end
+
+function g = ga_sort_groups(g)
+if numel(g) < 2, return; end
+rank = 100 + (1:numel(g));
+for i = 1:numel(g)
+    s = upper(g{i});
+    if ~isempty(strfind(s,'PACAP')) || ~isempty(strfind(s,'GROUPA')) || strcmp(s,'A')
+        rank(i) = 1;
+    elseif ~isempty(strfind(s,'VEH')) || ~isempty(strfind(s,'CONTROL')) || ~isempty(strfind(s,'GROUPB')) || strcmp(s,'B')
+        rank(i) = 2;
+    end
+end
+[~,ord] = sort(rank);
+g = g(ord);
+end
+
+function d = ga_display_group_names(g)
+d = g;
+for i = 1:numel(g)
+    s = upper(g{i});
+    if ~isempty(strfind(s,'PACAP'))
+        d{i} = 'PACAP';
+    elseif ~isempty(strfind(s,'VEH')) || ~isempty(strfind(s,'CONTROL'))
+        d{i} = 'Vehicle';
+    end
+end
+end
+
+function m = ga_nanmean(X,dim)
+if nargin < 2, dim = 1; end
+try
+    m = mean(X,dim,'omitnan');
+catch
+    n = sum(isfinite(X),dim);
+    X2 = X; X2(~isfinite(X2)) = 0;
+    m = sum(X2,dim) ./ max(1,n);
+    m(n==0) = NaN;
+end
+end
+
+function s = ga_nanstd(X,flag,dim)
+if nargin < 2, flag = 0; end
+if nargin < 3, dim = 1; end
+try
+    s = std(X,flag,dim,'omitnan');
+catch
+    mu = ga_nanmean(X,dim);
+    rep = ones(1,ndims(X));
+    rep(dim) = size(X,dim);
+    MU = repmat(mu,rep);
+    D = X - MU;
+    D(~isfinite(D)) = 0;
+    n = sum(isfinite(X),dim);
+    if flag == 0
+        den = max(1,n-1);
+    else
+        den = max(1,n);
+    end
+    s = sqrt(sum(D.^2,dim)./den);
+    s(n==0) = NaN;
+end
+end
+
+function p = ga_welch_p(a,b)
+p = NaN;
+a = a(isfinite(a));
+b = b(isfinite(b));
+n1 = numel(a); n2 = numel(b);
+if n1 < 2 || n2 < 2, return; end
+m1 = mean(a); m2 = mean(b);
+v1 = var(a,0); v2 = var(b,0);
+den = sqrt(v1/n1 + v2/n2);
+if den <= 0 || ~isfinite(den), return; end
+t = (m1-m2)/den;
+df = (v1/n1 + v2/n2)^2 / ((v1^2)/(n1^2*max(1,n1-1)) + (v2^2)/(n2^2*max(1,n2-1)));
+df = max(1,df);
+p = 2*ga_tcdf(-abs(t),df);
+end
+
+function p = ga_tcdf(x,v)
+try
+    p = tcdf(x,v);
+    return;
+catch
+end
+z = v ./ (v + x.^2);
+ib = betainc(z,v/2,0.5);
+p = zeros(size(x));
+p(x >= 0) = 1 - 0.5*ib(x >= 0);
+p(x < 0) = 0.5*ib(x < 0);
+end
+
+function s = ga_stars(p)
+if ~isfinite(p)
+    s = 'p=?';
+elseif p < 0.001
+    s = '***';
+elseif p < 0.01
+    s = '**';
+elseif p < 0.05
+    s = '*';
+else
+    s = 'n.s.';
+end
+end
+
+function j = ga_jitter(k,amp)
+if nargin < 2, amp = 0.16; end
+j = amp * (mod(double(k)*37,100)/100 - 0.5);
+end
+
+function s = ga_join(C,sep)
+s = '';
+for i = 1:numel(C)
+    if i > 1, s = [s sep]; end %#ok<AGROW>
+    s = [s char(C{i})]; %#ok<AGROW>
+end
+end
+
+
+function gaPrevTop(ax,R,S,styleName)
+[~,fg] = gaPrevColors(styleName);
+hold(ax,'on');
+t = double(R.tMin(:)');
+allY = [];
+for g = 1:numel(R.group)
+    y = double(R.group(g).mean(:)');
+    e = double(R.group(g).sem(:)');
+    if gaPrevField(S,'tc_previewSmooth',false)
+        dtSec = median(diff(t))*60;
+        y = gaPrevSmooth(y,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
+        e = gaPrevSmooth(e,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
+    end
+    col = gaPrevGroupColor(R,R.group(g).name,g);
+    if gaPrevField(S,'tc_showSEM',true) && numel(e)==numel(y)
+        patch(ax,[t fliplr(t)],[y+e fliplr(y-e)],col,'FaceAlpha',gaPrevField(S,'displaySemAlpha',0.25),'EdgeColor','none','HandleVisibility','off');
+    end
+    plot(ax,t,y,'Color',col,'LineWidth',2.4,'DisplayName',gaPrevDisplayName(R,g));
+    allY = [allY y(:)'];
+end
+xlabel(ax,'Time (min)','Color',fg,'FontWeight','bold');
+if isfield(R,'unitsPercent') && R.unitsPercent, ylabel(ax,'% signal change','Color',fg,'FontWeight','bold'); else, ylabel(ax,'Signal','Color',fg,'FontWeight','bold'); end
+title(ax,'Group ROI timecourse','Color',fg,'FontWeight','bold');
+gaPrevApplyY(ax,allY,gaPrevField(S,'plotTop',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
+if gaPrevField(S,'tc_showInjectionBox',true)
+    yl = ylim(ax);
+    x0 = gaPrevField(S,'tc_injMin0',NaN); x1 = gaPrevField(S,'tc_injMin1',NaN);
+    if isfinite(x0) && isfinite(x1) && x1 > x0
+        hp = patch(ax,[x0 x1 x1 x0],[yl(1) yl(1) yl(2) yl(2)],[1 1 0],'FaceAlpha',0.10,'EdgeColor','none','HandleVisibility','off');
+        try, uistack(hp,'bottom'); catch, end
+    end
+end
+try, legend(ax,'Location','best','TextColor',fg,'Color','none','Box','off'); catch, end
+hold(ax,'off');
+end
+
+function gaPrevBottom(ax,R,S,styleName)
+[~,fg] = gaPrevColors(styleName);
+hold(ax,'on');
+vals = double(R.metricVals(:));
+grp = R.subjTable(:,3);
+gNames = R.groupNames;
+allY = vals(:)';
+for g = 1:numel(gNames)
+    idx = strcmpi(grp,gNames{g});
+    v = vals(idx); v = v(isfinite(v));
+    if isempty(v), continue; end
+    mu = mean(v);
+    se = std(v,0)./sqrt(max(1,numel(v)));
+    col = gaPrevGroupColor(R,gNames{g},g);
+    bar(ax,g,mu,0.55,'FaceColor',col,'EdgeColor','none');
+xj = g + linspace(-0.12,0.12,numel(v));
+    scatter(ax,xj,v,55,'MarkerFaceColor',col,'MarkerEdgeColor',fg,'LineWidth',0.8);
+end
+set(ax,'XTick',1:numel(gNames),'XTickLabel',gaPrevDisplayNames(R));
+try, xtickangle(ax,20); catch, end
+ylabel(ax,gaPrevField(R,'metricName','Metric'),'Color',fg,'FontWeight','bold','Interpreter','none');
+title(ax,'Per-animal ROI metric','Color',fg,'FontWeight','bold');
+gaPrevApplyY(ax,allY,gaPrevField(S,'plotBot',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
+gaPrevStatsText(ax,R,S,styleName);
+hold(ax,'off');
+end
+
+function gaPrevStatsText(ax,R,S,styleName)
+[~,fg] = gaPrevColors(styleName);
+if ~isfield(R,'stats') || ~isfield(R.stats,'p'), return; end
+p = R.stats.p;
+if ~isfinite(p), return; end
+yl = ylim(ax); dy = yl(2)-yl(1); if ~isfinite(dy) || dy<=0, dy=1; end
+stars = gaPrevStars(p);
+x = mean(xlim(ax));
+text(ax,x,yl(2)-0.06*dy,sprintf('%s   p = %.3g',stars,p),'Color',fg,'FontWeight','bold','FontSize',12,'HorizontalAlignment','center','VerticalAlignment','top');
+end
+
+function gaPrevClear(ax,styleName,showGrid)
+try, cla(ax,'reset'); catch, cla(ax); end
+[bg,fg] = gaPrevColors(styleName);
+set(ax,'Color',bg,'XColor',fg,'YColor',fg,'FontName','Arial','FontSize',12,'Box','off');
+if showGrid, grid(ax,'on'); else, grid(ax,'off'); end
+end
+
+function [bg,fg] = gaPrevColors(styleName)
+if strcmpi(styleName,'Light'), bg=[1 1 1]; fg=[0 0 0]; else, bg=[0 0 0]; fg=[1 1 1]; end
+end
+
+function val = gaPrevField(S,name,fb)
+val = fb;
+try, if isstruct(S) && isfield(S,name) && ~isempty(S.(name)), val = S.(name); end; catch, end
+end
+
+function y2 = gaPrevSmooth(y,dtSec,winSec)
+y = double(y(:)'); y2 = y;
+if ~isfinite(dtSec) || dtSec<=0 || ~isfinite(winSec) || winSec<=0, return; end
+w = max(1,round(winSec/dtSec));
+if w <= 1, return; end
+if any(~isfinite(y))
+    ii = find(isfinite(y));
+    if numel(ii) >= 2, y = interp1(ii,y(ii),1:numel(y),'linear','extrap'); end
+end
+k = ones(1,w)./w;
+padL = repmat(y(1),1,floor(w/2));
+padR = repmat(y(end),1,w-1-floor(w/2));
+y2 = conv([padL y padR],k,'valid');
+end
+
+function col = gaPrevGroupColor(R,name,idx)
+col = lines(max(2,idx)); col = col(idx,:);
+try
+    f = gaPrevMakeField(name);
+    if isfield(R,'groupColors') && isfield(R.groupColors,f), col = R.groupColors.(f); end
+catch
+end
+end
+
+function f = gaPrevMakeField(s)
+try, f = matlab.lang.makeValidName(char(s)); catch, f = regexprep(char(s),'[^A-Za-z0-9_]','_'); end
+if isempty(f), f = 'Group'; end
+end
+
+function names = gaPrevDisplayNames(R)
+if isfield(R,'groupDisplayNames') && numel(R.groupDisplayNames)==numel(R.groupNames)
+    names = R.groupDisplayNames;
+else
+    names = R.groupNames;
+end
+end
+
+function s = gaPrevDisplayName(R,g)
+names = gaPrevDisplayNames(R);
+try, s = names{g}; catch, s = R.group(g).name; end
+end
+
+function gaPrevApplyY(ax,dataVec,cfg)
+dataVec = dataVec(isfinite(dataVec));
+if isempty(dataVec), dataVec = 0; end
+auto = gaPrevField(cfg,'auto',true);
+forceZero = gaPrevField(cfg,'forceZero',false);
+if auto
+    lo = min(dataVec);
+    hi = max(dataVec);
+    if lo == hi, lo = lo - 1; hi = hi + 1; end
+    pad = 0.08*(hi-lo);
+    lo = lo - pad;
+    hi = hi + pad;
+    if forceZero, lo = 0; end
+else
+    lo = gaPrevField(cfg,'ymin',min(dataVec));
+    hi = gaPrevField(cfg,'ymax',max(dataVec));
+    if forceZero, lo = 0; end
+end
+if ~isfinite(lo), lo = min(dataVec); end
+if ~isfinite(hi), hi = max(dataVec); end
+if hi <= lo, hi = lo + 1; end
+ylim(ax,[lo hi]);
+
+step = gaPrevField(cfg,'step',0);
+if isfinite(step) && step > 0
+    yl = ylim(ax);
+    t0 = ceil(yl(1)/step)*step;
+    t1 = floor(yl(2)/step)*step;
+    ticks = t0:step:t1;
+    if isempty(ticks) || ticks(1) > yl(1)+1e-9
+        ticks = [yl(1) ticks];
+    end
+    if ticks(end) < yl(2)-1e-9
+        ticks = [ticks yl(2)];
+    end
+    ticks = unique(ticks);
+    if numel(ticks) >= 2 && numel(ticks) < 80
+        set(ax,'YTick',ticks);
+    end
+else
+    try, set(ax,'YTickMode','auto'); catch, end
+end
+end
+
+function s = gaPrevStars(p)
+if p < 0.001, s='***'; elseif p < 0.01, s='**'; elseif p < 0.05, s='*'; else, s='n.s.'; end
+end
+% GA_ROI_PREVIEW_STANDALONE_END
+
+
+function savePreviewPNGLocal(outFile, whichPlot, S)
+% Save ROI preview as PNG using the same renderer as the GUI preview.
+
+if nargin < 3 || isempty(S)
+    error('Missing GroupAnalysis state.');
+end
+
+styleName = 'Dark';
+try
+    if isfield(S,'previewStyle') && ~isempty(S.previewStyle)
+        styleName = S.previewStyle;
+    end
+catch
+end
+
+if strcmpi(styleName,'Light')
+    figBg = [1 1 1];
+else
+    figBg = [0 0 0];
+end
+
+f = figure( ...
+    'Visible','off', ...
+    'Color',figBg, ...
+    'InvertHardcopy','off', ...
+    'MenuBar','none', ...
+    'ToolBar','none', ...
+    'NumberTitle','off');
+
+if whichPlot == 1
+    set(f,'Position',[100 100 1400 650]);
+    ax = axes('Parent',f,'Units','normalized','Position',[0.09 0.16 0.86 0.74]);
+else
+    set(f,'Position',[100 100 950 700]);
+    ax = axes('Parent',f,'Units','normalized','Position',[0.14 0.16 0.78 0.74]);
+end
+
+exportOnePreview(ax,whichPlot,S,styleName);
+
+set(f,'PaperPositionMode','auto');
+print(f, outFile, '-dpng', '-r300');
+close(f);
+end
+
+
+function groupColors = assignGroupColorsWithMode(gNames, varargin)
+% Robust group color assignment for ROI preview and exports.
+% Accepts old and new call styles.
+
+if nargin < 1 || isempty(gNames)
+    groupColors = zeros(0,3);
+    return;
+end
+
+if ischar(gNames)
+    gNames = cellstr(gNames);
+end
+
+nG = numel(gNames);
+palette = [ ...
+    0.20 0.63 0.86; ... % blue / PACAP
+    0.25 0.75 0.45; ... % green / Vehicle
+    0.90 0.35 0.25; ... % red
+    0.70 0.45 0.90; ... % purple
+    0.95 0.70 0.25; ... % yellow
+    0.20 0.75 0.75];    % cyan
+
+groupColors = zeros(nG,3);
+for i = 1:nG
+    groupColors(i,:) = palette(1+mod(i-1,size(palette,1)),:);
+end
+
+S = struct();
+for q = 1:numel(varargin)
+    if isstruct(varargin{q})
+        S = varargin{q};
+    end
+end
+
+aGroup = gaText_cleanfix(gaFieldAny_cleanfix(S,{'tc_groupA','groupA','groupAName','plotGroupA','roiGroupA','selectedGroupA','selectedA','previewGroupA','statGroupA','metricGroupA','group1'}));
+bGroup = gaText_cleanfix(gaFieldAny_cleanfix(S,{'tc_groupB','groupB','groupBName','plotGroupB','roiGroupB','selectedGroupB','selectedB','previewGroupB','statGroupB','metricGroupB','group2'}));
+aColTxt = gaFieldAny_cleanfix(S,{'tc_colorA','tcColorA','colorA','groupColorA','plotColorA','lineColorA','roiColorA','groupAColor','colorNameA','lineColorAName'});
+bColTxt = gaFieldAny_cleanfix(S,{'tc_colorB','tcColorB','colorB','groupColorB','plotColorB','lineColorB','roiColorB','groupBColor','colorNameB','lineColorBName'});
+
+% Also support direct call style: assignGroupColorsWithMode(gNames,A,B,colorA,colorB)
+colorCandidates = {};
+for q = 1:numel(varargin)
+    v = varargin{q};
+    if isstruct(v)
+        continue;
+    end
+    s = gaText_cleanfix(v);
+    if isempty(s)
+        if isnumeric(v) && numel(v)==3
+            colorCandidates{end+1} = v;
+        end
+        continue;
+    end
+
+    isGroupName = false;
+    for gg = 1:nG
+        if strcmpi(s,gaText_cleanfix(gNames{gg}))
+            isGroupName = true;
+            break;
+        end
+    end
+
+    if isGroupName && isempty(aGroup)
+        aGroup = s;
+    elseif isGroupName && isempty(bGroup) && ~strcmpi(s,aGroup)
+        bGroup = s;
+    else
+        cTry = gaColor_cleanfix(v);
+        if ~any(isnan(cTry))
+            colorCandidates{end+1} = v;
+        end
+    end
+end
+
+if isempty(aGroup) && nG >= 1, aGroup = gaText_cleanfix(gNames{1}); end
+if isempty(bGroup) && nG >= 2, bGroup = gaText_cleanfix(gNames{2}); end
+
+aRGB = gaColor_cleanfix(aColTxt);
+bRGB = gaColor_cleanfix(bColTxt);
+
+if any(isnan(aRGB)) && numel(colorCandidates) >= 1
+    aRGB = gaColor_cleanfix(colorCandidates{1});
+end
+if any(isnan(bRGB)) && numel(colorCandidates) >= 2
+    bRGB = gaColor_cleanfix(colorCandidates{2});
+end
+
+if any(isnan(aRGB)), aRGB = gaColor_cleanfix(aGroup); end
+if any(isnan(bRGB)), bRGB = gaColor_cleanfix(bGroup); end
+
+if any(isnan(aRGB)), aRGB = palette(1,:); end
+if any(isnan(bRGB)), bRGB = palette(2,:); end
+
+for i = 1:nG
+    gi = gaText_cleanfix(gNames{i});
+    if ~isempty(aGroup) && strcmpi(gi,aGroup)
+        groupColors(i,:) = aRGB;
+    elseif ~isempty(bGroup) && strcmpi(gi,bGroup)
+        groupColors(i,:) = bRGB;
+    else
+        guess = gaColor_cleanfix(gi);
+        if ~any(isnan(guess))
+            groupColors(i,:) = guess;
+        end
+    end
+end
+
+groupColors = max(0,min(1,groupColors));
+end
+
+function v = gaFieldAny_cleanfix(S, fields)
+v = [];
+if ~isstruct(S), return; end
+for k = 1:numel(fields)
+    f = fields{k};
+    if isfield(S,f) && ~isempty(S.(f))
+        v = S.(f);
+        if iscell(v) && ~isempty(v)
+            v = v{1};
+        end
+        return;
+    end
+end
+end
+
+function s = gaText_cleanfix(v)
+s = '';
+if isempty(v), return; end
+if iscell(v) && ~isempty(v), v = v{1}; end
+if isnumeric(v), return; end
+try
+    s = strtrim(char(v));
+catch
+    s = '';
+end
+end
+
+function rgb = gaColor_cleanfix(v)
+rgb = [NaN NaN NaN];
+if isempty(v), return; end
+
+if isnumeric(v) && numel(v) == 3
+    rgb = double(v(:)');
+    if max(rgb) > 1, rgb = rgb ./ 255; end
+    return;
+end
+
+s = lower(gaText_cleanfix(v));
+if isempty(s), return; end
+s = strrep(s,'_',' ');
+s = strrep(s,'-',' ');
+s = strtrim(s);
+
+if ~isempty(strfind(s,'pacap')) || ~isempty(strfind(s,'blue')) || strcmp(s,'conda') || strcmp(s,'condition a') || strcmp(s,'a')
+    rgb = [0.20 0.63 0.86]; return;
+end
+if ~isempty(strfind(s,'vehicle')) || ~isempty(strfind(s,'green')) || strcmp(s,'condb') || strcmp(s,'condition b') || strcmp(s,'b')
+    rgb = [0.25 0.75 0.45]; return;
+end
+if ~isempty(strfind(s,'red')) || ~isempty(strfind(s,'orange')) || ~isempty(strfind(s,'salmon'))
+    rgb = [0.90 0.35 0.25]; return;
+end
+if ~isempty(strfind(s,'purple')) || ~isempty(strfind(s,'violet'))
+    rgb = [0.70 0.45 0.90]; return;
+end
+if ~isempty(strfind(s,'yellow')) || ~isempty(strfind(s,'gold'))
+    rgb = [0.95 0.70 0.25]; return;
+end
+if ~isempty(strfind(s,'cyan')) || ~isempty(strfind(s,'turquoise'))
+    rgb = [0.20 0.75 0.75]; return;
+end
+if ~isempty(strfind(s,'black'))
+    rgb = [0 0 0]; return;
+end
+if ~isempty(strfind(s,'white'))
+    rgb = [1 1 1]; return;
+end
+if ~isempty(strfind(s,'gray')) || ~isempty(strfind(s,'grey'))
+    rgb = [0.5 0.5 0.5]; return;
+end
+end
+
+
+function gaApplyROIPreviewAxisCleanfix(hFig,R)
+% Applies final visual cleanup to ROI preview axes.
+if nargin < 1 || isempty(hFig) || ~ishandle(hFig)
+    try
+        hFig = gcf;
+    catch
+        return;
+    end
+end
+if nargin < 2
+    R = [];
+end
+
+axs = findall(hFig,'Type','axes');
+for k = 1:numel(axs)
+    ax = axs(k);
+    ttl = lower(gaGetAxesTitleCleanfix(ax));
+
+    if ~isempty(strfind(ttl,'group roi timecourse'))
+        gaFixOneROIAxisCleanfix(ax,true,R);
+    elseif ~isempty(strfind(ttl,'per-animal roi metric'))
+        gaFixOneROIAxisCleanfix(ax,false,R);
+    end
+end
+end
+
+function gaFixOneROIAxisCleanfix(ax,isTop,R)
+if isempty(ax) || ~ishandle(ax), return; end
+
+bg = get(ax,'Color');
+if ischar(bg)
+    try
+        bg = get(ancestor(ax,'figure'),'Color');
+    catch
+        bg = [1 1 1];
+    end
+end
+if ischar(bg) || isempty(bg) || numel(bg) ~= 3
+    bg = [1 1 1];
+end
+bg = double(bg(:)');
+
+if mean(bg) > 0.5
+    fg = [0 0 0];
+else
+    fg = [1 1 1];
+end
+
+try
+    set(ax,'XColor',fg,'YColor',fg,'FontName','Arial','FontSize',11,'LineWidth',1.1,'Box','off');
+end
+
+try, set(get(ax,'Title'), 'Color',fg,'FontName','Arial','FontWeight','bold'); end
+try, set(get(ax,'XLabel'),'Color',fg,'FontName','Arial','FontWeight','bold'); end
+try, set(get(ax,'YLabel'),'Color',fg,'FontName','Arial','FontWeight','bold'); end
+
+try
+    txt = findall(ax,'Type','text');
+    for t = 1:numel(txt)
+        set(txt(t),'Color',fg,'FontName','Arial');
+    end
+end
+
+try
+    hFig = ancestor(ax,'figure');
+    legs = findall(hFig,'Type','legend');
+    for l = 1:numel(legs)
+        try, set(legs(l),'TextColor',fg); end
+        try, set(legs(l),'Color',bg); end
+    end
+end
+
+if isTop
+    x = gaCollectTimeFromRCleanfix(R);
+    if isempty(x)
+        x = gaCollectAxisDataCleanfix(ax,'XData');
+    end
+    x = x(isfinite(x));
+    if numel(x) >= 2
+        xmin = min(x(:));
+        xmax = max(x(:));
+        if xmax > xmin
+            xlim(ax,[xmin xmax]);
+        end
+    end
+
+    y = gaCollectAxisDataCleanfix(ax,'YData');
+    y = y(isfinite(y));
+    if ~isempty(y)
+        lo = min(y(:));
+        hi = max(y(:));
+        if hi <= lo, hi = lo + 1; end
+        pad = 0.10 * (hi-lo);
+        ylim(ax,[lo-pad hi+pad]);
+    end
+
+    try, xlabel(ax,'Time (min)'); end
+    try, ylabel(ax,'PSC (%)'); end
+else
+    y = gaCollectAxisDataCleanfix(ax,'YData');
+    y = y(isfinite(y));
+    if ~isempty(y)
+        lo = min([0; y(:)]);
+        hi = max([0; y(:)]);
+        if hi <= lo, hi = lo + 1; end
+        pad = 0.20 * (hi-lo);
+        ylim(ax,[lo-pad hi+pad]);
+        yl = ylim(ax);
+        set(ax,'YTick',linspace(yl(1),yl(2),5));
+    end
+
+    x = gaCollectAxisDataCleanfix(ax,'XData');
+    x = x(isfinite(x));
+    if ~isempty(x)
+        xmin = min(x(:));
+        xmax = max(x(:));
+        if xmax > xmin
+            xlim(ax,[xmin-0.75 xmax+0.75]);
+        end
+    end
+
+    try, ylabel(ax,'PSC (%)'); end
+end
+end
+
+function ttl = gaGetAxesTitleCleanfix(ax)
+ttl = '';
+try
+    h = get(ax,'Title');
+    s = get(h,'String');
+    if iscell(s)
+        tmp = '';
+        for i = 1:numel(s)
+            tmp = [tmp ' ' char(s{i})];
+        end
+        s = tmp;
+    end
+    ttl = char(s);
+catch
+    ttl = '';
+end
+end
+
+function vals = gaCollectAxisDataCleanfix(ax,propName)
+vals = [];
+try
+    hs = findall(ax,'-property',propName);
+catch
+    return;
+end
+
+for i = 1:numel(hs)
+    try
+        d = get(hs(i),propName);
+    catch
+        continue;
+    end
+
+    if iscell(d)
+        for j = 1:numel(d)
+            if isnumeric(d{j})
+                vals = [vals; double(d{j}(:))];
+            end
+        end
+    elseif isnumeric(d)
+        vals = [vals; double(d(:))];
+    end
+end
+end
+
+function x = gaCollectTimeFromRCleanfix(R)
+x = [];
+if ~isstruct(R), return; end
+
+fields = {'tMin','timeMin','time_min','timeAxis','time','t','commonTimeMin','commonTime','plotTimeMin'};
+for k = 1:numel(fields)
+    f = fields{k};
+    if isfield(R,f) && isnumeric(R.(f)) && numel(R.(f)) >= 2
+        tmp = double(R.(f)(:));
+        tmp = tmp(isfinite(tmp));
+        if numel(tmp) >= 2
+            x = tmp;
+            return;
+        end
+    end
+end
+end
+
+
+function [lineW, shadeA, colA, colB, showLabels] = ga_preview_style_from_gui(figH)
+lineW = 2.8;
+shadeA = 0.22;
+colA = [0.20 0.65 0.90];
+colB = [0.60 0.60 0.60];
+showLabels = false;
+
+if isempty(figH) || ~ishandle(figH)
+    return;
+end
+
+% Line width slider
+try
+    h = findall(figH,'Tag','GA_RPV_LINE_WIDTH');
+    if ~isempty(h)
+        v = get(h(1),'Value');
+        if isfinite(v), lineW = v; end
+    end
+catch
+end
+
+% Shade alpha slider
+try
+    h = findall(figH,'Tag','GA_RPV_SHADE_ALPHA');
+    if ~isempty(h)
+        v = get(h(1),'Value');
+        if isfinite(v), shadeA = v; end
+    end
+catch
+end
+
+% A color popup
+try
+    h = findall(figH,'Tag','GA_RPV_COLOR_A');
+    if ~isempty(h)
+        items = get(h(1),'String');
+        if ischar(items), items = cellstr(items); end
+        v = get(h(1),'Value');
+        v = max(1,min(numel(items),round(v)));
+        s = lower(char(items{v}));
+        if ~isempty(strfind(s,'vehicle')) || ~isempty(strfind(s,'gray')) || ~isempty(strfind(s,'grey'))
+            colA = [0.60 0.60 0.60];
+        elseif ~isempty(strfind(s,'dark blue'))
+            colA = [0.05 0.25 0.65];
+        elseif ~isempty(strfind(s,'dark green'))
+            colA = [0.00 0.35 0.20];
+        elseif ~isempty(strfind(s,'dark red'))
+            colA = [0.55 0.05 0.05];
+        elseif ~isempty(strfind(s,'teal'))
+            colA = [0.10 0.70 0.65];
+        elseif ~isempty(strfind(s,'purple'))
+            colA = [0.60 0.35 0.90];
+        elseif ~isempty(strfind(s,'orange'))
+            colA = [0.95 0.55 0.20];
+        elseif ~isempty(strfind(s,'red'))
+            colA = [0.90 0.25 0.25];
+        elseif ~isempty(strfind(s,'green'))
+            colA = [0.25 0.75 0.45];
+        elseif ~isempty(strfind(s,'cyan'))
+            colA = [0.20 0.85 0.85];
+        elseif ~isempty(strfind(s,'magenta'))
+            colA = [0.90 0.35 0.80];
+        elseif ~isempty(strfind(s,'yellow'))
+            colA = [0.95 0.85 0.20];
+        elseif ~isempty(strfind(s,'black'))
+            colA = [0 0 0];
+        else
+            colA = [0.20 0.65 0.90];
+        end
+    end
+catch
+end
+
+% B color popup
+try
+    h = findall(figH,'Tag','GA_RPV_COLOR_B');
+    if ~isempty(h)
+        items = get(h(1),'String');
+        if ischar(items), items = cellstr(items); end
+        v = get(h(1),'Value');
+        v = max(1,min(numel(items),round(v)));
+        s = lower(char(items{v}));
+        if ~isempty(strfind(s,'vehicle')) || ~isempty(strfind(s,'gray')) || ~isempty(strfind(s,'grey'))
+            colB = [0.60 0.60 0.60];
+        elseif ~isempty(strfind(s,'dark blue'))
+            colB = [0.05 0.25 0.65];
+        elseif ~isempty(strfind(s,'dark green'))
+            colB = [0.00 0.35 0.20];
+        elseif ~isempty(strfind(s,'dark red'))
+            colB = [0.55 0.05 0.05];
+        elseif ~isempty(strfind(s,'teal'))
+            colB = [0.10 0.70 0.65];
+        elseif ~isempty(strfind(s,'purple'))
+            colB = [0.60 0.35 0.90];
+        elseif ~isempty(strfind(s,'orange'))
+            colB = [0.95 0.55 0.20];
+        elseif ~isempty(strfind(s,'red'))
+            colB = [0.90 0.25 0.25];
+        elseif ~isempty(strfind(s,'green'))
+            colB = [0.25 0.75 0.45];
+        elseif ~isempty(strfind(s,'cyan'))
+            colB = [0.20 0.85 0.85];
+        elseif ~isempty(strfind(s,'magenta'))
+            colB = [0.90 0.35 0.80];
+        elseif ~isempty(strfind(s,'yellow'))
+            colB = [0.95 0.85 0.20];
+        elseif ~isempty(strfind(s,'black'))
+            colB = [0 0 0];
+        else
+            colB = [0.60 0.60 0.60];
+        end
+    end
+catch
+end
+
+% Animal labels checkbox
+try
+    h = findall(figH,'Tag','GA_RPV_ANIMAL_LABELS');
+    if ~isempty(h)
+        showLabels = logical(get(h(1),'Value'));
+    end
+catch
+end
+
+lineW = max(0.5,min(9,lineW));
+shadeA = max(0,min(0.75,shadeA));
+end
+
+
+function GA_exportGroupAnalysisPPTBundleFix_20260511(hFig, makePPT)
+% Compatibility wrapper for older Group Maps Export Data SCM / PPT callbacks.
+% Keeps old button callbacks working after the exporter was renamed.
+if nargin < 2 || isempty(makePPT), makePPT = false; end
+GA_exportGroupMeanSCMBundle_Interactive(hFig, makePPT);
+end
+
+function GA_exportGroupMeanSCMBundle_Interactive(hFig, makePPT)
+% Export Group Maps result either as an SCM-compatible MAT bundle or as PPT.
+if nargin < 2 || isempty(makePPT), makePPT = false; end
+if nargin < 1 || isempty(hFig) || ~ishghandle(hFig)
+    try, hFig = gcf; catch, hFig = []; end
+end
+if isempty(hFig) || ~ishghandle(hFig)
+    error('Invalid GroupAnalysis figure handle.');
+end
+S = guidata(hFig);
+if isempty(S) || ~isstruct(S)
+    error('Could not read GroupAnalysis GUI state.');
+end
+[D,G] = GA_export_get_map_bundle_local(S);
+startDir = pwd;
+try
+    if isfield(S,'outDir') && ~isempty(S.outDir) && exist(S.outDir,'dir') == 7
+        startDir = S.outDir;
+    elseif isfield(S,'opt') && isfield(S.opt,'startDir') && ~isempty(S.opt.startDir) && exist(S.opt.startDir,'dir') == 7
+        startDir = S.opt.startDir;
+    end
+catch
+end
+if makePPT
+    defName = ['GA_GroupMap_PPT_' datestr(now,'yyyymmdd_HHMMSS') '.pptx'];
+    [f,p] = uiputfile({'*.pptx','PowerPoint (*.pptx)'}, 'Save Group Map PPT', fullfile(startDir,defName));
+    if isequal(f,0), return; end
+    outFile = fullfile(p,f);
+    [~,baseName] = fileparts(outFile);
+    pngFile = fullfile(p,[baseName '_preview.png']);
+    matFile = fullfile(p,[baseName '_SCM_bundle.mat']);
+    GA_export_capture_map_png_local(S,pngFile,D);
+    GA = G; %#ok<NASGU>
+    save(matFile,'G','GA','D','-v7.3');
+    GA_export_write_ppt_local(outFile,pngFile,G,D);
+    fprintf('[saved PPT] %s\n', outFile);
+    fprintf('[saved preview PNG] %s\n', pngFile);
+    fprintf('[saved SCM bundle] %s\n', matFile);
+else
+    defName = ['GA_GroupMean_SCMBundle_' datestr(now,'yyyymmdd_HHMMSS') '.mat'];
+    [f,p] = uiputfile({'*.mat','MAT-file (*.mat)'}, 'Save SCM-compatible Group Map Bundle', fullfile(startDir,defName));
+    if isequal(f,0), return; end
+    outFile = fullfile(p,f);
+    GA = G;
+    underlay2D = G.underlay2D;
+    brainImage = G.brainImage;
+    overlay2D = G.overlay2D;
+    groupMap2D = G.groupMap2D;
+    scmMapAtlas = G.scmMapAtlas;
+    commonUnderlay = G.commonUnderlay;
+    render = G.render;
+    created = G.created;
+    save(outFile,'G','GA','underlay2D','brainImage','overlay2D','groupMap2D','scmMapAtlas','commonUnderlay','render','created','-v7.3');
+    fprintf('[saved SCM bundle] %s\n', outFile);
+end
+end
+
+function [D,G] = GA_export_get_map_bundle_local(S)
+M = [];
+U = [];
+R = struct();
+hasLastMAP = false;
+try
+    hasLastMAP = isfield(S,'lastMAP') && isstruct(S.lastMAP) && ~isempty(fieldnames(S.lastMAP)) && isfield(S.lastMAP,'groupMap') && ~isempty(S.lastMAP.groupMap);
+catch
+    hasLastMAP = false;
+end
+if hasLastMAP
+    R = S.lastMAP;
+    M = double(R.groupMap);
+    if isfield(R,'commonUnderlay') && ~isempty(R.commonUnderlay)
+        U = R.commonUnderlay;
+    end
+elseif isfield(S,'lastMapDisplay') && isstruct(S.lastMapDisplay) && isfield(S.lastMapDisplay,'map') && ~isempty(S.lastMapDisplay.map)
+    M = double(S.lastMapDisplay.map);
+    if isfield(S.lastMapDisplay,'underlay')
+        U = S.lastMapDisplay.underlay;
+    end
+else
+    error('No group map is available. Click "Compute Group Maps" or "Preview Only" first.');
+end
+if ndims(M) > 2, M = squeeze(M); end
+if ndims(M) > 2, M = M(:,:,1); end
+M(~isfinite(M)) = 0;
+if isempty(U), U = zeros(size(M)); end
+U = GA_export_resize2d_local(U,size(M));
+D = struct();
+D.map = M;
+D.underlay = U;
+D.title = 'Group mean map';
+try
+    if hasLastMAP && isfield(R,'n'), D.title = sprintf('Group mean map (n=%d)',R.n); end
+catch
+end
+D.render = struct();
+D.render.caxis = [0 100];
+D.render.modMin = 10;
+D.render.modMax = 20;
+D.render.threshold = 0;
+D.render.colormapName = 'blackbdy_iso';
+D.render.polarity = 'Positive only';
+try, if isfield(S,'mapCaxis'), D.render.caxis = S.mapCaxis; end, catch, end
+try, if isfield(S,'mapModMin'), D.render.modMin = S.mapModMin; end, catch, end
+try, if isfield(S,'mapModMax'), D.render.modMax = S.mapModMax; end, catch, end
+try, if isfield(S,'mapThreshold'), D.render.threshold = S.mapThreshold; end, catch, end
+try, if isfield(S,'mapColormap'), D.render.colormapName = S.mapColormap; end, catch, end
+try, if isfield(S,'mapPolarity'), D.render.polarity = S.mapPolarity; end, catch, end
+G = struct();
+G.created = datestr(now);
+G.source = 'GroupAnalysis group mean SCM bundle';
+G.isGroupMean = true;
+G.note = 'Exported from GroupAnalysis Group Maps tab; compatible with SCM/Video loaders.';
+G.scmMapAtlas = M;
+G.mapAtlas = M;
+G.pscMapAtlas = M;
+G.groupMap2D = M;
+G.overlay2D = M;
+G.map = M;
+G.underlay2D = U;
+G.underlayAtlas2D = U;
+G.commonUnderlay = U;
+G.brainImage = U;
+G.bg = U;
+G.TR = 1;
+G.tMin = 0;
+G.atlasSliceIndex = 1;
+try, if isfield(S,'mapCurrentSlice') && isfinite(S.mapCurrentSlice), G.atlasSliceIndex = round(S.mapCurrentSlice); end, catch, end
+try, if isfield(S,'mapCurrentSlice') && isfinite(S.mapCurrentSlice), G.currentSlice = round(S.mapCurrentSlice); end, catch, end
+try, if isfield(S,'mapCurrentSliceMax') && isfinite(S.mapCurrentSliceMax), G.nSlices = round(S.mapCurrentSliceMax); end, catch, end
+G.pscAtlas4D = reshape(M,[size(M,1) size(M,2) 1 1]);
+G.functional4D = reshape(U(:,:,1),[size(U,1) size(U,2) 1 1]);
+G.render = D.render;
+try, if hasLastMAP && isfield(R,'n'), G.n = R.n; end, catch, end
+try, if hasLastMAP && isfield(R,'subjects'), G.subjects = R.subjects; end, catch, end
+try, if hasLastMAP && isfield(R,'maps'), G.subjectMaps = R.maps; end, catch, end
+end
+
+function GA_export_capture_map_png_local(S,pngFile,D)
+ok = false;
+try
+    if isfield(S,'axMap1') && ishghandle(S.axMap1)
+        fr = getframe(S.axMap1);
+        imwrite(fr.cdata,pngFile);
+        ok = true;
+    end
+catch
+    ok = false;
+end
+if ~ok
+    GA_export_make_preview_png_local(pngFile,D);
+end
+end
+
+function GA_export_make_preview_png_local(pngFile,D)
+f = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off','MenuBar','none','ToolBar','none','NumberTitle','off');
+set(f,'Position',[100 100 1100 800]);
+ax = axes('Parent',f,'Units','normalized','Position',[0.06 0.08 0.84 0.84]);
+U = D.underlay;
+M = D.map;
+if ndims(U) == 3 && size(U,3) == 3
+    image(ax,min(max(double(U),0),1));
+else
+    image(ax,repmat(GA_export_mat2gray_local(U),[1 1 3]));
+end
+axis(ax,'image'); axis(ax,'off'); hold(ax,'on');
+h = imagesc(ax,M);
+cax = [0 100];
+try, cax = D.render.caxis; catch, end
+modMin = cax(1); modMax = cax(2);
+try, modMin = D.render.modMin; modMax = D.render.modMax; catch, end
+A = abs(M);
+if modMax <= modMin, modMax = modMin + eps; end
+alp = (A - modMin) ./ (modMax - modMin);
+alp = min(max(alp,0),1);
+alp(~isfinite(M)) = 0;
+set(h,'AlphaData',GA_alphaModFixFromCData_20260504(h,alp)); try, set(h,'AlphaDataMapping','none'); catch, end
+try, caxis(ax,cax); catch, end
+try, colormap(ax,hot(256)); catch, end
+try, colorbar(ax,'Color',[1 1 1]); catch, end
+try, title(ax,D.title,'Color',[1 1 1],'FontWeight','bold','Interpreter','none'); catch, end
+set(f,'PaperPositionMode','auto');
+print(f,pngFile,'-dpng','-r300');
+close(f);
+end
+
+function GA_export_write_ppt_local(outFile,pngFile,G,D)
+% GA_export_write_ppt_local
+% Robust SCM-style PPT writer for GroupAnalysis.
+% Primary path: mlreportgen.ppt, same safe style as SCM_gui.
+% Fallback path: ActiveX using invoke(), not pres.Slides.Add().
+
+    if nargin < 1 || isempty(outFile)
+        error('No output PPTX file was provided.');
+    end
+    if nargin < 2 || isempty(pngFile) || exist(pngFile,'file') ~= 2
+        error('Slide PNG not found: %s', pngFile);
+    end
+
+    outDir = fileparts(outFile);
+    if ~isempty(outDir) && exist(outDir,'dir') ~= 7
+        mkdir(outDir);
+    end
+
+    if exist(outFile,'file') == 2
+        try
+            delete(outFile);
+        catch
+            error('Could not overwrite existing PPTX file: %s', outFile);
+        end
+    end
+
+    % ---------------------------------------------------------
+    % Preferred method: MATLAB Report Generator PPT API.
+    % This is the same stable style used in SCM_gui.
+    % ---------------------------------------------------------
+    if ~isempty(which('mlreportgen.ppt.Presentation'))
+        try
+            import mlreportgen.ppt.*
+            ppt = Presentation(outFile);
+            open(ppt);
+
+            try
+                slide = add(ppt,'Blank');
+            catch
+                slide = add(ppt);
+            end
+
+            pic = Picture(pngFile);
+            pic.X = '0in';
+            pic.Y = '0in';
+            pic.Width = '13.333in';
+            pic.Height = '7.5in';
+            add(slide,pic);
+
+            close(ppt);
+            pause(0.25);
+
+            if exist(outFile,'file') ~= 2
+                error('PPTX file was not created.');
+            end
+            dd = dir(outFile);
+            if isempty(dd) || dd.bytes <= 0
+                error('PPTX file exists but is empty.');
+            end
+            return;
+        catch MEppt
+            warning('GroupAnalysis PPT export via mlreportgen failed, trying ActiveX fallback: %s', MEppt.message);
+        end
+    end
+
+    % ---------------------------------------------------------
+    % Fallback method: PowerPoint COM / ActiveX.
+    % Important: use invoke(...,'Add',...) instead of .Add().
+    % ---------------------------------------------------------
+    pptApp = [];
+    pres = [];
+    try
+        pptApp = actxserver('PowerPoint.Application');
+        pptApp.Visible = 1;
+
+        pres = invoke(pptApp.Presentations,'Add');
+        slide = invoke(pres.Slides,'Add',1,12);  % 12 = ppLayoutBlank
+
+        slideW = pres.PageSetup.SlideWidth;
+        slideH = pres.PageSetup.SlideHeight;
+
+        invoke(slide.Shapes,'AddPicture',pngFile,0,1,0,0,slideW,slideH);
+
+        invoke(pres,'SaveAs',outFile);
+        invoke(pres,'Close');
+        invoke(pptApp,'Quit');
+
+        pause(0.25);
+        if exist(outFile,'file') ~= 2
+            error('PPTX file was not created by ActiveX.');
+        end
+    catch MEax
+        try, if ~isempty(pres), invoke(pres,'Close'); end, catch, end
+        try, if ~isempty(pptApp), invoke(pptApp,'Quit'); end, catch, end
+        error('PowerPoint export failed: %s', MEax.message);
+    end
+end
+function B = GA_export_resize2d_local(A,sz)
+if numel(sz) > 2, sz = sz(1:2); end
+A = double(A);
+if ndims(A) == 3 && size(A,3) == 3
+    B = zeros(sz(1),sz(2),3);
+    for c = 1:3
+        B(:,:,c) = GA_export_resize2d_local(A(:,:,c),sz);
+    end
+    mx = max(B(:));
+    if isfinite(mx) && mx > 1, B = B ./ 255; end
+    B = min(max(B,0),1);
+    return;
+end
+if ndims(A) > 2
+    A = squeeze(A);
+    if ndims(A) > 2, A = A(:,:,1); end
+end
+if isequal(size(A),sz)
+    B = A;
+    return;
+end
+try
+    B = imresize(A,sz,'bilinear');
+catch
+    [Y,X] = size(A);
+    [xq,yq] = meshgrid(linspace(1,X,sz(2)),linspace(1,Y,sz(1)));
+    B = interp2(double(A),xq,yq,'linear',0);
+end
+end
+
+function G = GA_export_mat2gray_local(A)
+A = double(A);
+if ndims(A) == 3 && size(A,3) == 3
+    A = 0.2989*A(:,:,1) + 0.5870*A(:,:,2) + 0.1140*A(:,:,3);
+end
+A(~isfinite(A)) = 0;
+mn = min(A(:));
+mx = max(A(:));
+if isfinite(mn) && isfinite(mx) && mx > mn
+    G = (A - mn) ./ (mx - mn);
+else
+    G = zeros(size(A));
+end
+G = min(max(G,0),1);
+end
+
+function GA_scm_print_error(ME, whereTxt)
+if nargin < 2 || isempty(whereTxt), whereTxt = 'GroupAnalysis export'; end
+try
+    fprintf(2,'\n================ GROUP ANALYSIS ERROR ================\n');
+    fprintf(2,'%s\n', whereTxt);
+    fprintf(2,'Message: %s\n', ME.message);
+    try
+        fprintf(2,'%s\n', getReport(ME,'extended','hyperlinks','on'));
+    catch
+        for kk = 1:numel(ME.stack)
+            fprintf(2,'  %s | line %d | %s\n',ME.stack(kk).name,ME.stack(kk).line,ME.stack(kk).file);
+        end
+    end
+    fprintf(2,'======================================================\n\n');
+catch
+end
+end
+
+function ga_draw_sig_bar_lower_plot(ax,R,S,fgCol,nGroups)
+% Replace old lower-plot "* p=..." text with a normal bracket between group A and B.
+if nargin < 5 || isempty(nGroups), nGroups = 2; end
+if isempty(ax) || ~ishandle(ax) || nGroups < 2, return; end
+if ~isstruct(R) || ~isfield(R,'stats') || ~isfield(R.stats,'p'), return; end
+p = double(R.stats.p);
+if ~isfinite(p), return; end
+txts = findall(ax,'Type','text');
+for ii = 1:numel(txts)
+    try
+        s = get(txts(ii),'String');
+        if iscell(s), s = strjoin(s,' '); end
+        s = strtrim(char(s));
+        sl = lower(s);
+        if ~isempty(strfind(sl,'p =')) || ~isempty(strfind(sl,'p=')) || strcmp(s,'*') || strcmp(s,'**') || strcmp(s,'***') || strcmpi(s,'n.s.')
+            delete(txts(ii));
+        end
+    catch
+    end
+end
+holdState = ishold(ax);
+hold(ax,'on');
+yl = ylim(ax);
+dy = yl(2) - yl(1);
+if ~isfinite(dy) || dy <= 0, dy = 1; end
+x1 = 1;
+x2 = 2;
+yBar = yl(2) - 0.16*dy;
+tickH = 0.035*dy;
+plot(ax,[x1 x1 x2 x2],[yBar-tickH yBar yBar yBar-tickH],'-','Color',fgCol,'LineWidth',1.8,'HandleVisibility','off');
+stars = ga_sig_stars_local(p);
+text(ax,(x1+x2)/2,yBar+0.060*dy,stars, ...
+    'Color',fgCol,'FontName','Arial','FontSize',15,'FontWeight','bold', ...
+    'HorizontalAlignment','center','VerticalAlignment','middle','HandleVisibility','off');
+showP = true;
+try, if isfield(S,'showPText'), showP = logical(S.showPText); end, catch, end
+if showP
+    text(ax,(x1+x2)/2,yBar+0.028*dy,sprintf('p = %.3g',p), ...
+        'Color',fgCol,'FontName','Arial','FontSize',11,'FontWeight','bold', ...
+        'HorizontalAlignment','center','VerticalAlignment','middle','HandleVisibility','off');
+end
+if ~holdState, hold(ax,'off'); end
+end
+
+function s = ga_sig_stars_local(p)
+if ~isfinite(p)
+    s = 'p=?';
+elseif p < 0.001
+    s = '***';
+elseif p < 0.01
+    s = '**';
+elseif p < 0.05
+    s = '*';
+else
+    s = 'n.s.';
+end
+end
+function G = GA_fixGroupBundleForScmOpen_local(G,D)
+% Make GroupAnalysis SCM bundle readable by SCM_gui.
+% SCM_gui expects G.pscAtlas4D as [Y X T] or [Y X Z T].
+
+    if nargin < 1 || isempty(G) || ~isstruct(G)
+        G = struct();
+    end
+    if nargin < 2
+        D = struct();
+    end
+
+    X = [];
+
+    % Preferred existing field.
+    if isfield(G,'pscAtlas4D') && ~isempty(G.pscAtlas4D) && isnumeric(G.pscAtlas4D)
+        X = G.pscAtlas4D;
+    end
+
+    % Other possible GroupAnalysis field names.
+    if isempty(X)
+        candG = {'pscGroupMeanAtlas4D','meanPSCAtlas4D','groupMeanPSCAtlas4D','groupPSCAtlas4D','PSCAtlas4D','PSC','psc','meanPSC','groupMeanPSC','scmSeriesAtlas','scmMapSignedAtlas','scmMapDisplayAtlas'};
+        for ii = 1:numel(candG)
+            fn = candG{ii};
+            if isfield(G,fn) && ~isempty(G.(fn)) && isnumeric(G.(fn))
+                X = G.(fn);
+                break;
+            end
+        end
+    end
+
+    % Try D/appdata struct if needed.
+    if isempty(X) && isstruct(D)
+        candD = {'pscAtlas4D','PSCAtlas4D','PSC','psc','meanPSC','groupMeanPSC','scmMapSignedAtlas','scmMapDisplayAtlas'};
+        for ii = 1:numel(candD)
+            fn = candD{ii};
+            if isfield(D,fn) && ~isempty(D.(fn)) && isnumeric(D.(fn))
+                X = D.(fn);
+                break;
+            end
+        end
+    end
+
+    if isempty(X)
+        % Last fallback: make tiny dummy image instead of crashing save.
+        X = zeros(2,2,2,'single');
+    end
+
+    X = double(squeeze(X));
+    X(~isfinite(X)) = 0;
+
+    % If first dimension looks like subjects/groups and the next two are image-like,
+    % average the first dimension. This prevents [N Y X T] from reaching SCM_gui.
+    if ndims(X) == 4 && size(X,1) <= 50 && size(X,2) > 16 && size(X,3) > 16
+        X = squeeze(mean(X,1));
+    end
+
+    % If first dimension is group/subject in [N Y X Z T], average it.
+    if ndims(X) == 5 && size(X,1) <= 50 && size(X,2) > 16 && size(X,3) > 16
+        X = squeeze(mean(X,1));
+    end
+
+    % Use underlay/mask dimensions to decide whether 3rd dim is Z or T.
+    nZhint = NaN;
+    if isfield(G,'nZ') && ~isempty(G.nZ) && isnumeric(G.nZ) && isfinite(G.nZ)
+        nZhint = double(G.nZ);
+    elseif isfield(G,'underlayAtlas') && isnumeric(G.underlayAtlas) && ndims(G.underlayAtlas) == 3
+        nZhint = size(G.underlayAtlas,3);
+    end
+
+    nThint = NaN;
+    if isfield(G,'nT') && ~isempty(G.nT) && isnumeric(G.nT) && isfinite(G.nT)
+        nThint = double(G.nT);
+    elseif isfield(G,'tsec') && isnumeric(G.tsec) && numel(G.tsec) > 1
+        nThint = numel(G.tsec);
+    elseif isfield(G,'tmin') && isnumeric(G.tmin) && numel(G.tmin) > 1
+        nThint = numel(G.tmin);
+    end
+
+    if ndims(X) == 2
+        % Static 2D map -> duplicate as 2 timepoints.
+        X = cat(3, X, X);
+    elseif ndims(X) == 3
+        % Ambiguous [Y X K]. If K looks like Z, create [Y X Z 2].
+        K = size(X,3);
+        if isfinite(nZhint) && nZhint > 1 && K == round(nZhint) && ~(isfinite(nThint) && K == round(nThint))
+            X = cat(4, X, X);
+        else
+            % Keep as [Y X T].
+        end
+    elseif ndims(X) == 4
+        % Already [Y X Z T].
+    else
+        % Collapse unsupported dimensions into time.
+        sz = size(X);
+        if numel(sz) >= 2
+            X = reshape(X, sz(1), sz(2), []);
+        else
+            X = reshape(X, 1, 1, []);
+        end
+        if size(X,3) == 1
+            X = cat(3,X,X);
+        end
+    end
+
+    % Guarantee at least 2 timepoints for static maps.
+    if ndims(X) == 3 && size(X,3) == 1
+        X = cat(3,X,X);
+    end
+    if ndims(X) == 4 && size(X,4) == 1
+        X = cat(4,X,X);
+    end
+
+    G.pscAtlas4D = single(X);
+
+    if ndims(G.pscAtlas4D) == 3
+        G.nY = size(G.pscAtlas4D,1);
+        G.nX = size(G.pscAtlas4D,2);
+        G.nZ = 1;
+        G.nT = size(G.pscAtlas4D,3);
+    else
+        G.nY = size(G.pscAtlas4D,1);
+        G.nX = size(G.pscAtlas4D,2);
+        G.nZ = size(G.pscAtlas4D,3);
+        G.nT = size(G.pscAtlas4D,4);
+    end
+
+    if ~isfield(G,'TR') || isempty(G.TR) || ~isnumeric(G.TR) || ~isscalar(G.TR) || ~isfinite(G.TR) || G.TR <= 0
+        G.TR = 1;
+    end
+    G.tsec = (0:G.nT-1) .* double(G.TR);
+    G.tmin = G.tsec ./ 60;
+
+    if ~isfield(G,'kind') || isempty(G.kind)
+        G.kind = 'SCM_GROUP_EXPORT';
+    end
+    G.version = '1.1_GroupAnalysis_fixed_for_SCM_gui';
+end
+
+% BEGIN_GA_SCM_TIMESERIES_EXPORT_HELPERS_V2
+function GA_export_write_scm_timeseries_ppt_local(outFile,G,D,pngFile,hFig)
+% Full SCM-style time-series PPT export for GroupAnalysis.
+% Exports 60 s SCM windows across the complete group mean PSC series.
+
+    if nargin < 2 || isempty(G), G = struct(); end
+    if nargin < 3 || isempty(D), D = struct(); end
+    if nargin < 4, pngFile = ''; end
+    if nargin < 5, hFig = []; end
+
+    outDir0 = fileparts(outFile);
+    if isempty(outDir0), outDir0 = pwd; end
+    if exist(outDir0,'dir') ~= 7, mkdir(outDir0); end
+
+    % Try to find the real full time-series first.
+    [X,srcName] = GA_find_best_timeseries_local(G,D,hFig);
+
+    if isempty(X)
+        error(['Could not find a full PSC time series for GroupAnalysis PPT export.' newline newline ...
+               'The current export contains only one static group-map PNG. ' ...
+               'The PPT exporter needs a numeric array shaped [Y X T] or [Y X Z T].']);
+    end
+
+    X = double(squeeze(X));
+    X(~isfinite(X)) = 0;
+
+    if ndims(X) == 3
+        [nY,nX,nT] = size(X);
+        nZ = 1;
+    elseif ndims(X) == 4
+        [nY,nX,nZ,nT] = size(X);
+    else
+        error('Time-series PSC must be [Y X T] or [Y X Z T]. Found: %s', mat2str(size(X)));
+    end
+
+    if nT < 4
+        error(['Only %d time points were found in the exported group data.' newline newline ...
+               'This means GroupAnalysis is still passing a static SCM map, not the full time series. ' ...
+               'The full time series must be stored in the GroupAnalysis data/bundle before PPT export.'], nT);
+    end
+
+    TR = GA_get_TR_local(G,D);
+    tsec = (0:nT-1) .* TR;
+    totalSec = tsec(end);
+
+    [base0,base1] = GA_get_base_window_local(G,D,totalSec);
+    defMaxMin = '';
+    if totalSec > 0
+        defMaxMin = sprintf('%.2f', totalSec/60);
+    end
+
+    a = inputdlg({ ...
+        'Injection start (sec). Empty if unknown:', ...
+        'Window length (sec) (SCM default = 60):', ...
+        'Max minutes to export (empty = all):', ...
+        'Baseline window start-end sec:'}, ...
+        'Export full Group SCM time series', 1, {'','60',defMaxMin,sprintf('%g-%g',base0,base1)});
+
+    if isempty(a), return; end
+
+    injSec = str2double(strtrim(a{1}));
+    if ~isfinite(injSec), injSec = NaN; end
+
+    winLen = str2double(strtrim(a{2}));
+    if ~isfinite(winLen) || winLen <= 0, winLen = 60; end
+
+    maxMin = str2double(strtrim(a{3}));
+    if ~isfinite(maxMin) || maxMin <= 0, maxMin = NaN; end
+
+    [base0,base1] = GA_parse_range_local(a{4},base0,base1);
+    b0i = max(1,min(nT,round(base0/TR)+1));
+    b1i = max(1,min(nT,round(base1/TR)+1));
+    if b1i < b0i, tmp=b0i; b0i=b1i; b1i=tmp; end
+
+    stamp = datestr(now,'yyyymmdd_HHMMSS');
+    seriesDir = fullfile(outDir0, ['Group_SCM_timeseries_' stamp]);
+    tileDir = fullfile(seriesDir,'tiles_png');
+    slideDir = fullfile(seriesDir,'slide_pngs');
+    if exist(seriesDir,'dir') ~= 7, mkdir(seriesDir); end
+    if exist(tileDir,'dir') ~= 7, mkdir(tileDir); end
+    if exist(slideDir,'dir') ~= 7, mkdir(slideDir); end
+
+    cm = GA_get_export_cmap_local(G);
+    caxV = GA_get_export_caxis_local(G,X);
+    sigma = GA_get_export_sigma_local(G);
+    thr = GA_get_export_threshold_local(G);
+    alphaPct = GA_get_export_alpha_local(G);
+    [alphaModOn,modMin,modMax] = GA_get_export_alpha_mod_local(G);
+    signMode = GA_get_export_signmode_local(G);
+
+    U = GA_get_underlay_local(G,X);
+    M = GA_get_mask_local(G,nY,nX,nZ);
+
+    starts = 0:winLen:(floor(totalSec/winLen)*winLen);
+    if isempty(starts), starts = 0; end
+    if isfinite(maxMin)
+        starts = starts(starts < maxMin*60);
+    end
+    if isempty(starts), starts = 0; end
+
+    slidePNGs = {};
+    nSaved = 0;
+
+    for zSel = 1:nZ
+        if ndims(X) == 3
+            Xz = X;
+        else
+            Xz = squeeze(X(:,:,zSel,:));
+        end
+
+        baseMap = mean(Xz(:,:,b0i:b1i),3);
+        mask2 = M(:,:,min(zSel,size(M,3)));
+        bg2 = GA_get_underlay_slice_local(U,zSel,nY,nX,nZ);
+
+        tilePNG = {};
+        tileLBL = {};
+
+        for wi = 1:numel(starts)
+            s0 = starts(wi);
+            s1 = min(s0 + winLen, totalSec + TR);
+            idx = find(tsec >= s0 & tsec < s1);
+            if isempty(idx), continue; end
+
+            sigMap = mean(Xz(:,:,idx),3);
+            map = sigMap - baseMap;
+            if sigma > 0, map = GA_smooth2_local(map,sigma); end
+            map(~mask2) = 0;
+
+            [dispMap,alpha] = GA_build_overlay_local(map,mask2,thr,alphaPct,alphaModOn,modMin,modMax,signMode);
+
+            phase = '';
+            if isfinite(injSec)
+                if s1 <= injSec
+                    phase = 'Baseline';
+                elseif s0 < injSec && s1 > injSec
+                    phase = 'Injection';
+                else
+                    piMin = floor((s0-injSec)/winLen) + 1;
+                    if piMin < 1, piMin = 1; end
+                    phase = sprintf('%d min PI',piMin);
+                end
+            end
+
+            if isempty(phase)
+                lbl = sprintf('z=%d/%d | %.0f-%.0fs',zSel,nZ,s0,s1);
+            else
+                lbl = sprintf('z=%d/%d | %.0f-%.0fs | %s',zSel,nZ,s0,s1,phase);
+            end
+
+            outPng = fullfile(tileDir,sprintf('GroupSCM_z%02d_w%03d_%0.0f_%0.0fs.png',zSel,wi,s0,s1));
+            GA_render_scm_tile_local(outPng,bg2,dispMap,alpha,cm,caxV,lbl,200);
+
+            if exist(outPng,'file') == 2
+                tilePNG{end+1} = outPng; %#ok<AGROW>
+                tileLBL{end+1} = lbl; %#ok<AGROW>
+                nSaved = nSaved + 1;
+            end
+        end
+
+        if isempty(tilePNG), continue; end
+
+        perSlide = 6;
+        nSlides = ceil(numel(tilePNG)/perSlide);
+        for si = 1:nSlides
+            i0 = (si-1)*perSlide + 1;
+            i1 = min(si*perSlide,numel(tilePNG));
+            idx = i0:i1;
+
+            ttl = GA_get_export_title_local(G,srcName,zSel,nZ);
+            footer = sprintf('TR=%.4g s | Base=%g-%g s | Win=%g s | Thr=%g | CAX=[%g %g] | Alpha=%g%% | AlphaMod=%d [%g..%g]', ...
+                TR,base0,base1,winLen,thr,caxV(1),caxV(2),alphaPct,double(alphaModOn),modMin,modMax);
+
+            outSlide = fullfile(slideDir,sprintf('slide_z%02d_%02d.png',zSel,si));
+            GA_render_scm_montage_slide_local(outSlide,tilePNG(idx),tileLBL(idx),cm,caxV,ttl,footer,200);
+            slidePNGs{end+1} = outSlide; %#ok<AGROW>
+        end
+    end
+
+    if isempty(slidePNGs)
+        error('No SCM time windows were rendered.');
+    end
+
+    GA_write_ppt_from_slide_pngs_local(outFile,slidePNGs);
+
+    fprintf('\n[GroupAnalysis SCM PPT] Full time-series PPT saved:\n%s\n', outFile);
+    fprintf('[GroupAnalysis SCM PPT] Tile folder:\n%s\n', tileDir);
+    fprintf('[GroupAnalysis SCM PPT] Rendered %d SCM window tiles.\n\n', nSaved);
+end
+
+function [bestX,bestSrc] = GA_find_best_timeseries_local(G,D,hFig)
+    bestX = [];
+    bestSrc = '';
+    bestScore = -Inf;
+
+    roots = {};
+    names = {};
+    roots{end+1} = G; names{end+1} = 'G';
+    roots{end+1} = D; names{end+1} = 'D';
+
+    try
+        if ~isempty(hFig) && ishghandle(hFig)
+            GD = guidata(hFig);
+            if ~isempty(GD), roots{end+1} = GD; names{end+1} = 'guidata'; end
+            AD = getappdata(hFig);
+            if ~isempty(AD), roots{end+1} = AD; names{end+1} = 'appdata'; end
+        end
+    catch
+    end
+
+    for rr = 1:numel(roots)
+        scan_value(roots{rr},names{rr},0);
+    end
+
+    function scan_value(v,path,depth)
+        if depth > 3, return; end
+
+        if isnumeric(v) || islogical(v)
+            [Xcand,nT,ok] = GA_normalize_timeseries_candidate_local(v);
+            if ok && nT >= 4
+                sc = GA_score_timeseries_candidate_local(path,Xcand,nT);
+                if sc > bestScore
+                    bestScore = sc;
+                    bestX = Xcand;
+                    bestSrc = path;
+                end
+            end
+            return;
+        end
+
+        if isstruct(v)
+            fn = fieldnames(v);
+            for ii = 1:numel(fn)
+                try
+                    scan_value(v.(fn{ii}),[path '.' fn{ii}],depth+1);
+                catch
+                end
+            end
+            return;
+        end
+
+        if iscell(v) && numel(v) <= 50
+            for ii = 1:numel(v)
+                try
+                    scan_value(v{ii},sprintf('%s{%d}',path,ii),depth+1);
+                catch
+                end
+            end
+        end
+    end
+end
+
+function [X,nT,ok] = GA_normalize_timeseries_candidate_local(A)
+    X = [];
+    nT = 0;
+    ok = false;
+
+    try
+        A = squeeze(double(A));
+        A(~isfinite(A)) = 0;
+        sz = size(A);
+        nd = ndims(A);
+
+        if nd == 3
+            if sz(1) > 16 && sz(2) > 16 && sz(3) >= 4
+                X = A;
+                nT = sz(3);
+                ok = true;
+            end
+            return;
+        end
+
+        if nd == 4
+            % [Y X Z T]
+            if sz(1) > 16 && sz(2) > 16 && sz(4) >= 4
+                X = A;
+                nT = sz(4);
+                ok = true;
+                return;
+            end
+
+            % [N Y X T] animals/groups first
+            if sz(1) <= 50 && sz(2) > 16 && sz(3) > 16 && sz(4) >= 4
+                X = squeeze(mean(A,1));
+                nT = size(X,3);
+                ok = true;
+                return;
+            end
+
+            % [Y X T N] animals/groups last
+            if sz(1) > 16 && sz(2) > 16 && sz(3) >= 4 && sz(4) <= 50
+                X = squeeze(mean(A,4));
+                nT = size(X,3);
+                ok = true;
+                return;
+            end
+        end
+
+        if nd == 5
+            % [N Y X Z T]
+            if sz(1) <= 50 && sz(2) > 16 && sz(3) > 16 && sz(5) >= 4
+                X = squeeze(mean(A,1));
+                nT = size(X,4);
+                ok = true;
+                return;
+            end
+
+            % [Y X Z T N]
+            if sz(1) > 16 && sz(2) > 16 && sz(4) >= 4 && sz(5) <= 50
+                X = squeeze(mean(A,5));
+                nT = size(X,4);
+                ok = true;
+                return;
+            end
+        end
+    catch
+        X = [];
+        nT = 0;
+        ok = false;
+    end
+end
+
+function sc = GA_score_timeseries_candidate_local(path,X,nT)
+    p = lower(path);
+    sc = 0;
+    if ~isempty(strfind(p,'psc')), sc = sc + 200; end
+    if ~isempty(strfind(p,'atlas')), sc = sc + 60; end
+    if ~isempty(strfind(p,'group')), sc = sc + 40; end
+    if ~isempty(strfind(p,'mean')), sc = sc + 35; end
+    if ~isempty(strfind(p,'series')), sc = sc + 35; end
+    if ~isempty(strfind(p,'time')), sc = sc + 25; end
+    if ~isempty(strfind(p,'4d')), sc = sc + 20; end
+    if ~isempty(strfind(p,'map')), sc = sc - 80; end
+    if ~isempty(strfind(p,'underlay')), sc = sc - 300; end
+    if ~isempty(strfind(p,'mask')), sc = sc - 300; end
+    if ~isempty(strfind(p,'alpha')), sc = sc - 300; end
+    if ~isempty(strfind(p,'display')), sc = sc - 120; end
+    if ndims(X) == 4, sc = sc + 30; end
+    sc = sc + min(nT,1000)/10;
+end
+
+function TR = GA_get_TR_local(G,D)
+    TR = NaN;
+    try, if isfield(G,'TR') && isfinite(G.TR) && G.TR > 0, TR = double(G.TR); end, catch, end
+    try, if ~isfinite(TR) && isfield(D,'TR') && isfinite(D.TR) && D.TR > 0, TR = double(D.TR); end, catch, end
+    try, if ~isfinite(TR) && isfield(G,'tsec') && numel(G.tsec) > 1, TR = median(diff(double(G.tsec(:)))); end, catch, end
+    if ~isfinite(TR) || TR <= 0, TR = 1; end
+end
+
+function [b0,b1] = GA_get_base_window_local(G,D,totalSec)
+    b0 = 30; b1 = 240;
+    try, if isfield(G,'baseWindowSec') && numel(G.baseWindowSec) >= 2, b0 = G.baseWindowSec(1); b1 = G.baseWindowSec(2); end, catch, end
+    try, if isfield(G,'baseWindowStr') && ~isempty(G.baseWindowStr), [b0,b1] = GA_parse_range_local(G.baseWindowStr,b0,b1); end, catch, end
+    if b0 >= totalSec || b1 > totalSec || b1 <= b0
+        b0 = 0;
+        b1 = max(1,min(totalSec,0.20*totalSec));
+    end
+end
+
+function [a,b] = GA_parse_range_local(s,da,db)
+    a = da; b = db;
+    try
+        s = char(s);
+        s = strrep(s,char(8211),'-');
+        s = strrep(s,char(8212),'-');
+        s = strrep(s,',',' ');
+        v = sscanf(s,'%f-%f');
+        if numel(v) ~= 2, v = sscanf(s,'%f %f'); end
+        if numel(v) >= 2 && all(isfinite(v(1:2)))
+            a = v(1); b = v(2);
+        end
+    catch
+    end
+    if b < a, tmp=a; a=b; b=tmp; end
+end
+
+function cm = GA_get_export_cmap_local(G)
+    cm = [];
+    try, if isfield(G,'display') && isfield(G.display,'cmapMatrix') && size(G.display.cmapMatrix,2) == 3, cm = double(G.display.cmapMatrix); end, catch, end
+    if isempty(cm)
+        try
+            if isfield(G,'display') && isfield(G.display,'colormapName')
+                nm = lower(char(G.display.colormapName));
+                if ~isempty(strfind(nm,'winter')), cm = winter(256);
+                elseif ~isempty(strfind(nm,'gray')), cm = gray(256);
+                elseif ~isempty(strfind(nm,'jet')), cm = jet(256);
+                else, cm = hot(256); end
+            end
+        catch
+        end
+    end
+    if isempty(cm), cm = hot(256); end
+end
+
+function caxV = GA_get_export_caxis_local(G,X)
+    caxV = [0 100];
+    try, if isfield(G,'display') && isfield(G.display,'caxis') && numel(G.display.caxis) >= 2, caxV = double(G.display.caxis(1:2)); end, catch, end
+    if ~all(isfinite(caxV)) || caxV(2) <= caxV(1)
+        v = abs(double(X(:))); v = v(isfinite(v));
+        if isempty(v), caxV = [0 1]; else, caxV = [0 max(1,GA_prctile_local(v,99))]; end
+    end
+end
+
+function sigma = GA_get_export_sigma_local(G)
+    sigma = 1;
+    try, if isfield(G,'sigma') && isfinite(G.sigma), sigma = double(G.sigma); end, catch, end
+end
+
+function thr = GA_get_export_threshold_local(G)
+    thr = 0;
+    try, if isfield(G,'display') && isfield(G.display,'threshold') && isfinite(G.display.threshold), thr = double(G.display.threshold); end, catch, end
+end
+
+function a = GA_get_export_alpha_local(G)
+    a = 100;
+    try, if isfield(G,'display') && isfield(G.display,'alphaPercent') && isfinite(G.display.alphaPercent), a = double(G.display.alphaPercent); end, catch, end
+    a = max(0,min(100,a));
+end
+
+function [tf,lo,hi] = GA_get_export_alpha_mod_local(G)
+    tf = true; lo = 10; hi = 20;
+    try, if isfield(G,'display') && isfield(G.display,'alphaModOn'), tf = logical(G.display.alphaModOn); end, catch, end
+    try, if isfield(G,'display') && isfield(G.display,'modMin') && isfinite(G.display.modMin), lo = double(G.display.modMin); end, catch, end
+    try, if isfield(G,'display') && isfield(G.display,'modMax') && isfinite(G.display.modMax), hi = double(G.display.modMax); end, catch, end
+    if hi < lo, tmp=lo; lo=hi; hi=tmp; end
+end
+
+function sm = GA_get_export_signmode_local(G)
+    sm = 1;
+    try, if isfield(G,'display') && isfield(G.display,'signMode') && isfinite(G.display.signMode), sm = round(double(G.display.signMode)); end, catch, end
+    sm = max(1,min(3,sm));
+end
+
+function U = GA_get_underlay_local(G,X)
+    U = [];
+    try, if isfield(G,'underlayAtlas') && ~isempty(G.underlayAtlas), U = double(G.underlayAtlas); end, catch, end
+    if isempty(U)
+        if ndims(X) == 3, U = std(double(X),0,3); else, U = std(double(X),0,4); end
+    end
+    U = squeeze(double(U)); U(~isfinite(U)) = 0;
+end
+
+function M = GA_get_mask_local(G,nY,nX,nZ)
+    M = true(nY,nX,nZ);
+    try
+        if isfield(G,'maskAtlas') && ~isempty(G.maskAtlas)
+            M0 = logical(G.maskAtlas);
+        elseif isfield(G,'mask2DCurrentSlice') && ~isempty(G.mask2DCurrentSlice)
+            M0 = logical(G.mask2DCurrentSlice);
+        else
+            return;
+        end
+        if ndims(M0) == 2
+            M(:,:,1) = GA_resize_mask_local(M0,nY,nX);
+            for z=2:nZ, M(:,:,z) = M(:,:,1); end
+        elseif ndims(M0) == 3
+            for z=1:nZ
+                zz = min(z,size(M0,3));
+                M(:,:,z) = GA_resize_mask_local(M0(:,:,zz),nY,nX);
+            end
+        end
+    catch
+        M = true(nY,nX,nZ);
+    end
+end
+
+function M2 = GA_resize_mask_local(M0,nY,nX)
+    if size(M0,1) == nY && size(M0,2) == nX
+        M2 = logical(M0); return;
+    end
+    try, M2 = imresize(double(M0),[nY nX],'nearest') > 0.5;
+    catch, M2 = true(nY,nX); end
+end
+
+function bg2 = GA_get_underlay_slice_local(U,z,nY,nX,nZ)
+    U = squeeze(U);
+    if ndims(U) == 2
+        bg2 = U;
+    elseif ndims(U) == 3
+        if size(U,3) == 3 && nZ == 1
+            bg2 = U;
+        else
+            bg2 = U(:,:,min(z,size(U,3)));
+        end
+    elseif ndims(U) == 4
+        if size(U,3) == 3
+            bg2 = squeeze(U(:,:,:,min(z,size(U,4))));
+        else
+            tmp = mean(U,4); bg2 = tmp(:,:,min(z,size(tmp,3)));
+        end
+    else
+        bg2 = zeros(nY,nX);
+    end
+    bg2 = GA_fit_image_local(bg2,nY,nX);
+end
+
+function I = GA_fit_image_local(I,nY,nX)
+    I = squeeze(double(I));
+    if ndims(I) == 2
+        if size(I,1) ~= nY || size(I,2) ~= nX
+            try, I = imresize(I,[nY nX],'bilinear'); catch, I = zeros(nY,nX); end
+        end
+    elseif ndims(I) == 3 && size(I,3) == 3
+        if size(I,1) ~= nY || size(I,2) ~= nX
+            try, I = imresize(I,[nY nX],'bilinear'); catch, I = zeros(nY,nX,3); end
+        end
+    else
+        I = I(:,:,1);
+        I = GA_fit_image_local(I,nY,nX);
+    end
+end
+
+function [dispMap,alpha] = GA_build_overlay_local(rawMap,mask2,thr,alphaPct,alphaModOn,modMin,modMax,signMode)
+% SCM-style overlay and alpha builder for GroupAnalysis exports.
+rawMap = double(rawMap);
+rawMap(~isfinite(rawMap)) = 0;
+
+if nargin < 2 || isempty(mask2)
+    mask2 = true(size(rawMap));
+end
+mask2 = logical(mask2);
+if ~isequal(size(mask2),size(rawMap))
+    try
+        mask2 = imresize(double(mask2),size(rawMap),'nearest') > 0.5;
+    catch
+        tmp = false(size(rawMap));
+        yy = min(size(tmp,1),size(mask2,1));
+        xx = min(size(tmp,2),size(mask2,2));
+        tmp(1:yy,1:xx) = mask2(1:yy,1:xx);
+        mask2 = tmp;
+    end
+end
+
+if nargin < 3 || isempty(thr) || ~isfinite(thr), thr = 0; end
+if nargin < 4 || isempty(alphaPct) || ~isfinite(alphaPct), alphaPct = 100; end
+if nargin < 5 || isempty(alphaModOn), alphaModOn = true; end
+if nargin < 6 || isempty(modMin) || ~isfinite(modMin), modMin = 10; end
+if nargin < 7 || isempty(modMax) || ~isfinite(modMax), modMax = 20; end
+if nargin < 8 || isempty(signMode) || ~isfinite(signMode), signMode = 1; end
+
+thr = abs(double(thr));
+alphaPct = max(0,min(100,double(alphaPct)));
+modMin = double(modMin);
+modMax = double(modMax);
+if modMax < modMin
+    tmp = modMin; modMin = modMax; modMax = tmp;
+end
+if modMax <= modMin
+    modMax = modMin + eps;
+end
+
+signMode = round(double(signMode));
+switch signMode
+    case 2
+        showMask = rawMap < 0;
+        dispMap = abs(min(rawMap,0));
+    case 3
+        showMask = rawMap ~= 0;
+        dispMap = rawMap;
+    otherwise
+        showMask = rawMap > 0;
+        dispMap = rawMap;
+end
+
+mag = abs(rawMap);
+showMask = showMask & mask2 & isfinite(rawMap) & (mag >= thr);
+
+if ~logical(alphaModOn)
+    alpha = (alphaPct/100) .* double(showMask);
+else
+    effLo = max(modMin,thr);
+    effHi = modMax;
+    if effHi <= effLo, effHi = effLo + eps; end
+    ramp = (mag - effLo) ./ max(eps,(effHi - effLo));
+    ramp(~isfinite(ramp)) = 0;
+    ramp = min(max(ramp,0),1);
+    ramp(mag <= effLo) = 0;
+    alpha = (alphaPct/100) .* ramp .* double(showMask);
+end
+
+alpha(~isfinite(alpha)) = 0;
+alpha = min(max(alpha,0),1);
+alpha(abs(rawMap) <= max(modMin,thr)) = 0;
+dispMap(~isfinite(dispMap)) = 0;
+dispMap(alpha <= 0) = 0;
+end
+
+function GA_render_scm_tile_local(outPng,bg2,map,alpha,cm,caxV,lbl,dpiVal)
+    figT = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off','Units','pixels','Position',[80 80 1000 850]);
+    ax = axes('Parent',figT,'Units','normalized','Position',[0.02 0.02 0.96 0.96]);
+    axis(ax,'image'); axis(ax,'off'); set(ax,'YDir','reverse'); hold(ax,'on');
+    image(ax,GA_underlay_rgb_local(bg2));
+    h = imagesc(ax,map); set(h,'AlphaData',GA_alphaModFixFromCData_20260504(h,alpha)); try, set(h,'AlphaDataMapping','none'); catch, end
+    colormap(ax,cm); caxis(ax,caxV);
+    text(ax,0.02,0.98,lbl,'Units','normalized','Color','w','FontName','Arial','FontWeight','bold','FontSize',16, ...
+        'HorizontalAlignment','left','VerticalAlignment','top','Interpreter','none','BackgroundColor',[0 0 0],'Margin',2);
+    set(figT,'PaperPositionMode','auto');
+    print(figT,outPng,'-dpng',sprintf('-r%d',dpiVal),'-opengl');
+    close(figT);
+end
+
+function rgb = GA_underlay_rgb_local(U)
+    U = squeeze(double(U));
+    if ndims(U) == 3 && size(U,3) == 3
+        rgb = U;
+        if max(rgb(:)) > 1, rgb = rgb ./ 255; end
+        rgb = min(max(rgb,0),1);
+        return;
+    end
+    U(~isfinite(U)) = 0;
+    lo = GA_prctile_local(U(:),0.5); hi = GA_prctile_local(U(:),99.5);
+    if ~isfinite(lo) || ~isfinite(hi) || hi <= lo
+        lo = min(U(:)); hi = max(U(:));
+    end
+    if hi <= lo, U01 = zeros(size(U)); else, U01 = min(max((U-lo)./(hi-lo),0),1); end
+    rgb = repmat(U01,[1 1 3]);
+end
+
+function GA_render_scm_montage_slide_local(outFile,pngList,lblList,cm,caxV,titleStr,footerStr,dpiVal)
+    figS = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off');
+    set(figS,'Units','inches','Position',[0.5 0.5 13.333 7.5]);
+    set(figS,'PaperPositionMode','auto');
+
+    annotation(figS,'textbox',[0.02 0.89 0.96 0.09],'String',titleStr,'Color','w','EdgeColor','none', ...
+        'FontName','Arial','FontSize',15,'FontWeight','bold','HorizontalAlignment','center','Interpreter','none');
+    annotation(figS,'textbox',[0.25 0.01 0.73 0.06],'String',footerStr,'Color','w','EdgeColor','none', ...
+        'FontName','Arial','FontSize',11,'FontWeight','bold','HorizontalAlignment','right','Interpreter','none');
+
+    axCB = axes('Parent',figS,'Position',[0.01 0.14 0.001 0.72],'Visible','off');
+    imagesc(axCB,[0 1;0 1]); colormap(axCB,cm); caxis(axCB,caxV);
+    cb = colorbar(axCB,'Position',[0.018 0.14 0.015 0.72]);
+    cb.Color = 'w'; cb.FontName = 'Arial'; cb.FontSize = 9;
+    cb.Label.String = 'Signal change (%)'; cb.Label.Color = 'w';
+
+    x0 = 0.085; x1 = 0.98; yBot = 0.11; yTop = 0.86;
+    rowGap = 0.06; colGap = 0.02;
+    cellH = (yTop-yBot-rowGap)/2;
+    cellW = (x1-x0-2*colGap)/3;
+
+    for k = 1:min(6,numel(pngList))
+        if k <= 3
+            cc = k-1; y = yBot + cellH + rowGap;
+        else
+            cc = k-4; y = yBot;
+        end
+        x = x0 + cc*(cellW+colGap);
+        img = imread(pngList{k});
+        axI = axes('Parent',figS,'Position',[x y cellW cellH]);
+        image(axI,img); axis(axI,'image'); axis(axI,'off');
+        annotation(figS,'textbox',[x y+cellH+0.003 cellW 0.035],'String',lblList{k},'Color','w','EdgeColor','none', ...
+            'FontName','Arial','FontSize',11,'FontWeight','bold','HorizontalAlignment','center','Interpreter','none');
+    end
+
+    print(figS,outFile,'-dpng',sprintf('-r%d',dpiVal),'-opengl');
+    close(figS);
+end
+
+function GA_write_ppt_from_slide_pngs_local(outFile,slidePNGs)
+    if exist(outFile,'file') == 2
+        try, delete(outFile); catch, error('Could not overwrite PPTX: %s',outFile); end
+    end
+
+    if ~isempty(which('mlreportgen.ppt.Presentation'))
+        try
+            import mlreportgen.ppt.*
+            ppt = Presentation(outFile); open(ppt);
+            for i=1:numel(slidePNGs)
+                try, slide = add(ppt,'Blank'); catch, slide = add(ppt); end
+                pic = Picture(slidePNGs{i});
+                pic.X = '0in'; pic.Y = '0in'; pic.Width = '13.333in'; pic.Height = '7.5in';
+                add(slide,pic);
+            end
+            close(ppt); pause(0.25);
+            if exist(outFile,'file') == 2, return; end
+        catch ME
+            warning('mlreportgen PPT failed, trying ActiveX: %s',ME.message);
+        end
+    end
+
+    pptApp = []; pres = [];
+    try
+        pptApp = actxserver('PowerPoint.Application'); pptApp.Visible = 1;
+        pres = invoke(pptApp.Presentations,'Add');
+        for i=1:numel(slidePNGs)
+            slide = invoke(pres.Slides,'Add',i,12);
+            sw = pres.PageSetup.SlideWidth; sh = pres.PageSetup.SlideHeight;
+            invoke(slide.Shapes,'AddPicture',slidePNGs{i},0,1,0,0,sw,sh);
+        end
+        invoke(pres,'SaveAs',outFile);
+        invoke(pres,'Close'); invoke(pptApp,'Quit');
+    catch ME
+        try, if ~isempty(pres), invoke(pres,'Close'); end, catch, end
+        try, if ~isempty(pptApp), invoke(pptApp,'Quit'); end, catch, end
+        error('PowerPoint export failed: %s',ME.message);
+    end
+end
+
+function titleStr = GA_get_export_title_local(G,srcName,zSel,nZ)
+    titleStr = 'GroupAnalysis SCM time series';
+    try, if isfield(G,'fileLabel') && ~isempty(G.fileLabel), titleStr = char(G.fileLabel); end, catch, end
+    if isempty(titleStr), titleStr = 'GroupAnalysis SCM time series'; end
+    titleStr = sprintf('%s | z=%d/%d | source: %s',titleStr,zSel,nZ,srcName);
+end
+
+function out = GA_smooth2_local(in,sigma)
+    try, out = imgaussfilt(in,sigma); return; catch, end
+    if sigma <= 0, out = in; return; end
+    r = max(1,ceil(3*sigma)); x = -r:r; g = exp(-(x.^2)/(2*sigma^2)); g = g/sum(g);
+    out = conv2(conv2(in,g,'same'),g','same');
+end
+
+function q = GA_prctile_local(v,p)
+    v = double(v(:)); v = v(isfinite(v));
+    if isempty(v), q = 0; return; end
+    try, q = prctile(v,p); return; catch, end
+    v = sort(v); n = numel(v);
+    k = 1 + (n-1)*(p/100); k1 = floor(k); k2 = ceil(k);
+    k1 = max(1,min(n,k1)); k2 = max(1,min(n,k2));
+    if k1 == k2, q = v(k1); else, q = v(k1) + (k-k1)*(v(k2)-v(k1)); end
+end
+% END_GA_SCM_TIMESERIES_EXPORT_HELPERS_V2
+
+
+function [rows,bundles] = GA_collectSCMBundlesFromRows_PATCH_V4(S,cand)
+rows = []; bundles = {}; seen = {};
+for ii = 1:numel(cand)
+    r = cand(ii);
+    useRow = true;
+    try, useRow = GA_toLogical_PATCH_V4(S.subj{r,1}); catch, end
+    if ~useRow, continue; end
+    bf = '';
+    try, bf = strtrim(char(S.subj{r,8})); catch, end
+    if isempty(bf) || exist(bf,'file') ~= 2, continue; end
+    if ~GA_isLikelySCMBundle_PATCH_V4(bf), continue; end
+    key = lower(strrep(bf,'/','\'));
+    if any(strcmp(seen,key)), continue; end
+    seen{end+1} = key; %#ok<AGROW>
+    rows(end+1) = r; %#ok<AGROW>
+    bundles{end+1} = bf; %#ok<AGROW>
+end
+end
+
+function tf = GA_isLikelySCMBundle_PATCH_V4(bf)
+tf = false;
+try
+    W = whos('-file',bf); names = {W.name};
+    if any(strcmp(names,'G'))
+        tf = true; return;
+    end
+catch
+end
+try
+    [~,nm,~] = fileparts(bf); nm = lower(nm);
+    tf = ~isempty(strfind(nm,'scm_groupexport')) || ~isempty(strfind(nm,'scm_group'));
+catch
+end
+end
+
+function G = GA_loadSCMBundle_PATCH_V4(bf)
+L = load(bf); G = [];
+if isfield(L,'G') && isstruct(L.G)
+    G = L.G;
+else
+    fn = fieldnames(L);
+    for k = 1:numel(fn)
+        v = L.(fn{k});
+        if isstruct(v) && (isfield(v,'pscAtlas4D') || isfield(v,'pscAtlasD') || isfield(v,'psc4D') || isfield(v,'PSC'))
+            G = v; break;
+        end
+    end
+end
+if isempty(G) || ~isstruct(G), error('MAT file does not contain an SCM bundle struct G.'); end
+G = GA_normalizeBundlePSC_PATCH_V4(G,bf);
+end
+
+function G = GA_normalizeBundlePSC_PATCH_V4(G,bf)
+if isfield(G,'pscAtlas4D') && ~isempty(G.pscAtlas4D)
+    X = G.pscAtlas4D;
+else
+    X = [];
+    flds = {'pscAtlasD','pscAtlas3D','psc4D','PSC4D','PSC','functionalPSC','Ipsc'};
+    for k = 1:numel(flds)
+        f = flds{k};
+        if isfield(G,f) && ~isempty(G.(f)) && isnumeric(G.(f))
+            X = G.(f); break;
+        end
+    end
+end
+if isempty(X)
+    error(['Could not find a full PSC time series in this bundle.' char(10) ...
+           'Expected G.pscAtlas4D [Y X T] or [Y X Z T].' char(10) ...
+           'File: ' bf]);
+end
+X = double(X);
+X(~isfinite(X)) = 0;
+while ndims(X) > 4
+    X = squeeze(X);
+end
+if ndims(X) == 4 && size(X,3) == 1
+    X = squeeze(X);
+end
+if ndims(X) == 2
+    error(['This file contains only a static 2D map, not a full SCM time series.' char(10) ...
+           'Open/export the individual SCM_GroupExport bundle from SCM_gui instead.' char(10) ...
+           'File: ' bf]);
+end
+if ndims(X) == 3
+    if size(X,3) < 2, error('3D PSC array has only one frame.'); end
+elseif ndims(X) == 4
+    if size(X,4) < 2, error('4D PSC array has only one time frame.'); end
+else
+    error('PSC array must be [Y X T] or [Y X Z T].');
+end
+G.pscAtlas4D = X;
+if ~isfield(G,'TR') || isempty(G.TR) || ~isfinite(double(G.TR(1)))
+    try
+        if isfield(G,'tsec') && numel(G.tsec) >= 2
+            G.TR = median(diff(double(G.tsec(:))));
+        elseif isfield(G,'tmin') && numel(G.tmin) >= 2
+            G.TR = 60 * median(diff(double(G.tmin(:))));
+        end
+    catch
+    end
+end
+end
+
+function [TR,nT] = GA_getTRnT_PATCH_V4(G)
+TR = NaN; nT = NaN;
+try, TR = double(G.TR(1)); catch, end
+X = G.pscAtlas4D;
+if ndims(X) == 3, nT = size(X,3); elseif ndims(X) == 4, nT = size(X,4); end
+if (~isfinite(TR) || TR <= 0) && isfield(G,'tsec') && numel(G.tsec) >= 2
+    TR = median(diff(double(G.tsec(:))));
+end
+if (~isfinite(TR) || TR <= 0) && isfield(G,'tmin') && numel(G.tmin) >= 2
+    TR = 60 * median(diff(double(G.tmin(:))));
+end
+end
+
+function M = GA_computeSCMWindowMap_PATCH_V4(G,zSel,baseWin,sigWin,TR)
+X = double(G.pscAtlas4D);
+if ndims(X) == 3
+    P = X;
+else
+    zSel = max(1,min(size(X,3),round(zSel)));
+    P = squeeze(X(:,:,zSel,:));
+end
+T = size(P,3);
+b0 = max(1,min(T,floor(baseWin(1)/TR)+1));
+b1 = max(1,min(T,floor(baseWin(2)/TR)+1));
+s0 = max(1,min(T,floor(sigWin(1)/TR)+1));
+s1 = max(1,min(T,floor(sigWin(2)/TR)+1));
+if b1 < b0, tmp=b0; b0=b1; b1=tmp; end
+if s1 < s0, tmp=s0; s0=s1; s1=tmp; end
+baseMap = mean(P(:,:,b0:b1),3);
+sigMap  = mean(P(:,:,s0:s1),3);
+M = sigMap - baseMap;
+sigma = 1;
+try, if isfield(G,'sigma') && ~isempty(G.sigma) && isfinite(G.sigma(1)), sigma = double(G.sigma(1)); end, catch, end
+if sigma > 0, M = GA_smooth2_PATCH_V4(M,sigma); end
+M(~isfinite(M)) = 0;
+end
+
+function U = GA_getUnderlayForBundle_PATCH_V4(G,zSel,sz)
+U = [];
+flds = {'underlayAtlas','underlay2D','underlayAtlas2D','underlayAtlas','brainImage','bg','commonUnderlay'};
+for k = 1:numel(flds)
+    f = flds{k};
+    if isfield(G,f) && ~isempty(G.(f)) && isnumeric(G.(f))
+        U = G.(f); break;
+    end
+end
+if isempty(U), U = zeros(sz(1),sz(2)); end
+U = squeeze(double(U));
+if ndims(U) == 3
+    if size(U,3) == 3 && ~(isfield(G,'nZ') && G.nZ == 3)
+        % RGB image, keep as RGB.
+    else
+        zSel = max(1,min(size(U,3),round(zSel)));
+        U = U(:,:,zSel);
+    end
+elseif ndims(U) == 4
+    if size(U,3) == 3
+        zSel = max(1,min(size(U,4),round(zSel)));
+        U = squeeze(U(:,:,:,zSel));
+    else
+        zSel = max(1,min(size(U,3),round(zSel)));
+        U = squeeze(U(:,:,zSel,1));
+    end
+end
+U = GA_resizeLike_PATCH_V4(U,sz);
+end
+
+function mask2 = GA_getMaskForBundle_PATCH_V4(G,zSel,sz)
+mask2 = true(sz(1),sz(2));
+M = [];
+if isfield(G,'maskAtlas') && ~isempty(G.maskAtlas), M = G.maskAtlas;
+elseif isfield(G,'mask2DCurrentSlice') && ~isempty(G.mask2DCurrentSlice), M = G.mask2DCurrentSlice;
+end
+if isempty(M), return; end
+M = logical(M);
+if ndims(M) == 3
+    zSel = max(1,min(size(M,3),round(zSel)));
+    M = M(:,:,zSel);
+elseif ndims(M) > 3
+    M = squeeze(M);
+    if ndims(M) > 2, M = M(:,:,1); end
+end
+mask2 = GA_resizeMask_PATCH_V4(M,sz);
+try
+    if isfield(G,'maskIsInclude') && ~isempty(G.maskIsInclude) && ~logical(G.maskIsInclude)
+        mask2 = ~mask2;
+    end
+catch
+end
+end
+
+function R = GA_displayStruct_PATCH_V4(S,G)
+R.threshold = GA_numField_PATCH_V4(S,'mapThreshold',0);
+R.caxis = GA_vecField_PATCH_V4(S,'mapCaxis',[0 100]);
+R.alphaPercent = 100;
+R.alphaModOn = GA_logField_PATCH_V4(S,'mapAlphaModOn',true);
+R.modMin = GA_numField_PATCH_V4(S,'mapModMin',15);
+R.modMax = GA_numField_PATCH_V4(S,'mapModMax',30);
+R.colormapName = GA_charField_PATCH_V4(S,'mapColormap','blackbdy_iso');
+R.signMode = 1;
+try
+    if isfield(G,'display') && isstruct(G.display)
+        D = G.display;
+        if isfield(D,'threshold') && ~isempty(D.threshold), R.threshold = double(D.threshold(1)); end
+        if isfield(D,'caxis') && numel(D.caxis)>=2, R.caxis = double(D.caxis(1:2)); end
+        if isfield(D,'alphaPercent') && ~isempty(D.alphaPercent), R.alphaPercent = double(D.alphaPercent(1)); end
+        if isfield(D,'alphaModOn') && ~isempty(D.alphaModOn), R.alphaModOn = logical(D.alphaModOn(1)); end
+        if isfield(D,'modMin') && ~isempty(D.modMin), R.modMin = double(D.modMin(1)); end
+        if isfield(D,'modMax') && ~isempty(D.modMax), R.modMax = double(D.modMax(1)); end
+        if isfield(D,'colormapName') && ~isempty(D.colormapName), R.colormapName = char(D.colormapName); end
+        if isfield(D,'signMode') && ~isempty(D.signMode), R.signMode = round(double(D.signMode(1))); end
+        if isfield(D,'cmapMatrix') && ~isempty(D.cmapMatrix) && size(D.cmapMatrix,2)==3, R.cmapMatrix = double(D.cmapMatrix); end
+    end
+catch
+end
+if numel(R.caxis)<2 || any(~isfinite(R.caxis(1:2))) || R.caxis(2)==R.caxis(1), R.caxis = [0 100]; end
+if R.caxis(2)<R.caxis(1), R.caxis = fliplr(R.caxis); end
+if R.modMax < R.modMin, tmp=R.modMin; R.modMin=R.modMax; R.modMax=tmp; end
+R.signMode = max(1,min(3,R.signMode));
+end
+
+function GA_exportTile_PATCH_V4(outFile,U,M,R,titleStr)
+f = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off','MenuBar','none','ToolBar','none','NumberTitle','off');
+set(f,'Position',[100 100 1100 900]);
+ax = axes('Parent',f,'Units','normalized','Position',[0.06 0.08 0.80 0.84]);
+Urgb = GA_toRGB_PATCH_V4(U);
+image(ax,Urgb); axis(ax,'image'); axis(ax,'off'); hold(ax,'on');
+[dispMap,alpha] = GA_displayMapAlpha_PATCH_V4(M,R);
+h = imagesc(ax,dispMap); set(h,'AlphaData',GA_alphaModFixFromCData_20260504(h,alpha)); try, set(h,'AlphaDataMapping','none'); catch, end
+colormap(ax,GA_colormap_PATCH_V4(R)); caxis(ax,R.caxis);
+cb = colorbar(ax);
+try, cb.Color = 'w'; cb.Label.String = 'Signal change (%)'; cb.Label.Color = 'w'; cb.FontSize = 11; catch, end
+title(ax,titleStr,'Color','w','FontWeight','bold','Interpreter','none');
+set(f,'PaperPositionMode','auto');
+print(f,outFile,'-dpng','-r200','-opengl');
+close(f);
+end
+
+function [D,A] = GA_displayMapAlpha_PATCH_V4(M,R)
+% SCM-style display map and alpha for GroupAnalysis preview.
+M = double(M);
+M(~isfinite(M)) = 0;
+
+if nargin < 2 || isempty(R) || ~isstruct(R)
+    R = struct();
+end
+
+thr = 0;
+if isfield(R,'thr') && ~isempty(R.thr) && isfinite(R.thr), thr = double(R.thr(1)); end
+if isfield(R,'threshold') && ~isempty(R.threshold) && isfinite(R.threshold), thr = double(R.threshold(1)); end
+thr = abs(thr);
+
+alphaPct = 100;
+if isfield(R,'alpha') && ~isempty(R.alpha) && isfinite(R.alpha), alphaPct = double(R.alpha(1)); end
+if isfield(R,'alphaPct') && ~isempty(R.alphaPct) && isfinite(R.alphaPct), alphaPct = double(R.alphaPct(1)); end
+if isfield(R,'alphaPercent') && ~isempty(R.alphaPercent) && isfinite(R.alphaPercent), alphaPct = double(R.alphaPercent(1)); end
+alphaPct = max(0,min(100,alphaPct));
+
+alphaModOn = true;
+if isfield(R,'alphaModOn') && ~isempty(R.alphaModOn), alphaModOn = logical(R.alphaModOn); end
+if isfield(R,'mapAlphaModOn') && ~isempty(R.mapAlphaModOn), alphaModOn = logical(R.mapAlphaModOn); end
+
+modMin = 10;
+modMax = 20;
+if isfield(R,'modMin') && ~isempty(R.modMin) && isfinite(R.modMin), modMin = double(R.modMin(1)); end
+if isfield(R,'modMax') && ~isempty(R.modMax) && isfinite(R.modMax), modMax = double(R.modMax(1)); end
+if modMax < modMin
+    tmp = modMin; modMin = modMax; modMax = tmp;
+end
+if modMax <= modMin
+    modMax = modMin + eps;
+end
+
+signMode = 1;
+if isfield(R,'signMode') && ~isempty(R.signMode) && isfinite(R.signMode), signMode = round(double(R.signMode(1))); end
+
+switch signMode
+    case 2
+        showMask = M < 0;
+        D = abs(min(M,0));
+    case 3
+        showMask = M ~= 0;
+        D = M;
+    otherwise
+        showMask = M > 0;
+        D = M;
+end
+
+mag = abs(M);
+showMask = showMask & isfinite(M) & (mag >= thr);
+
+if ~alphaModOn
+    A = (alphaPct/100) .* double(showMask);
+else
+    effLo = max(modMin,thr);
+    effHi = modMax;
+    if effHi <= effLo, effHi = effLo + eps; end
+    ramp = (mag - effLo) ./ max(eps,(effHi - effLo));
+    ramp(~isfinite(ramp)) = 0;
+    ramp = min(max(ramp,0),1);
+    ramp(mag <= effLo) = 0;
+    A = (alphaPct/100) .* ramp .* double(showMask);
+end
+
+A(~isfinite(A)) = 0;
+A = min(max(A,0),1);
+A(abs(M) <= max(modMin,thr)) = 0;
+D(~isfinite(D)) = 0;
+D(A <= 0) = 0;
+end
+
+function GA_renderMontageSlide_PATCH_V4(outFile,pngList,lblList,cm,caxV,titleStr,footerStr)
+figS = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off','MenuBar','none','ToolBar','none','NumberTitle','off');
+set(figS,'Units','inches','Position',[0.5 0.5 13.333 7.5]);
+set(figS,'PaperPositionMode','auto');
+annotation(figS,'textbox',[0.02 0.89 0.96 0.10],'String',titleStr,'Color','w','EdgeColor','none','FontName','Arial','FontSize',14,'FontWeight','bold','HorizontalAlignment','center','Interpreter','none');
+annotation(figS,'textbox',[0.28 0.01 0.70 0.06],'String',footerStr,'Color','w','EdgeColor','none','FontName','Arial','FontSize',11,'FontWeight','bold','HorizontalAlignment','right','Interpreter','none');
+axCB = axes('Parent',figS,'Position',[0.012 0.14 0.001 0.74],'Visible','off','XTick',[],'YTick',[],'XColor','none','YColor','none','Box','off');
+imagesc(axCB,[0 1; 0 1]); colormap(axCB,cm); caxis(axCB,caxV);
+cbx = colorbar(axCB,'Position',[0.020 0.14 0.015 0.74]);
+try, cbx.Color='w'; cbx.FontName='Arial'; cbx.FontSize=10; cbx.Label.String='Signal change (%)'; cbx.Label.Color='w'; cbx.TickDirection='out'; cbx.Box='off'; catch, end
+x0 = 0.095; x1 = 0.98; yBot = 0.12; yTop = 0.86; rowGap = 0.06; colGap = 0.02;
+cellH = (yTop-yBot-rowGap)/2; cellW = (x1-x0-2*colGap)/3;
+for k = 1:min(6,numel(pngList))
+    if k <= 3, cc = k-1; y = yBot + cellH + rowGap; else, cc = k-4; y = yBot; end
+    x = x0 + cc*(cellW+colGap);
+    axI = axes('Parent',figS,'Position',[x y cellW cellH]);
+    image(axI,imread(pngList{k})); axis(axI,'image'); axis(axI,'off');
+    annotation(figS,'textbox',[x y+cellH+0.005 cellW 0.035],'String',lblList{k},'Color','w','EdgeColor','none','FontName','Arial','FontSize',12,'FontWeight','bold','HorizontalAlignment','center','Interpreter','none');
+end
+print(figS,outFile,'-dpng','-r200','-opengl');
+close(figS);
+end
+
+function GA_writePPT_PATCH_V4(pptFile,slidePNGs)
+if exist(pptFile,'file')==2
+    try, delete(pptFile); catch, error('Could not overwrite PPT: %s',pptFile); end
+end
+if ~isempty(which('mlreportgen.ppt.Presentation'))
+    import mlreportgen.ppt.*
+    ppt = [];
+    try
+        ppt = Presentation(pptFile); open(ppt);
+        for i = 1:numel(slidePNGs)
+            try, slide = add(ppt,'Blank'); catch, slide = add(ppt); end
+            pic = Picture(slidePNGs{i});
+            pic.X = '0in'; pic.Y = '0in'; pic.Width = '13.333in'; pic.Height = '7.5in';
+            add(slide,pic);
+        end
+        close(ppt);
+    catch ME
+        try, if ~isempty(ppt), close(ppt); end, catch, end
+        error('mlreportgen PPT export failed: %s',ME.message);
+    end
+elseif ispc && exist('actxserver','file')==2
+    ppt = []; pres = [];
+    try
+        ppt = actxserver('PowerPoint.Application'); ppt.Visible = 1;
+        pres = ppt.Presentations.Add;
+        sw = pres.PageSetup.SlideWidth; sh = pres.PageSetup.SlideHeight;
+        for i = 1:numel(slidePNGs)
+            slide = pres.Slides.Add(i,12);
+            slide.Shapes.AddPicture(slidePNGs{i},0,1,0,0,sw,sh);
+        end
+        pres.SaveAs(pptFile); pres.Close; ppt.Quit;
+    catch ME
+        try, if ~isempty(pres), pres.Close; end, catch, end
+        try, if ~isempty(ppt), ppt.Quit; end, catch, end
+        error('PowerPoint COM export failed: %s',ME.message);
+    end
+else
+    error('No PowerPoint writer found. Slide PNGs were saved but PPTX could not be created.');
+end
+pause(0.3);
+if exist(pptFile,'file')~=2, error('PPT file was not created: %s',pptFile); end
+end
+
+function cm = GA_colormap_PATCH_V4(R)
+if isfield(R,'cmapMatrix') && ~isempty(R.cmapMatrix) && size(R.cmapMatrix,2)==3
+    cm = double(R.cmapMatrix); cm = max(0,min(1,cm)); return;
+end
+name = lower(strtrim(char(R.colormapName)));
+n = 256;
+switch name
+    case 'hot', cm = hot(n);
+    case 'parula', cm = parula(n);
+    case 'jet', cm = jet(n);
+    case 'gray', cm = gray(n);
+    case 'bone', cm = bone(n);
+    case 'copper', cm = copper(n);
+    case 'winter_brain_fsl', cm = winter(n);
+    case 'signed_blackbdy_winter'
+        nNeg = floor(n/2); nPos = n-nNeg;
+        neg = winter(max(nNeg,2)); neg = neg(1:nNeg,:); neg = neg .* repmat(linspace(1,0,nNeg)',1,3);
+        if ~isempty(neg), neg(end,:) = [0 0 0]; end
+        pos = hot(max(nPos,2)); pos = pos(1:nPos,:); if ~isempty(pos), pos(1,:) = [0 0 0]; end
+        cm = [neg; pos];
+    otherwise
+        if strcmp(name,'turbo') && exist('turbo','file')==2, cm = turbo(n); else, cm = hot(n); end
+end
+end
+
+function RGB = GA_toRGB_PATCH_V4(U)
+U = double(U); U(~isfinite(U)) = 0;
+if ndims(U) == 3 && size(U,3) == 3
+    RGB = U; mx = max(RGB(:)); if isfinite(mx) && mx > 1, RGB = RGB/255; end; RGB = max(0,min(1,RGB)); return;
+end
+mn = min(U(:)); mx = max(U(:));
+if isfinite(mn) && isfinite(mx) && mx > mn, G = (U-mn)/(mx-mn); else, G = zeros(size(U)); end
+RGB = repmat(G,[1 1 3]);
+end
+
+function B = GA_resizeLike_PATCH_V4(A,sz)
+if numel(sz)>2, sz = sz(1:2); end
+if ndims(A)==3 && size(A,3)==3
+    B = zeros(sz(1),sz(2),3);
+    for c=1:3, B(:,:,c) = GA_resizeLike_PATCH_V4(A(:,:,c),sz); end
+    return;
+end
+if isequal(size(A),sz), B=A; return; end
+try
+    B = imresize(A,sz,'bilinear');
+catch
+    [Y,X] = size(A); [xq,yq] = meshgrid(linspace(1,X,sz(2)),linspace(1,Y,sz(1)));
+    B = interp2(double(A),xq,yq,'linear',0);
+end
+end
+
+function M = GA_resizeMask_PATCH_V4(M,sz)
+if isequal(size(M),sz), M = logical(M); return; end
+try, M = imresize(double(M),sz,'nearest') > 0.5;
+catch, M = GA_resizeLike_PATCH_V4(double(M),sz) > 0.5;
+end
+end
+
+function B = GA_smooth2_PATCH_V4(A,sigma)
+try, B = imgaussfilt(A,sigma); return; catch, end
+if sigma <= 0, B = A; return; end
+r = max(1,ceil(3*sigma)); x = -r:r; g = exp(-(x.^2)/(2*sigma^2)); g = g/sum(g);
+B = conv2(conv2(double(A),g,'same'),g','same');
+end
+
+function tf = GA_toLogical_PATCH_V4(x)
+tf = false;
+try
+    if islogical(x), tf = logical(x(1));
+    elseif isnumeric(x), tf = isfinite(x(1)) && x(1) ~= 0;
+    else, s = lower(strtrim(char(x))); tf = any(strcmp(s,{'1','true','yes','y','on'}));
+    end
+catch
+end
+end
+
+function bw = GA_defaultBaseWindow_PATCH_V4(S,bf)
+bw = [30 240];
+try
+    if isfield(S,'mapGlobalBaseSec') && numel(S.mapGlobalBaseSec)>=2
+        v = double(S.mapGlobalBaseSec(1:2)); if all(isfinite(v)) && v(2)>v(1), bw = v(:)'; return; end
+    end
+catch
+end
+try
+    G = GA_loadSCMBundle_PATCH_V4(bf);
+    if isfield(G,'baseWindowSec') && numel(G.baseWindowSec)>=2
+        v = double(G.baseWindowSec(1:2)); if all(isfinite(v)) && v(2)>v(1), bw = v(:)'; return; end
+    end
+catch
+end
+end
+
+function d = GA_exportStartDir_PATCH_V4(S)
+d = pwd;
+try, if isfield(S,'outDir') && ~isempty(S.outDir) && exist(S.outDir,'dir')==7, d = char(S.outDir); return; end, catch, end
+try, if isfield(S,'opt') && isfield(S.opt,'startDir') && exist(S.opt.startDir,'dir')==7, d = char(S.opt.startDir); return; end, catch, end
+end
+
+function subj = GA_subjectName_PATCH_V4(S,row,bf,G)
+subj = '';
+try, subj = strtrim(char(S.subj{row,2})); catch, end
+if isempty(subj) && isfield(G,'animalID') && ~isempty(G.animalID), try, subj = strtrim(char(G.animalID)); catch, end, end
+if isempty(subj), [~,subj] = fileparts(bf); end
+end
+
+function s = GA_phaseLabel_PATCH_V4(s0,s1,injSec,winLen)
+if ~isfinite(injSec)
+    s = sprintf('%d min',floor(s0/winLen)+1);
+elseif s1 <= injSec
+    s = 'Pre-inj';
+elseif s0 < injSec && s1 > injSec
+    s = 'Injection';
+else
+    m = floor((s0-injSec)/winLen)+1; if m < 1, m = 1; end
+    s = sprintf('%d min PI',m);
+end
+end
+
+function v = GA_numField_PATCH_V4(S,f,fb)
+v = fb; try, if isfield(S,f) && ~isempty(S.(f)), v = double(S.(f)(1)); end, catch, end; if ~isfinite(v), v = fb; end
+end
+function v = GA_vecField_PATCH_V4(S,f,fb)
+v = fb; try, if isfield(S,f) && numel(S.(f))>=2, vv = double(S.(f)(1:2)); if all(isfinite(vv)), v = vv(:)'; end, end, catch, end
+end
+function v = GA_logField_PATCH_V4(S,f,fb)
+v = fb; try, if isfield(S,f) && ~isempty(S.(f)), v = logical(S.(f)(1)); end, catch, end
+end
+function s = GA_charField_PATCH_V4(S,f,fb)
+s = fb; try, if isfield(S,f) && ~isempty(S.(f)), s = strtrim(char(S.(f))); end, catch, end
+end
+function s = GA_safeName_PATCH_V4(s)
+try, s = char(s); catch, s = 'export'; end
+s = regexprep(s,'[<>:"/\\|?*]','_'); s = regexprep(s,'[^A-Za-z0-9_\-]','_'); s = regexprep(s,'_+','_'); s = regexprep(s,'^_+|_+$','');
+if isempty(s), s = 'export'; end; if numel(s)>60, s = s(1:60); end
+end
+function GA_mkdir_PATCH_V4(d)
+if exist(d,'dir')~=7, ok = mkdir(d); if ~ok, error('Could not create folder: %s',d); end, end
+end
+
+
+function Aout = GA_alphaModFixFromCData_20260504(h, Ain)
+% Strict SCM-style alpha safety wrapper.
+% Keeps AlphaData numeric in [0,1] and removes black zero-valued overlay pixels.
+Aout = Ain;
+try
+    Aout = double(Aout);
+catch
+    Aout = 0;
+end
+
+Aout(~isfinite(Aout)) = 0;
+Aout = min(max(Aout,0),1);
+
+try
+    C = get(h,'CData');
+    if isnumeric(C) && ndims(C) == 2
+        C = double(C);
+        if isscalar(Aout)
+            Aout = Aout .* ones(size(C));
+        end
+        if isequal(size(Aout),size(C))
+            Aout(~isfinite(C)) = 0;
+            Aout(abs(C) <= eps) = 0;
+        end
+    end
+catch
+end
+
+try
+    set(h,'AlphaDataMapping','none');
+catch
+end
+end
+
+
+% ============================================================
+% GA_loadUnderlayAndOverlayMask_20260504
+% Robust extractor for MaskEditor UnderlayAndOverlayMasks MAT files.
+% ============================================================
+function [U,OM,infoTxt] = GA_loadUnderlayAndOverlayMask_20260504(fp)
+U = [];
+OM = [];
+infoTxt = '';
+
+fp = strtrimSafe(fp);
+if isempty(fp) || exist(fp,'file') ~= 2
+    error('File not found: %s',fp);
+end
+
+[~,~,ext] = fileparts(fp);
+ext = lower(ext);
+
+if ~strcmp(ext,'.mat')
+    U = imread(fp);
+    infoTxt = shortFileOnly_20260504(fp);
+    return;
+end
+
+L = load(fp);
+
+cands = struct('path',{},'value',{},'scoreU',{},'scoreM',{});
+walkStruct(L,'',0);
+
+if isempty(cands)
+    error('No numeric image-like fields found in MAT file: %s',fp);
+end
+
+% Pick true underlay.
+scoresU = [cands.scoreU];
+[bestU,idxU] = max(scoresU);
+if isempty(idxU) || bestU <= -Inf
+    error('Could not identify a true underlay field in MAT file.');
+end
+U = cands(idxU).value;
+U = squeeze(U);
+U = double(U);
+U(~isfinite(U)) = 0;
+
+% Pick overlay/signal mask.
+scoresM = [cands.scoreM];
+[bestM,idxM] = max(scoresM);
+if ~isempty(idxM) && isfinite(bestM) && bestM > 0
+    OM = cands(idxM).value;
+    OM = squeeze(OM);
+    if ndims(OM) > 2
+        if size(OM,3) == 1
+            OM = OM(:,:,1);
+        elseif size(OM,3) == 3
+            OM = OM(:,:,1);
+        else
+            OM = OM(:,:,round(size(OM,3)/2));
+        end
+    end
+    OM = double(OM);
+    OM(~isfinite(OM)) = 0;
+    if max(OM(:)) > min(OM(:))
+        OM = OM > 0.5 * max(OM(:));
+    else
+        OM = logical(OM);
+    end
+else
+    OM = [];
+end
+
+infoTxt = sprintf('%s | underlay=%s', shortFileOnly_20260504(fp), cands(idxU).path);
+if ~isempty(OM)
+    infoTxt = sprintf('%s | overlayMask=%s', infoTxt, cands(idxM).path);
+end
+
+fprintf('[GA mask loader] %s\n', infoTxt);
+
+    function walkStruct(S,path0,depth)
+        if depth > 5
+            return;
+        end
+        if isstruct(S)
+            fn = fieldnames(S);
+            for ii = 1:numel(fn)
+                f = fn{ii};
+                if isempty(path0)
+                    pth = f;
+                else
+                    pth = [path0 '.' f];
+                end
+                try
+                    walkStruct(S.(f),pth,depth+1);
+                catch
+                end
+            end
+        elseif isnumeric(S) || islogical(S)
+            A = squeeze(S);
+            if isempty(A) || numel(A) < 100
+                return;
+            end
+            if ndims(A) > 3
+                return;
+            end
+            sz = size(A);
+            if numel(sz) < 2 || sz(1) < 8 || sz(2) < 8
+                return;
+            end
+            scU = scoreUnderlay(path0,A);
+            scM = scoreMask(path0,A);
+            cands(end+1).path = path0;
+            cands(end).value = A;
+            cands(end).scoreU = scU;
+            cands(end).scoreM = scM;
+        elseif iscell(S) && numel(S) <= 20
+            for jj = 1:numel(S)
+                try
+                    walkStruct(S{jj},sprintf('%s{%d}',path0,jj),depth+1);
+                catch
+                end
+            end
+        end
+    end
+
+    function sc = scoreUnderlay(pathName,A)
+        p = lower(pathName);
+        sc = 0;
+        if contains(p,'sliceunderlayraw'), sc = sc + 1200; end
+        if contains(p,'underlayraw'),      sc = sc + 1000; end
+        if contains(p,'sliceunderlay'),    sc = sc + 900;  end
+        if contains(p,'underlay2d'),       sc = sc + 800;  end
+        if contains(p,'underlay'),         sc = sc + 650;  end
+        if contains(p,'brainimage'),       sc = sc + 500;  end
+        if contains(p,'anatomy'),          sc = sc + 450;  end
+        if contains(p,'bg'),               sc = sc + 300;  end
+        if contains(p,'mask'),             sc = sc - 500;  end
+        if contains(p,'overlay'),          sc = sc - 400;  end
+        if isBinaryish(A),                   sc = sc - 350;  end
+        if ndims(A) == 3 && size(A,3) == 3, sc = sc + 100;  end
+    end
+
+    function sc = scoreMask(pathName,A)
+        p = lower(pathName);
+        sc = -Inf;
+        if contains(p,'overlaymask'), sc = 1200; end
+        if contains(p,'signalmask'),  sc = max(sc,1100); end
+        if contains(p,'overlay') && contains(p,'mask'), sc = max(sc,1000); end
+        if contains(p,'loadedmask'),  sc = max(sc,500); end
+        if contains(p,'mask') && ~contains(p,'underlaymask'), sc = max(sc,250); end
+        if isfinite(sc)
+            if isBinaryish(A), sc = sc + 150; else, sc = sc - 150; end
+        end
+    end
+
+    function tf = isBinaryish(A)
+        try
+            if islogical(A)
+                tf = true;
+                return;
+            end
+            v = double(A(:));
+            v = v(isfinite(v));
+            if isempty(v)
+                tf = true;
+                return;
+            end
+            if numel(v) > 10000
+                idx = round(linspace(1,numel(v),10000));
+                v = v(idx);
+            end
+            v = round(v(:) * 1000) / 1000;
+            u = unique(v);
+            tf = numel(u) <= 4;
+        catch
+            tf = false;
+        end
+    end
+end
+
+function s = shortFileOnly_20260504(fp)
+try
+    [~,a,b] = fileparts(fp);
+    s = [a b];
+catch
+    s = fp;
+end
+end
+
+
+
+function M = ga_fc_prefer_fisher_z_matrix(subj)
+% GA helper: use Fisher z for FC averaging/statistics.
+% Priority: displayStatMatrix/displayZ/statMatrix/Z, fallback atanh(displayR/R).
+M = [];
+try
+    if isstruct(subj)
+        if isfield(subj,'displayStatMatrix') && ~isempty(subj.displayStatMatrix)
+            M = double(subj.displayStatMatrix); return;
+        end
+        if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
+            M = double(subj.displayZ); return;
+        end
+        if isfield(subj,'statMatrix') && ~isempty(subj.statMatrix)
+            M = double(subj.statMatrix); return;
+        end
+        if isfield(subj,'Z') && ~isempty(subj.Z)
+            M = double(subj.Z); return;
+        end
+        if isfield(subj,'displayR') && ~isempty(subj.displayR)
+            R = max(-0.999999,min(0.999999,double(subj.displayR)));
+            M = atanh(R);
+            M(1:size(M,1)+1:end) = 0;
+            return;
+        end
+        if isfield(subj,'R') && ~isempty(subj.R)
+            R = max(-0.999999,min(0.999999,double(subj.R)));
+            M = atanh(R);
+            M(1:size(M,1)+1:end) = 0;
+            return;
+        end
+    end
+catch
+end
+end
+
+function R = ga_fc_prefer_pearson_r_matrix(subj)
+% GA helper: use Pearson r for visual display.
+R = [];
+try
+    if isstruct(subj)
+        if isfield(subj,'displayMatrix') && ~isempty(subj.displayMatrix)
+            R = double(subj.displayMatrix); return;
+        end
+        if isfield(subj,'displayR') && ~isempty(subj.displayR)
+            R = double(subj.displayR); return;
+        end
+        if isfield(subj,'R') && ~isempty(subj.R)
+            R = double(subj.R); return;
+        end
+        if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
+            R = tanh(double(subj.displayZ)); return;
+        end
+        if isfield(subj,'Z') && ~isempty(subj.Z)
+            R = tanh(double(subj.Z)); return;
+        end
+    end
+catch
+end
+end
+
+
+
+%% LOCAL_GA_MOTOR_EXPORT_INTEGRATED_V6
+function outFile = localGA_motorExportIntegratedV6(action,hFig,varargin)
+% Integrated multi-slice step-motor GroupAnalysis exporter.
+% No external helper files required.
+if nargin < 1 || isempty(action), action = 'scm'; end
+if nargin < 2 || isempty(hFig) || ~ishghandle(hFig)
+    try, hFig = gcf; catch, hFig = []; end
+end
+if isempty(hFig) || ~ishghandle(hFig)
+    error('Invalid GroupAnalysis figure handle.');
+end
+switch lower(strtrim(char(action)))
+    case {'video','exportvideo'}
+        outFile = localGA_exportVideoBundleV6(hFig);
+    case {'scm','data','exportscm'}
+        outFile = localGA_exportSCMBundleV6(hFig,false);
+    case {'ppt','powerpoint','exportppt'}
+        outFile = localGA_exportSCMBundleV6(hFig,true);
+    otherwise
+        error('Unsupported export action: %s', action);
+end
+end
+
+function outFile = localGA_exportVideoBundleV6(hFig)
+S = guidata(hFig);
+[rows,bfs] = localGA_collectBundlesV6(S);
+if isempty(bfs)
+    error('No active SCM bundle rows found. Add SCM bundles and keep rows enabled.');
+end
+startDir = localGA_smartStartDirV6(S,bfs{1});
+defName = ['GA_MotorVideo_AllSlices_' datestr(now,'yyyymmdd_HHMMSS') '.mat'];
+[f,p] = uiputfile({'*.mat','MAT-file (*.mat)'}, 'Save multi-slice GroupAnalysis video bundle', fullfile(startDir,defName));
+if isequal(f,0), outFile = ''; return; end
+outFile = fullfile(p,f);
+opts = localGA_readDisplayOptsV6(S);
+opts.underlayMode = 'selected';
+[G,E] = localGA_buildGroupBundleV6(S,rows,bfs,opts,[]);
+E.kind = 'GA_GROUP_VIDEO_EXPORT';
+E.exportPurpose = 'multi-slice video';
+E.note = 'Open in Video GUI using LOAD GA VIDEO BUNDLE. Contains all step-motor slices as [Y X Z T].';
+GA = E; %#ok<NASGU>
+psc4D = E.psc4D; %#ok<NASGU>
+functional4D = E.functional4D; %#ok<NASGU>
+underlay2D = E.underlay2D; %#ok<NASGU>
+brainImage = E.brainImage; %#ok<NASGU>
+groupMap2D = E.groupMap2D; %#ok<NASGU>
+overlay2D = E.overlay2D; %#ok<NASGU>
+save(outFile,'E','GA','G','psc4D','functional4D','underlay2D','brainImage','groupMap2D','overlay2D','-v7.3');
+msgbox(sprintf('Saved multi-slice GA video bundle:\n\n%s\n\nSlices: %d\nFrames: %d\nSubjects: %d',outFile,E.nSlices,E.nFrames,numel(rows)), 'Group video export');
+fprintf('\n[GA motor video export] Saved:\n%s\n',outFile);
+end
+
+function outFile = localGA_exportSCMBundleV6(hFig,makePPT)
+S = guidata(hFig);
+[rows,bfs] = localGA_collectBundlesV6(S);
+if isempty(bfs)
+    error('No active SCM bundle rows found. Add SCM bundles and keep rows enabled.');
+end
+startDir = localGA_smartStartDirV6(S,bfs{1});
+opts = localGA_readDisplayOptsV6(S);
+if makePPT
+    opts = localGA_askPPTOptionsV6(S,bfs{1},opts);
+    try, opts.hFig = hFig; catch, end
+    if isempty(opts), outFile = ''; return; end
+    defName = ['GA_MotorSCM_AllSlices_' datestr(now,'yyyymmdd_HHMMSS') '.pptx'];
+    [f,p] = uiputfile({'*.pptx','PowerPoint (*.pptx)'}, 'Save multi-slice SCM PowerPoint', fullfile(startDir,defName));
+    if isequal(f,0), outFile = ''; return; end
+    outFile = fullfile(p,f);
+    [G,E] = localGA_buildGroupBundleV6(S,rows,bfs,opts,opts.slices);
+    [pngDir,nSlides,nTiles] = localGA_writeMotorPPTV6(outFile,G,E,opts);
+    matFile = fullfile(fileparts(outFile), [localGA_stripExtV6(localGA_localNameV6(outFile)) '_SCM_bundle.mat']);
+    GA = E; %#ok<NASGU>
+    save(matFile,'G','E','GA','opts','-v7.3');
+    msgbox(sprintf('Saved multi-slice SCM PPT:\n\n%s\n\nSaved source PNGs in:\n%s\n\nSlides: %d\nBrain PNG tiles: %d\nSCM bundle:\n%s',outFile,pngDir,nSlides,nTiles,matFile), 'Group PPT export');
+    fprintf('\n[GA motor PPT export] Saved PPT:\n%s\nPNG folder:\n%s\nMAT bundle:\n%s\n',outFile,pngDir,matFile);
+else
+    defName = ['GA_MotorSCM_AllSlices_' datestr(now,'yyyymmdd_HHMMSS') '.mat'];
+    [f,p] = uiputfile({'*.mat','MAT-file (*.mat)'}, 'Save multi-slice SCM-compatible group bundle', fullfile(startDir,defName));
+    if isequal(f,0), outFile = ''; return; end
+    outFile = fullfile(p,f);
+    [G,E] = localGA_buildGroupBundleV6(S,rows,bfs,opts,[]);
+    GA = E; %#ok<NASGU>
+    pscAtlas4D = G.pscAtlas4D; %#ok<NASGU>
+    functional4D = E.functional4D; %#ok<NASGU>
+    underlayAtlas = G.underlayAtlas; %#ok<NASGU>
+    underlay2D = E.underlay2D; %#ok<NASGU>
+    brainImage = E.brainImage; %#ok<NASGU>
+    scmMapSignedAtlas = G.scmMapSignedAtlas; %#ok<NASGU>
+    groupMap2D = E.groupMap2D; %#ok<NASGU>
+    overlay2D = E.overlay2D; %#ok<NASGU>
+    save(outFile,'G','E','GA','pscAtlas4D','functional4D','underlayAtlas','underlay2D','brainImage','scmMapSignedAtlas','groupMap2D','overlay2D','-v7.3');
+    msgbox(sprintf('Saved multi-slice SCM group bundle:\n\n%s\n\nSlices: %d\nFrames: %d\nSubjects: %d',outFile,G.nSlices,G.nFrames,numel(rows)), 'Export Data SCM');
+    fprintf('\n[GA motor SCM data export] Saved:\n%s\n',outFile);
+end
+end
+
+function opts = localGA_askPPTOptionsV6(S,firstBundle,opts)
+% SCM-style motor PPT options for GroupAnalysis.
+% Uses GroupAnalysis GUI settings for caxis/alpha/modulation/polarity.
+try
+    G0 = localGA_loadBundleV6(firstBundle);
+    X0 = localGA_normalizePSCV6(localGA_getPSCFieldV6(G0));
+    nZ = size(X0,3);
+    nT = size(X0,4);
+    TR = localGA_getTRV6(G0);
+    totalSec = max(0,(nT-1)*TR);
+catch
+    nZ = 1; nT = 1; TR = 1; totalSec = 0;
+end
+
+curZ = 1;
+try
+    if isfield(S,'mapCurrentSlice') && isfinite(S.mapCurrentSlice)
+        curZ = round(S.mapCurrentSlice);
+    end
+catch
+end
+curZ = max(1,min(nZ,curZ));
+
+choice = questdlg('Which step-motor slices should be exported to PPT?', ...
+    'SCM-style motor PPT export', ...
+    'All slices', 'Current slice only', 'Custom list', 'All slices');
+if isempty(choice), opts = []; return; end
+
+switch choice
+    case 'All slices'
+        slices = 1:nZ;
+    case 'Current slice only'
+        slices = curZ;
+    otherwise
+        a0 = inputdlg({'Slice list, e.g. 1:4 or 1 3 4:'}, ...
+            'Custom slice list', 1, {sprintf('1:%d',nZ)});
+        if isempty(a0), opts = []; return; end
+        slices = localGA_parseNumListV6(a0{1},1:nZ);
+end
+slices = unique(max(1,min(nZ,round(slices))),'stable');
+if isempty(slices), slices = 1:nZ; end
+
+uModes = {'selected','normal','histology','vascular','regions'};
+[um,ok] = listdlg('PromptString',{ ...
+        'Underlay for exported PPT:', ...
+        'selected = bundle-selected underlay; otherwise force one atlas underlay'}, ...
+    'SelectionMode','single', ...
+    'ListString',uModes, ...
+    'InitialValue',1, ...
+    'ListSize',[420 180], ...
+    'Name','PPT underlay mode');
+if ~ok || isempty(um), opts = []; return; end
+
+% Read GUI settings AFTER underlay choice, then force only the export-specific values.
+opts = localGA_readDisplayOptsV6(S);
+opts.underlayMode = uModes{um};
+opts.baseWin = [20 40];
+
+answers = inputdlg({ ...
+    'Injection start (sec). Default = 60 s because motor baseline is 1 min per slice:', ...
+    'Window length (sec). Default = 28 s:', ...
+    'Specific time point sec to export (empty = every 28-s window):'}, ...
+    'Motor SCM PPT timing', 1, {'60', '28', ''});
+if isempty(answers), opts = []; return; end
+
+opts.slices = slices;
+opts.injSec = str2double(strtrim(answers{1}));
+if ~isfinite(opts.injSec), opts.injSec = 60; end
+opts.winLen = str2double(strtrim(answers{2}));
+if ~isfinite(opts.winLen) || opts.winLen <= 0, opts.winLen = 28; end
+tp = str2double(strtrim(answers{3}));
+if isfinite(tp), opts.singleTimePointSec = tp; else, opts.singleTimePointSec = NaN; end
+opts.TRHint = TR;
+opts.totalSecHint = totalSec;
+opts.nFramesHint = nT;
+
+fprintf('\n[GA motor PPT] GUI settings used: polarity=%s, pos caxis=[%g %g], neg caxis=[%g %g], alpha=%g%%, mod=[%g %g], baseline=[20 40] s\n', ...
+    opts.polarity, opts.caxis(1), opts.caxis(2), opts.negCaxis(1), opts.negCaxis(2), opts.alphaPercent, opts.modMin, opts.modMax);
+end
+
+function [G,E] = localGA_buildGroupBundleV6(S,rows,bfs,opts,slicesWanted)
+Gs = cell(1,numel(bfs)); Xs = cell(1,numel(bfs)); TRs = nan(1,numel(bfs));
+for i=1:numel(bfs)
+    Gs{i} = localGA_loadBundleV6(bfs{i});
+    Xs{i} = localGA_normalizePSCV6(localGA_getPSCFieldV6(Gs{i}));
+    TRs(i) = localGA_getTRV6(Gs{i});
+end
+nY = size(Xs{1},1); nX = size(Xs{1},2); nZ = size(Xs{1},3); nT = size(Xs{1},4);
+for i=2:numel(Xs)
+    nZ = min(nZ,size(Xs{i},3)); nT = min(nT,size(Xs{i},4));
+end
+if isempty(slicesWanted), slicesWanted = 1:nZ; end
+slicesWanted = unique(max(1,min(nZ,round(slicesWanted))),'stable');
+nZout = numel(slicesWanted);
+SUM = zeros(nY,nX,nZout,nT,'double'); CNT = zeros(nY,nX,nZout,nT,'double');
+Usum = zeros(nY,nX,nZout,'double'); Ucnt = zeros(nY,nX,nZout,'double');
+subjects = struct('row',{},'animal',{},'condition',{},'group',{},'bundleFile',{});
+for i=1:numel(Xs)
+    Xi = localGA_fitPSCToTargetV6(Xs{i},nY,nX,nZ,nT);
+    Xi = Xi(:,:,slicesWanted,1:nT);
+    ok = isfinite(Xi); Xi(~ok) = 0; SUM = SUM + Xi; CNT = CNT + double(ok);
+    Ui = localGA_getUnderlayStackV6(Gs{i},opts.underlayMode,nY,nX,nZ);
+    Ui = Ui(:,:,slicesWanted);
+    oku = isfinite(Ui); Ui(~oku) = 0; Usum = Usum + Ui; Ucnt = Ucnt + double(oku);
+    subjects(end+1) = localGA_rowInfoV6(S,rows(i),bfs{i},Gs{i}); %#ok<AGROW>
+end
+Xg = SUM ./ max(1,CNT); Xg(CNT==0) = 0;
+Ug = Usum ./ max(1,Ucnt); Ug(Ucnt==0) = 0;
+TR = median(TRs(isfinite(TRs) & TRs>0)); if ~isfinite(TR), TR = 1; end
+baseWin = [0 60]; try, if isfield(opts,'baseWin'), baseWin = opts.baseWin; end, catch, end
+sigWin = [60 88]; try, sigWin = [opts.injSec opts.injSec + opts.winLen]; catch, end
+maps = localGA_computeWindowMapsV6(Xg,TR,baseWin,sigWin,opts);
+G = struct();
+G.kind = 'SCM_GROUP_EXPORT';
+G.version = 'GA_MOTOR_EXPORT_INTEGRATED_V6';
+G.source = 'GroupAnalysis multi-slice motor export';
+G.created = datestr(now);
+G.pscAtlas4D = single(Xg);
+G.functional4D = single(repmat(Ug,[1 1 1 nT]));
+G.underlayAtlas = single(Ug);
+G.underlay2D = single(Ug);
+G.brainImage = single(Ug);
+G.commonUnderlay = single(Ug);
+G.scmMapSignedAtlas = single(maps);
+G.scmMapAtlas = single(maps);
+G.mapAtlas = single(maps);
+G.groupMap2D = single(maps);
+G.overlay2D = single(maps);
+G.TR = TR; G.tsec = (0:nT-1)*TR; G.tMin = G.tsec/60;
+G.nSlices = nZout; G.nFrames = nT; G.selectedSlices = slicesWanted;
+G.baseWindowSec = baseWin; G.signalWindowSec = sigWin;
+G.display = opts; G.render = opts; G.subjects = subjects;
+G.note = 'Multi-slice group mean PSC: [Y X Z T]. Suitable for step-motor GroupAnalysis, SCM, PPT, and Video GUI.';
+E = struct();
+E.kind = 'GA_GROUP_VIDEO_EXPORT';
+E.version = 'GA_MOTOR_EXPORT_INTEGRATED_V6';
+E.psc4D = single(Xg);
+E.functional4D = single(repmat(Ug,[1 1 1 nT]));
+E.underlay2D = single(Ug);
+E.brainImage = single(Ug);
+E.groupMap2D = single(maps);
+E.overlay2D = single(maps);
+E.TR = TR; E.tsec = G.tsec; E.tMin = G.tMin;
+E.nSlices = nZout; E.nFrames = nT; E.selectedSlices = slicesWanted;
+E.baseWindowSec = baseWin; E.signalWindowSec = sigWin;
+E.mapCaxis = opts.caxis; E.mapSigma = opts.sigma; E.mapModMin = opts.modMin; E.mapModMax = opts.modMax;
+E.render = opts; E.subjects = subjects; E.sourceG = G;
+end
+
+function maps = localGA_computeWindowMapsV6(X,TR,baseWin,sigWin,opts)
+[nY,nX,nZ,nT] = size(X); maps = zeros(nY,nX,nZ);
+b = localGA_secToIdxV6(baseWin,TR,nT); s = localGA_secToIdxV6(sigWin,TR,nT);
+for z=1:nZ
+    P = squeeze(X(:,:,z,:));
+    M = mean(P(:,:,s(1):s(2)),3) - mean(P(:,:,b(1):b(2)),3);
+    if opts.sigma > 0, M = localGA_smooth2V6(M,opts.sigma); end
+    M(~isfinite(M)) = 0; maps(:,:,z) = M;
+end
+end
+
+function [pngDir,nSlides,nTiles] = localGA_writeMotorPPTV6(outFile,G,E,opts)
+% SCM_gui-like motor PPT export for GroupAnalysis group mean maps.
+% Slide order: info slide, then slice 1 windows, slice 2 windows, etc.
+% Each slide contains up to 6 brain images.
+outDir = fileparts(outFile);
+if isempty(outDir), outDir = pwd; end
+[~,base] = fileparts(outFile);
+pngDir = fullfile(outDir,[base '_PNGs']);
+localGA_mkdirV6(pngDir);
+tileDir = fullfile(pngDir,'brain_tiles_png');
+slideDir = fullfile(pngDir,'fallback_slide_png');
+localGA_mkdirV6(tileDir);
+localGA_mkdirV6(slideDir);
+
+X = double(G.pscAtlas4D);
+U = double(G.underlayAtlas);
+TR = double(G.TR);
+[~,~,nZ,nT] = size(X);
+tsec = (0:nT-1)*TR;
+totalSec = max(tsec);
+baseIdx = localGA_secToIdxV6(opts.baseWin,TR,nT);
+
+if isfinite(opts.singleTimePointSec)
+    starts = max(0,floor(opts.singleTimePointSec/opts.winLen)*opts.winLen);
+else
+    starts = 0:opts.winLen:totalSec;
+end
+if isempty(starts), starts = 0; end
+
+perSlide = 6;
+estSlides = 1 + nZ * ceil(numel(starts)/perSlide);
+nTiles = 0;
+
+cbarFile = fullfile(pngDir,'colorbar_signal_change.png');
+localGA_makeColorbarPNGV6(cbarFile,opts);
+
+info = localGA_makeInfoTextV6(G,E,opts);
+infoPNG = fullfile(slideDir,'slide_000_info_table.png');
+localGA_makeInfoPNGV6(infoPNG,info);
+
+slides = struct('title',{},'subtitle',{},'tiles',{},'labels',{},'cbar',{});
+slides(1).title = 'GroupAnalysis motor SCM export';
+slides(1).subtitle = '';
+slides(1).tiles = {infoPNG};
+slides(1).labels = {'Export information'};
+slides(1).cbar = '';
+
+wb = [];
+try
+    wb = waitbar(0, sprintf('Preparing slide 1/%d...',estSlides), 'Name','Exporting motor SCM PPT');
+catch
+    wb = [];
+end
+localGA_setStatusBestEffortV6(opts,'PPT export: preparing info slide 1/%d',estSlides);
+
+slideCounter = 1;
+for z=1:nZ
+    tileFiles = {};
+    tileLabels = {};
+    for wi=1:numel(starts)
+        s0 = starts(wi);
+        s1 = min(s0 + opts.winLen, totalSec + TR);
+        idx = find(tsec >= s0 & tsec < s1);
+        if isempty(idx), continue; end
+
+        P = squeeze(X(:,:,z,:));
+        M = mean(P(:,:,idx),3) - mean(P(:,:,baseIdx(1):baseIdx(2)),3);
+        if opts.sigma > 0
+            M = localGA_smooth2V6(M,opts.sigma);
+        end
+        M(~isfinite(M)) = 0;
+
+        bg = U(:,:,min(z,size(U,3)));
+        phase = localGA_phaseLabelV6(s0,s1,opts.injSec);
+        lbl = sprintf('Slice %d/%d | %.0f-%.0f s | %s',z,nZ,s0,s1,phase);
+        tileFile = fullfile(tileDir,sprintf('slice%02d_window%03d_%0.0f_%0.0fs.png',z,wi,s0,s1));
+        localGA_renderTilePNGV6(tileFile,bg,M,opts,lbl);
+        tileFiles{end+1} = tileFile; %#ok<AGROW>
+        tileLabels{end+1} = lbl; %#ok<AGROW>
+        nTiles = nTiles + 1;
+
+        localGA_setStatusBestEffortV6(opts,'PPT export: rendered tile %d, slice %d/%d',nTiles,z,nZ);
+        drawnow;
+    end
+
+    if isempty(tileFiles), continue; end
+    nSlideZ = ceil(numel(tileFiles)/perSlide);
+    for si=1:nSlideZ
+        i0 = (si-1)*perSlide + 1;
+        i1 = min(si*perSlide,numel(tileFiles));
+        idx2 = i0:i1;
+        slideCounter = slideCounter + 1;
+        slides(end+1).title = sprintf('Slice %d/%d  |  windows %d-%d',z,nZ,i0,i1); %#ok<AGROW>
+        slides(end).subtitle = sprintf('Base %g-%g s | Injection %.0f s | TR %.4g s | alpha %.0f%%%% | AlphaMod %d [%g %g] | %s', ...
+            opts.baseWin(1),opts.baseWin(2),opts.injSec,TR,opts.alphaPercent,double(opts.alphaModOn),opts.modMin,opts.modMax,opts.polarity);
+        slides(end).tiles = tileFiles(idx2);
+        slides(end).labels = tileLabels(idx2);
+        slides(end).cbar = cbarFile;
+
+        try
+            if ~isempty(wb) && ishghandle(wb)
+                waitbar(min(0.95,slideCounter/max(1,estSlides)), wb, sprintf('Prepared slide %d/%d',slideCounter,estSlides));
+            end
+        catch
+        end
+        localGA_setStatusBestEffortV6(opts,'PPT export: prepared slide %d/%d',slideCounter,estSlides);
+        drawnow;
+    end
+end
+
+if numel(slides) <= 1
+    try, if ~isempty(wb) && ishghandle(wb), close(wb); end, catch, end
+    error('No PPT tiles were rendered.');
+end
+
+try
+    if ~isempty(wb) && ishghandle(wb)
+        waitbar(0.98, wb, 'Writing PowerPoint file...');
+    end
+catch
+end
+localGA_setStatusBestEffortV6(opts,'PPT export: writing PowerPoint file with %d slides...',numel(slides));
+localGA_writePPTObjectsV6(outFile,slides,slideDir,opts);
+try, if ~isempty(wb) && ishghandle(wb), close(wb); end, catch, end
+
+nSlides = numel(slides);
+localGA_setStatusBestEffortV6(opts,'PPT export saved: %s',outFile);
+end
+
+function localGA_writePPTObjectsV6(outFile,slides,slideDir,opts)
+if exist(outFile,'file')==2
+    try
+        delete(outFile);
+    catch
+        error('Could not overwrite PPTX: %s',outFile);
+    end
+end
+
+if ispc && exist('actxserver','file') == 2
+    ppt = []; pres = [];
+    try
+        ppt = actxserver('PowerPoint.Application');
+        ppt.Visible = 1;
+        pres = invoke(ppt.Presentations,'Add');
+        sw = pres.PageSetup.SlideWidth;
+        sh = pres.PageSetup.SlideHeight;
+
+        for i=1:numel(slides)
+            slide = invoke(pres.Slides,'Add',i,12);
+            localGA_setSlideBlackV6(slide);
+            localGA_addTextV6(slide,slides(i).title,20,12,sw-40,34,20,true);
+
+            if i == 1
+                localGA_addPictureFitV6(slide,slides(i).tiles{1},45,70,sw-90,sh-100);
+            else
+                localGA_addTextV6(slide,slides(i).subtitle,20,45,sw-40,24,10,false);
+
+                % Bigger readable left colorbar.
+                if ~isempty(slides(i).cbar)
+                    localGA_addPictureFitV6(slide,slides(i).cbar,10,92,95,500);
+                end
+
+                % 6-panel grid, image aspect preserved.
+                n = numel(slides(i).tiles);
+                cols = 3;
+                rows = 2;
+                left0 = 112;
+                top0 = 82;
+                gapX = 12;
+                gapY = 18;
+                cellW = (sw-left0-24-(cols-1)*gapX)/cols;
+                cellH = (sh-top0-28-(rows-1)*gapY)/rows;
+                for k=1:n
+                    rr = floor((k-1)/cols);
+                    cc = mod(k-1,cols);
+                    x = left0 + cc*(cellW+gapX);
+                    y = top0 + rr*(cellH+gapY);
+                    localGA_addPictureFitV6(slide,slides(i).tiles{k},x,y,cellW,cellH);
+                end
+            end
+
+            localGA_setStatusBestEffortV6(opts,'PPT export: writing slide %d/%d',i,numel(slides));
+            drawnow;
+        end
+
+        invoke(pres,'SaveAs',outFile);
+        invoke(pres,'Close');
+        invoke(ppt,'Quit');
+        pause(0.3);
+        if exist(outFile,'file')==2
+            return;
+        end
+    catch ME
+        try, if ~isempty(pres), invoke(pres,'Close'); end, catch, end
+        try, if ~isempty(ppt), invoke(ppt,'Quit'); end, catch, end
+        warning('ActiveX PPT failed, using fallback slide PNGs: %s',ME.message);
+    end
+end
+
+% Fallback: one slide PNG per PPT slide.
+slidePNGs = cell(1,numel(slides));
+for i=1:numel(slides)
+    slidePNGs{i} = fullfile(slideDir,sprintf('fallback_slide_%03d.png',i));
+    localGA_renderFallbackSlideV6(slidePNGs{i},slides(i),opts);
+    localGA_setStatusBestEffortV6(opts,'PPT fallback export: rendered slide %d/%d',i,numel(slides));
+    drawnow;
+end
+localGA_writePPTSlidePNGs_V6(outFile,slidePNGs);
+end
+
+function localGA_addPictureV6(slide,file,x,y,w,h)
+invoke(slide.Shapes,'AddPicture',file,0,1,x,y,w,h);
+end
+
+function localGA_addPictureFitV6(slide,file,x,y,w,h)
+% Insert image while preserving aspect ratio. Prevents stretched brain panels.
+try
+    info = imfinfo(file);
+    iw = double(info.Width);
+    ih = double(info.Height);
+    if iw > 0 && ih > 0
+        scale = min(w/iw,h/ih);
+        ww = iw*scale;
+        hh = ih*scale;
+        xx = x + (w-ww)/2;
+        yy = y + (h-hh)/2;
+        invoke(slide.Shapes,'AddPicture',file,0,1,xx,yy,ww,hh);
+        return;
+    end
+catch
+end
+invoke(slide.Shapes,'AddPicture',file,0,1,x,y,w,h);
+end
+
+function localGA_setSlideBlackV6(slide)
+try
+    slide.FollowMasterBackground = 0;
+    slide.Background.Fill.Visible = 1;
+    slide.Background.Fill.Solid;
+    slide.Background.Fill.ForeColor.RGB = 0;
+catch
+end
+end
+
+function localGA_addTextV6(slide,txt,x,y,w,h,fs,boldFlag)
+sh = invoke(slide.Shapes,'AddTextbox',1,x,y,w,h);
+try
+    sh.TextFrame.TextRange.Text = txt;
+    sh.TextFrame.TextRange.Font.Size = fs;
+    sh.TextFrame.TextRange.Font.Name = 'Arial';
+    sh.TextFrame.TextRange.Font.Color.RGB = 16777215;
+    if boldFlag, sh.TextFrame.TextRange.Font.Bold = 1; end
+catch
+end
+end
+
+function localGA_writePPTSlidePNGs_V6(outFile,slidePNGs)
+if ~isempty(which('mlreportgen.ppt.Presentation'))
+    import mlreportgen.ppt.*
+    ppt = Presentation(outFile); open(ppt);
+    for i=1:numel(slidePNGs)
+        try, slide = add(ppt,'Blank'); catch, slide = add(ppt); end
+        pic = Picture(slidePNGs{i}); pic.X='0in'; pic.Y='0in'; pic.Width='13.333in'; pic.Height='7.5in'; add(slide,pic);
+    end
+    close(ppt); pause(0.3); if exist(outFile,'file')==2, return; end
+end
+error('Could not create PowerPoint. Fallback slide PNGs were saved.');
+end
+
+function localGA_renderFallbackSlideV6(outFile,SL,opts)
+f = figure('Visible','off', ...
+    'Color',[0 0 0], ...
+    'InvertHardcopy','off', ...
+    'Units','inches', ...
+    'Position',[0.5 0.5 13.333 7.5]);
+annotation(f,'textbox',[0.02 0.91 0.96 0.07], ...
+    'String',SL.title, ...
+    'Color','w', ...
+    'EdgeColor','none', ...
+    'HorizontalAlignment','center', ...
+    'FontSize',16, ...
+    'FontWeight','bold', ...
+    'Interpreter','none');
+
+if numel(SL.tiles)==1 && isempty(SL.cbar)
+    ax = axes('Parent',f,'Position',[0.05 0.08 0.90 0.78]);
+    image(ax,imread(SL.tiles{1}));
+    axis(ax,'image'); axis(ax,'off');
+else
+    annotation(f,'textbox',[0.08 0.86 0.90 0.035], ...
+        'String',SL.subtitle, ...
+        'Color','w', ...
+        'EdgeColor','none', ...
+        'HorizontalAlignment','left', ...
+        'FontSize',8.5, ...
+        'Interpreter','none');
+    if ~isempty(SL.cbar)
+        axc = axes('Parent',f,'Position',[0.010 0.12 0.075 0.74]);
+        image(axc,imread(SL.cbar));
+        axis(axc,'image'); axis(axc,'off');
+    end
+    n = numel(SL.tiles);
+    cols = 3; rows = 2;
+    left0 = 0.095; top0 = 0.84; W = 0.885; H = 0.73; gapX = 0.016; gapY = 0.035;
+    cw = (W-(cols-1)*gapX)/cols;
+    ch = (H-(rows-1)*gapY)/rows;
+    for k=1:n
+        rr = floor((k-1)/cols);
+        cc = mod(k-1,cols);
+        x = left0 + cc*(cw+gapX);
+        y = top0 - (rr+1)*ch - rr*gapY;
+        ax = axes('Parent',f,'Position',[x y cw ch]);
+        image(ax,imread(SL.tiles{k}));
+        axis(ax,'image'); axis(ax,'off');
+    end
+end
+print(f,outFile,'-dpng','-r180','-opengl');
+close(f);
+end
+
+function localGA_makeInfoPNGV6(outFile,txt)
+f = figure('Visible','off', ...
+    'Color',[0 0 0], ...
+    'InvertHardcopy','off', ...
+    'Units','pixels', ...
+    'Position',[100 100 1800 1000]);
+ax = axes('Parent',f,'Position',[0 0 1 1]);
+axis(ax,'off'); hold(ax,'on');
+text(ax,0.04,0.94,'GroupAnalysis multi-slice motor SCM export', ...
+    'Units','normalized', ...
+    'Color',[1 1 1], ...
+    'FontName','Arial', ...
+    'FontSize',28, ...
+    'FontWeight','bold', ...
+    'Interpreter','none', ...
+    'VerticalAlignment','top');
+lines0 = regexp(txt,sprintf('\n'),'split');
+lines0 = lines0(~cellfun(@isempty,lines0));
+y = 0.86; dy = 0.038;
+for i=1:numel(lines0)
+    L = lines0{i};
+    if isempty(strtrim(L)), y = y - dy; continue; end
+    if ~isempty(strfind(L,'|'))
+        rectangle('Parent',ax,'Position',[0.035 y-0.026 0.93 0.034], ...
+            'EdgeColor',[0.28 0.28 0.28], ...
+            'FaceColor',[0.055 0.055 0.055]);
+    end
+    text(ax,0.05,y,L, ...
+        'Units','normalized', ...
+        'Color',[0.95 0.95 0.95], ...
+        'FontName','Consolas', ...
+        'FontSize',16, ...
+        'Interpreter','none', ...
+        'VerticalAlignment','middle');
+    y = y - dy;
+    if y < 0.05, break; end
+end
+print(f,outFile,'-dpng','-r150','-opengl');
+close(f);
+end
+
+function txtOut = localGA_makeInfoTextV6(G,E,opts)
+subs = {};
+try
+    for i=1:numel(G.subjects)
+        animal = G.subjects(i).animal;
+        groupName = G.subjects(i).group;
+        condName = G.subjects(i).condition;
+        fileName = localGA_localNameV6(G.subjects(i).bundleFile);
+        subs{end+1} = sprintf('%s | %s | %s | %s', animal, groupName, condName, fileName); %#ok<AGROW>
+    end
+catch
+end
+if isempty(subs), subs = {'unknown | unknown | unknown | unknown'}; end
+txtOut = sprintf('Animal / subject | Group | Condition | Bundle file\n');
+txtOut = [txtOut sprintf('%s\n', subs{:})];
+txtOut = [txtOut sprintf('\nExport settings\n')];
+txtOut = [txtOut sprintf('Slices exported | %s | Frames | %d\n', mat2str(G.selectedSlices), E.nFrames)];
+txtOut = [txtOut sprintf('TR / total duration | %.4g s | %.2f min\n', G.TR, max(G.tsec)/60)];
+txtOut = [txtOut sprintf('Baseline / injection | %g-%g s | injection %.0f s | window %.0f s\n', opts.baseWin(1),opts.baseWin(2),opts.injSec,opts.winLen)];
+txtOut = [txtOut sprintf('Polarity / underlay | %s | %s\n', opts.polarity, opts.underlayMode)];
+txtOut = [txtOut sprintf('Positive caxis | [%g %g] | Negative caxis | [%g %g]\n', opts.caxis(1),opts.caxis(2),opts.negCaxis(1),opts.negCaxis(2))];
+txtOut = [txtOut sprintf('Alpha / alpha modulation | %.0f%%%% | ON=%d | [%g %g]\n', opts.alphaPercent,double(opts.alphaModOn),opts.modMin,opts.modMax)];
+txtOut = [txtOut sprintf('Threshold / sigma | %g | %g\n', opts.threshold,opts.sigma)];
+txtOut = [txtOut sprintf('\nPNG note\nEach brain tile is saved separately in *_PNGs/brain_tiles_png.\nPPT slides contain up to 6 brain PNGs per slide, slice-by-slice like SCM_gui motor export.\n')];
+end
+
+function localGA_makeColorbarPNGV6(outFile,opts)
+f = figure('Visible','off', ...
+    'Color',[0 0 0], ...
+    'InvertHardcopy','off', ...
+    'Units','pixels', ...
+    'Position',[100 100 340 980]);
+ax = axes('Parent',f,'Position',[0.12 0.07 0.10 0.86]);
+imagesc(ax,[0 1;0 1]);
+set(ax,'Visible','off');
+[cm,cax] = localGA_cmapForOptsV6(opts);
+colormap(ax,cm);
+caxis(ax,cax);
+cb = colorbar(ax,'Position',[0.34 0.07 0.30 0.86]);
+try
+    cb.Color = 'w';
+    cb.FontSize = 16;
+    cb.LineWidth = 1.5;
+    mode = localGA_polarityModeV11(opts);
+    if mode == 2
+        cb.Label.String = 'Negative |signal change| (%)';
+    else
+        cb.Label.String = 'Signal change (%)';
+    end
+    cb.Label.Color = 'w';
+    cb.Label.FontSize = 16;
+    cb.Label.FontWeight = 'bold';
+catch
+end
+print(f,outFile,'-dpng','-r180','-opengl');
+close(f);
+end
+
+function localGA_renderTilePNGV6(outFile,bg,M,opts,lbl)
+[RGB,A,cmap,cax] = localGA_overlayRGBV6(bg,M,opts);
+f = figure('Visible','off', ...
+    'Color',[0 0 0], ...
+    'InvertHardcopy','off', ...
+    'Units','pixels', ...
+    'Position',[100 100 1200 820]);
+
+% Big centered title area above the brain image.
+annotation(f,'textbox',[0.02 0.925 0.96 0.060], ...
+    'String',lbl, ...
+    'Color','w', ...
+    'EdgeColor','none', ...
+    'HorizontalAlignment','center', ...
+    'VerticalAlignment','middle', ...
+    'FontName','Arial', ...
+    'FontSize',24, ...
+    'FontWeight','bold', ...
+    'Interpreter','none');
+
+ax = axes('Parent',f,'Position',[0.025 0.040 0.950 0.875]);
+image(ax,localGA_underlayRGBV6(bg));
+axis(ax,'image');
+axis(ax,'off');
+hold(ax,'on');
+h = image(ax,RGB);
+set(h,'AlphaData',A);
+try, set(h,'AlphaDataMapping','none'); catch, end
+colormap(ax,cmap);
+caxis(ax,cax);
+print(f,outFile,'-dpng','-r180','-opengl');
+close(f);
+end
+
+function mode = localGA_polarityModeV11(opts)
+% SCM_gui signMode equivalent: 1 positive, 2 negative, 3 signed positive+negative.
+mode = 1;
+try
+    pol = lower(strtrim(char(opts.polarity)));
+catch
+    pol = 'positive only';
+end
+if ~isempty(strfind(pol,'negative')) && isempty(strfind(pol,'positive'))
+    mode = 2;
+elseif ~isempty(strfind(pol,'+')) || ~isempty(strfind(pol,'both')) || ~isempty(strfind(pol,'pos/neg')) || ~isempty(strfind(pol,'positive + negative'))
+    mode = 3;
+else
+    mode = 1;
+end
+end
+
+function [posLo,posHi,negHi] = localGA_colorLimitsV11(opts)
+posLo = 0; posHi = 100; negHi = 100;
+try
+    ca = double(opts.caxis(:)');
+    if numel(ca) >= 2 && all(isfinite(ca(1:2)))
+        posLo = ca(1);
+        posHi = ca(2);
+    end
+catch
+end
+try
+    nca = double(opts.negCaxis(:)');
+    if numel(nca) >= 2 && all(isfinite(nca(1:2)))
+        negHi = max(abs(nca(1:2)));
+    end
+catch
+end
+if ~isfinite(posLo), posLo = 0; end
+if ~isfinite(posHi) || posHi <= posLo
+    tmp = max(abs([posLo posHi 100]));
+    if ~isfinite(tmp) || tmp <= 0, tmp = 100; end
+    posLo = 0;
+    posHi = tmp;
+end
+if ~isfinite(negHi) || negHi <= 0
+    negHi = max(abs([posLo posHi 100]));
+end
+if ~isfinite(negHi) || negHi <= 0
+    negHi = 100;
+end
+end
+
+function [posCM,negMagCM,signedCM] = localGA_scmColormapsV11(n)
+% Exact SCM_gui-style colormap selection.
+% positive: blackbdy_iso if available, else hot.
+% negative-only magnitude: black at 0, winter at high magnitude.
+% signed: winter -> black at zero -> blackbody.
+if nargin < 1 || isempty(n), n = 256; end
+n = max(2,round(n));
+
+if exist('blackbdy_iso','file') == 2
+    posCM = blackbdy_iso(n);
+else
+    posCM = hot(n);
+end
+posCM = min(max(posCM,0),1);
+if ~isempty(posCM), posCM(1,:) = [0 0 0]; end
+
+if exist('winter_brain_fsl','file') == 2
+    winterCM = winter_brain_fsl(n);
+else
+    winterCM = winter(n);
+end
+winterCM = min(max(winterCM,0),1);
+
+% Signed SCM negative half: strongest negative is winter, zero is black.
+nNeg = floor(n/2);
+nPos = n - nNeg;
+if exist('winter_brain_fsl','file') == 2
+    negSigned = winter_brain_fsl(max(nNeg,2));
+else
+    negSigned = winter(max(nNeg,2));
+end
+negSigned = negSigned(1:nNeg,:);
+if nNeg > 0
+    negSigned = negSigned .* repmat(linspace(1,0,nNeg)',1,3);
+    negSigned(end,:) = [0 0 0];
+end
+
+if exist('blackbdy_iso','file') == 2
+    posSigned = blackbdy_iso(max(nPos,2));
+else
+    posSigned = hot(max(nPos,2));
+end
+posSigned = posSigned(1:nPos,:);
+if ~isempty(posSigned), posSigned(1,:) = [0 0 0]; end
+
+signedCM = min(max([negSigned; posSigned],0),1);
+
+% Negative-only uses magnitude map abs(negative): 0 should be black, high magnitude winter.
+negMagCM = flipud(negSigned);
+if isempty(negMagCM)
+    negMagCM = winterCM;
+end
+negMagCM = min(max(negMagCM,0),1);
+if ~isempty(negMagCM), negMagCM(1,:) = [0 0 0]; end
+end
+
+function [RGB,A,cm,cax] = localGA_overlayRGBV6(bg,M,opts)
+% V11: exact SCM_gui-style sign handling and alpha modulation for PPT export.
+M = double(M);
+M(~isfinite(M)) = 0;
+sz = size(M);
+
+if ~isfield(opts,'alphaModOn'), opts.alphaModOn = true; end
+if ~isfield(opts,'threshold'), opts.threshold = 0; end
+if ~isfield(opts,'alphaPercent'), opts.alphaPercent = 100; end
+if ~isfield(opts,'modMin'), opts.modMin = 15; end
+if ~isfield(opts,'modMax'), opts.modMax = 30; end
+if ~isfield(opts,'caxis'), opts.caxis = [0 100]; end
+if ~isfield(opts,'negCaxis'), opts.negCaxis = [-100 0]; end
+
+[posLo,posHi,negHi] = localGA_colorLimitsV11(opts);
+mode = localGA_polarityModeV11(opts);
+[posCM,negMagCM,signedCM] = localGA_scmColormapsV11(256);
+
+% SCM_gui buildDisplayedOverlay equivalent.
+switch mode
+    case 1
+        showMask = M > 0;
+        dispMap = M;
+        cm = posCM;
+        cax = [posLo posHi];
+        RGB = localGA_colorizeV6(dispMap,posLo,posHi,posCM);
+    case 2
+        showMask = M < 0;
+        dispMap = abs(min(M,0));
+        cm = negMagCM;
+        cax = [0 negHi];
+        RGB = localGA_colorizeV6(dispMap,0,negHi,negMagCM);
+    otherwise
+        showMask = isfinite(M) & M ~= 0;
+        dispMap = M;
+        cm = signedCM;
+        cax = [-negHi posHi];
+        RGB = localGA_colorizeV6(dispMap,-negHi,posHi,signedCM);
+end
+
+brain = localGA_brainMaskFromUnderlayV11(bg,sz);
+thr = abs(double(opts.threshold));
+thrMask = double((abs(M) >= thr) & showMask) .* double(brain);
+
+a = max(0,min(100,double(opts.alphaPercent))) / 100;
+mMin = double(opts.modMin);
+mMax = double(opts.modMax);
+if ~isfinite(mMin), mMin = 15; end
+if ~isfinite(mMax), mMax = 30; end
+if mMax < mMin, tmp=mMin; mMin=mMax; mMax=tmp; end
+
+if ~logical(opts.alphaModOn)
+    A = a .* thrMask;
+else
+    effLo = max(mMin,thr);
+    effHi = mMax;
+    mag = abs(M);
+    mag(~showMask) = NaN;
+    if ~isfinite(effHi) || effHi <= effLo
+        tmpv = mag(isfinite(mag));
+        if isempty(tmpv)
+            effHi = effLo + eps;
+        else
+            effHi = max(tmpv);
+        end
+    end
+    if ~isfinite(effHi) || effHi <= effLo
+        effHi = effLo + eps;
+    end
+    modv = (abs(M) - effLo) ./ max(eps,(effHi-effLo));
+    modv(~isfinite(modv)) = 0;
+    modv = min(max(modv,0),1);
+    modv(~showMask) = 0;
+
+    if mode == 1
+        A = a .* modv .* thrMask;
+    else
+        A = a .* (0.20 + 0.80 .* modv) .* thrMask;
+    end
+end
+
+A(~isfinite(A)) = 0;
+A = min(max(A,0),1);
+
+for cc=1:3
+    C = RGB(:,:,cc);
+    C(A <= 0) = 0;
+    RGB(:,:,cc) = C;
+end
+end
+
+function brain = localGA_brainMaskFromUnderlayV11(bg,sz)
+try
+    G = localGA_underlayRGBV6(bg);
+    G = mean(G,3);
+    mx = max(G(:));
+    if ~isfinite(mx) || mx <= 0
+        brain = true(sz);
+        return;
+    end
+    brain = G > max(0.02,0.15*mx);
+    if nnz(brain) < 10, brain = true(sz); end
+catch
+    brain = true(sz);
+end
+end
+
+function RGB=localGA_colorizeV6(V,lo,hi,cm)
+if hi<=lo, hi=lo+eps; end
+t=(double(V)-lo)./(hi-lo); t=min(max(t,0),1); t(~isfinite(t))=0; idx=1+round(t*(size(cm,1)-1));
+RGB=zeros([size(V) 3]); for c=1:3, C=cm(:,c); RGB(:,:,c)=reshape(C(idx(:)),size(V)); end
+end
+
+function cm=localGA_blackbodyV6(n)
+% Shared blackbody-like positive map: black -> red -> orange/yellow -> white.
+if nargin < 1 || isempty(n), n = 256; end
+n = max(2,round(n));
+x = linspace(0,1,n)';
+anchorX = [0.00 0.18 0.40 0.68 1.00]';
+anchorC = [ ...
+    0.00 0.00 0.00;  ...
+    0.35 0.00 0.00;  ...
+    0.85 0.05 0.00;  ...
+    1.00 0.75 0.00;  ...
+    1.00 1.00 1.00];
+cm = zeros(n,3);
+for cc=1:3
+    cm(:,cc) = interp1(anchorX,anchorC(:,cc),x,'linear','extrap');
+end
+cm = max(0,min(1,cm));
+end
+
+function RGB=localGA_underlayRGBV6(U)
+U=double(U); U=squeeze(U); if ndims(U)==3 && size(U,3)==3, RGB=U; if max(RGB(:))>1, RGB=RGB/255; end; RGB=max(0,min(1,RGB)); return; end
+U(~isfinite(U))=0; v=U(:); v=v(isfinite(v)); if isempty(v), U01=zeros(size(U)); else, lo=localGA_prctileV6(v,1); hi=localGA_prctileV6(v,99); if hi<=lo, U01=zeros(size(U)); else, U01=min(max((U-lo)/(hi-lo),0),1); end, end
+RGB=repmat(U01,[1 1 3]);
+end
+
+function m=localGA_brainMaskFromUnderlayV6(U,sz)
+G=localGA_underlayRGBV6(U); G=mean(G,3); thr=max(0.02,0.15*max(G(:))); m=G>thr; if nnz(m)<10, m=true(sz); end
+end
+
+function [cm,cax]=localGA_cmapForOptsV6(opts)
+% V11: colorbar matches exact SCM-style overlay rendering.
+[posLo,posHi,negHi] = localGA_colorLimitsV11(opts);
+mode = localGA_polarityModeV11(opts);
+[posCM,negMagCM,signedCM] = localGA_scmColormapsV11(256);
+switch mode
+    case 1
+        cm = posCM;
+        cax = [posLo posHi];
+    case 2
+        cm = negMagCM;
+        cax = [0 negHi];
+    otherwise
+        cm = signedCM;
+        cax = [-negHi posHi];
+end
+end
+
+function G=localGA_loadBundleV6(bf)
+L=load(bf); G=[];
+if isfield(L,'G') && isstruct(L.G), G=L.G; return; end
+if isfield(L,'E') && isstruct(L.E), G=L.E; return; end
+if isfield(L,'GA') && isstruct(L.GA), G=L.GA; return; end
+fn=fieldnames(L); for i=1:numel(fn), v=L.(fn{i}); if isstruct(v) && (isfield(v,'pscAtlas4D')||isfield(v,'psc4D')||isfield(v,'functional4D')), G=v; return; end, end
+error('Could not find bundle struct G/E/GA in: %s',bf);
+end
+
+function X=localGA_getPSCFieldV6(G)
+flds={'pscAtlas4D','psc4D','PSC','functionalPSC','Ipsc'}; X=[]; for i=1:numel(flds), if isfield(G,flds{i}) && ~isempty(G.(flds{i})), X=G.(flds{i}); return; end, end
+error('Bundle has no PSC time series field.');
+end
+
+function X=localGA_normalizePSCV6(X)
+X=double(X); X(~isfinite(X))=0;
+if ndims(X)==2, error('PSC is only 2D static map, not a time series.'); end
+if ndims(X)==3, X=reshape(X,[size(X,1) size(X,2) 1 size(X,3)]); return; end
+if ndims(X)==4, return; end
+while ndims(X)>4, X=squeeze(mean(X,1)); end
+if ndims(X)==3, X=reshape(X,[size(X,1) size(X,2) 1 size(X,3)]); end
+if ndims(X)~=4, error('PSC must normalize to [Y X Z T].'); end
+end
+
+function TR=localGA_getTRV6(G)
+TR=NaN; try, if isfield(G,'TR') && ~isempty(G.TR), TR=double(G.TR(1)); end, catch, end
+try, if (~isfinite(TR)||TR<=0) && isfield(G,'tsec') && numel(G.tsec)>1, TR=median(diff(double(G.tsec(:)))); end, catch, end
+try, if (~isfinite(TR)||TR<=0) && isfield(G,'tMin') && numel(G.tMin)>1, TR=60*median(diff(double(G.tMin(:)))); end, catch, end
+if ~isfinite(TR)||TR<=0, TR=1; end
+end
+
+function U=localGA_getUnderlayStackV6(G,mode,nY,nX,nZ)
+U=[]; mode=lower(strtrim(mode));
+try
+    if isfield(G,'underlays') && isstruct(G.underlays)
+        if strcmp(mode,'selected') && isfield(G,'underlaySelectedMode'), mode=lower(strtrim(char(G.underlaySelectedMode))); end
+        order={mode,'normal','histology','vascular','regions'};
+        for k=1:numel(order)
+            fn=order{k}; if isempty(fn), continue; end
+            if isfield(G.underlays,fn)
+                E=G.underlays.(fn); if isstruct(E) && isfield(E,'data'), U=E.data; else, U=E; end
+                if ~isempty(U), break; end
+            end
+        end
+    end
+catch, U=[]; end
+if isempty(U)
+    flds={'underlayAtlas','underlay2D','underlayAtlas2D','brainImage','commonUnderlay','bg','functional4D'};
+    for i=1:numel(flds), if isfield(G,flds{i}) && ~isempty(G.(flds{i})), U=G.(flds{i}); break; end, end
+end
+if isempty(U), U=zeros(nY,nX,nZ); end
+U=localGA_fitUnderlayV6(U,nY,nX,nZ);
+end
+
+function U=localGA_fitUnderlayV6(U,nY,nX,nZ)
+U=squeeze(double(U)); U(~isfinite(U))=0;
+if ndims(U)==2
+    U2=localGA_resize2V6(U,nY,nX); U=repmat(U2,[1 1 nZ]); return;
+end
+if ndims(U)==3
+    if size(U,3)==3 && nZ==1, U=mean(U,3); U=localGA_resize2V6(U,nY,nX); U=reshape(U,[nY nX 1]); return; end
+    V=zeros(nY,nX,size(U,3)); for z=1:size(U,3), V(:,:,z)=localGA_resize2V6(U(:,:,z),nY,nX); end
+    if size(V,3)==nZ, U=V; else, idx=round(linspace(1,size(V,3),nZ)); U=V(:,:,idx); end
+    return;
+end
+if ndims(U)==4
+    V=mean(U,4); U=localGA_fitUnderlayV6(V,nY,nX,nZ); return;
+end
+U=zeros(nY,nX,nZ);
+end
+
+function Xo=localGA_fitPSCToTargetV6(X,nY,nX,nZ,nT)
+Xo=zeros(nY,nX,nZ,nT);
+for z=1:nZ
+    zz=min(z,size(X,3));
+    for t=1:nT
+        tt=min(t,size(X,4)); Xo(:,:,z,t)=localGA_resize2V6(X(:,:,zz,tt),nY,nX);
+    end
+end
+end
+
+function B=localGA_resize2V6(A,nY,nX)
+A=double(A); if size(A,1)==nY && size(A,2)==nX, B=A; return; end
+try, B=imresize(A,[nY nX],'bilinear'); catch, [Y,X]=size(A); [xq,yq]=meshgrid(linspace(1,X,nX),linspace(1,Y,nY)); B=interp2(A,xq,yq,'linear',0); end
+end
+
+function opts=localGA_readDisplayOptsV6(S)
+opts = struct();
+opts.caxis = [0 100];
+opts.negCaxis = [-100 0];
+opts.threshold = 0;
+opts.alphaPercent = 100;
+opts.alphaModOn = true;
+opts.modMin = 10;
+opts.modMax = 20;
+opts.sigma = 0;
+opts.polarity = 'Positive only';
+opts.underlayMode = 'selected';
+opts.baseWin = [20 40];
+
+% Positive caxis from GroupAnalysis GUI.
+try, if isfield(S,'mapCaxis') && numel(S.mapCaxis)>=2, opts.caxis=double(S.mapCaxis(1:2)); end, catch, end
+try
+    if isfield(S,'hMapCaxis') && ishghandle(S.hMapCaxis)
+        opts.caxis = localGA_parseRangeV6(get(S.hMapCaxis,'String'),opts.caxis);
+    end
+catch
+end
+
+% Negative caxis if present; otherwise mirror positive range.
+negFound = false;
+try, if isfield(S,'mapNegCaxis') && numel(S.mapNegCaxis)>=2, opts.negCaxis=double(S.mapNegCaxis(1:2)); negFound=true; end, catch, end
+try, if ~negFound && isfield(S,'mapNegativeCaxis') && numel(S.mapNegativeCaxis)>=2, opts.negCaxis=double(S.mapNegativeCaxis(1:2)); negFound=true; end, catch, end
+try
+    if ~negFound && isfield(S,'hMapNegCaxis') && ishghandle(S.hMapNegCaxis)
+        opts.negCaxis = localGA_parseRangeV6(get(S.hMapNegCaxis,'String'),opts.negCaxis);
+        negFound = true;
+    end
+catch
+end
+if ~negFound
+    mx = max(abs(opts.caxis));
+    if ~isfinite(mx) || mx <= 0, mx = 100; end
+    opts.negCaxis = [-mx 0];
+end
+if opts.negCaxis(1) > opts.negCaxis(2), opts.negCaxis = fliplr(opts.negCaxis); end
+if opts.negCaxis(2) > 0 && opts.negCaxis(1) >= 0
+    opts.negCaxis = [-max(abs(opts.negCaxis)) 0];
+end
+
+try, if isfield(S,'mapThreshold'), opts.threshold=double(S.mapThreshold(1)); end, catch, end
+try, if isfield(S,'mapModMin'), opts.modMin=double(S.mapModMin(1)); end, catch, end
+try, if isfield(S,'mapModMax'), opts.modMax=double(S.mapModMax(1)); end, catch, end
+try, if isfield(S,'hMapModMin') && ishghandle(S.hMapModMin), opts.modMin=str2double(get(S.hMapModMin,'String')); end, catch, end
+try, if isfield(S,'hMapModMax') && ishghandle(S.hMapModMax), opts.modMax=str2double(get(S.hMapModMax,'String')); end, catch, end
+try, if isfield(S,'mapSigma'), opts.sigma=double(S.mapSigma(1)); end, catch, end
+
+% Alpha modulation ON/OFF, compatible with current and future GUI fields.
+try, if isfield(S,'mapAlphaModOn'), opts.alphaModOn=logical(S.mapAlphaModOn); end, catch, end
+try, if isfield(S,'alphaModOn'), opts.alphaModOn=logical(S.alphaModOn); end, catch, end
+try, if isfield(S,'hMapAlphaMod') && ishghandle(S.hMapAlphaMod), opts.alphaModOn=logical(get(S.hMapAlphaMod,'Value')); end, catch, end
+try, if isfield(S,'hAlphaMod') && ishghandle(S.hAlphaMod), opts.alphaModOn=logical(get(S.hAlphaMod,'Value')); end, catch, end
+
+% Polarity from GUI.
+try, if isfield(S,'mapPolarity') && ~isempty(S.mapPolarity), opts.polarity=char(S.mapPolarity); end, catch, end
+try
+    if isfield(S,'hMapPolarity') && ishghandle(S.hMapPolarity)
+        items = get(S.hMapPolarity,'String');
+        val = get(S.hMapPolarity,'Value');
+        if iscell(items), opts.polarity = items{val}; else, opts.polarity = strtrim(items(val,:)); end
+    end
+catch
+end
+
+% Alpha percent.
+try, if isfield(S,'mapAlphaPercent'), opts.alphaPercent=double(S.mapAlphaPercent(1)); end, catch, end
+try, if isfield(S,'mapAlphaPct'), opts.alphaPercent=double(S.mapAlphaPct(1)); end, catch, end
+try, if isfield(S,'alphaPercent'), opts.alphaPercent=double(S.alphaPercent(1)); end, catch, end
+try, if isfield(S,'mapAlpha') && S.mapAlpha <= 1, opts.alphaPercent=100*double(S.mapAlpha(1)); end, catch, end
+
+if ~isfinite(opts.alphaPercent), opts.alphaPercent=100; end
+opts.alphaPercent=max(0,min(100,opts.alphaPercent));
+if ~isfinite(opts.modMin), opts.modMin=10; end
+if ~isfinite(opts.modMax), opts.modMax=20; end
+if opts.modMax<opts.modMin, tmp=opts.modMin; opts.modMin=opts.modMax; opts.modMax=tmp; end
+if ~isfinite(opts.sigma), opts.sigma = 0; end
+end
+
+function [rows,bfs]=localGA_collectBundlesV6(S)
+rows=[]; bfs={}; seen={};
+if ~isfield(S,'subj') || isempty(S.subj), return; end
+for r=1:size(S.subj,1)
+    use=true; try, use=localGA_toLogicalV6(S.subj{r,1}); catch, end
+    if ~use, continue; end
+    bf=''; try, bf=strtrim(char(S.subj{r,8})); catch, end
+    if isempty(bf) || exist(bf,'file')~=2, continue; end
+    key=lower(strrep(bf,'/','\'));
+    if any(strcmp(seen,key)), continue; end
+    seen{end+1}=key; rows(end+1)=r; bfs{end+1}=bf; %#ok<AGROW>
+end
+end
+
+function ri=localGA_rowInfoV6(S,row,bf,G)
+ri=struct('row',row,'animal','','condition','','group','','bundleFile',bf);
+try, ri.animal=strtrim(char(S.subj{row,2})); catch, end
+try, ri.group=strtrim(char(S.subj{row,5})); catch, end
+try, ri.condition=strtrim(char(S.subj{row,6})); catch, end
+try, if isempty(ri.animal) && isfield(G,'animalID'), ri.animal=char(G.animalID); end, catch, end
+if isempty(ri.animal), [~,ri.animal]=fileparts(bf); end
+end
+
+function tf=localGA_toLogicalV6(x)
+if islogical(x), tf=logical(x(1)); elseif isnumeric(x), tf=isfinite(x(1)) && x(1)~=0; else, s=lower(strtrim(char(x))); tf=any(strcmp(s,{'1','true','yes','y','on'})); end
+end
+
+function idx=localGA_secToIdxV6(win,TR,nT)
+idx=[max(1,min(nT,floor(win(1)/TR)+1)) max(1,min(nT,floor(win(2)/TR)+1))]; if idx(2)<idx(1), idx=fliplr(idx); end
+end
+
+function r=localGA_parseRangeV6(s,fb)
+r = fb;
+try
+    s = strtrim(char(s));
+    s = regexprep(s,'(?<=\d)\s*-\s*(?=\d)',' ');
+    tok = regexp(s,'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?','match');
+    if numel(tok) >= 2
+        v1 = str2double(tok{1});
+        v2 = str2double(tok{2});
+        if isfinite(v1) && isfinite(v2)
+            r = [v1 v2];
+        end
+    end
+catch
+    r = fb;
+end
+if numel(r) < 2 || any(~isfinite(r(1:2)))
+    r = fb;
+end
+if r(2)<r(1), r=fliplr(r); end
+end
+
+function vals=localGA_parseNumListV6(s,fb)
+try, vals=eval(['[' char(s) ']']); vals=vals(:)'; vals=vals(isfinite(vals)); catch, vals=fb; end
+end
+
+function d=localGA_smartStartDirV6(S,bf)
+d=pwd; try, [p,~,~]=fileparts(bf); if exist(p,'dir')==7, d=p; end, catch, end
+try, if isfield(S,'outDir') && exist(S.outDir,'dir')==7, d=S.outDir; end, catch, end
+end
+
+function s=localGA_phaseLabelV6(s0,s1,inj)
+if ~isfinite(inj), s=sprintf('%.1f min',s0/60); elseif s1<=inj, s='Baseline'; elseif s0<inj && s1>inj, s='Injection'; else, s=sprintf('PI %.2f-%.2f min',(s0-inj)/60,(s1-inj)/60); end
+end
+
+function q=localGA_prctileV6(v,p)
+v=sort(double(v(:))); v=v(isfinite(v)); if isempty(v), q=0; return; end; n=numel(v); k=1+(n-1)*(p/100); k1=max(1,min(n,floor(k))); k2=max(1,min(n,ceil(k))); if k1==k2, q=v(k1); else, q=v(k1)+(k-k1)*(v(k2)-v(k1)); end
+end
+
+function tf=localGA_containsV6(s,pat)
+tf=~isempty(strfind(lower(char(s)),lower(char(pat))));
+end
+
+function B=localGA_smooth2V6(A,sigma)
+try, B=imgaussfilt(A,sigma); return; catch, end
+if sigma<=0, B=A; return; end; r=max(1,ceil(3*sigma)); x=-r:r; g=exp(-(x.^2)/(2*sigma^2)); g=g/sum(g); B=conv2(conv2(double(A),g,'same'),g','same');
+end
+
+function localGA_mkdirV6(d), if exist(d,'dir')~=7, mkdir(d); end, end
+function n=localGA_localNameV6(f), [~,n,e]=fileparts(f); n=[n e]; end
+function s=localGA_stripExtV6(s), [~,s]=fileparts(s); end
+function localGA_setStatusBestEffortV6(opts,varargin)
+try
+    msg = sprintf(varargin{:});
+catch
+    try, msg = char(varargin{1}); catch, msg = ''; end
+end
+if isempty(msg), return; end
+try, fprintf('\n[GA PPT] %s\n',msg); catch, end
+try
+    if isfield(opts,'hFig') && ishghandle(opts.hFig)
+        hFig0 = opts.hFig;
+        hs = findall(hFig0,'Style','text');
+        for ii=1:numel(hs)
+            try
+                tag = get(hs(ii),'Tag');
+                str = get(hs(ii),'String');
+                if ~isempty(strfind(lower(tag),'status')) || ~isempty(strfind(lower(str),'ready')) || ~isempty(strfind(lower(str),'export'))
+                    set(hs(ii),'String',msg);
+                    break;
+                end
+            catch
+            end
+        end
+    end
+catch
+end
+drawnow;
+end
+
+%% END_LOCAL_GA_MOTOR_EXPORT_INTEGRATED_V6

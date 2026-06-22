@@ -296,29 +296,6 @@ for i = 1:numel(fileList)
         if isfield(subj,'compareROI'), FC.subjects(idx).compareROI = subj.compareROI; else, FC.subjects(idx).compareROI = struct(); end
         if isfield(subj,'seedResults'), FC.subjects(idx).seedResults = subj.seedResults; else, FC.subjects(idx).seedResults = struct([]); end
         if isfield(subj,'allEpochs'), FC.subjects(idx).allEpochs = subj.allEpochs; else, FC.subjects(idx).allEpochs = struct([]); end
-        % TARGETED_FCGA_LOAD_SPATIAL_FULLNAMES_20260622
-        % Preserve full region names and spatial maps from FC bundles.
-        if isfield(subj,'fullNames') && ~isempty(subj.fullNames), FC.subjects(idx).fullNames = subj.fullNames(:); else, FC.subjects(idx).fullNames = {}; end
-        if isfield(subj,'sourceFile') && ~isempty(subj.sourceFile), FC.subjects(idx).roiSourceFile = subj.sourceFile; else, FC.subjects(idx).roiSourceFile = ''; end
-        if isfield(subj,'roiSourceFile') && ~isempty(subj.roiSourceFile), FC.subjects(idx).roiSourceFile = subj.roiSourceFile; end
-        FC.subjects(idx).bundleFile = fp;
-        spatialFields = {'roiMap','labelMap','parcelMap','labelMask','roiLabelMask','roiAtlas','atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};
-        for sf = 1:numel(spatialFields)
-            fn = spatialFields{sf};
-            try
-                if isfield(subj,fn) && ~isempty(subj.(fn))
-                    FC.subjects(idx).(fn) = subj.(fn);
-                elseif isfield(B,fn) && ~isempty(B.(fn))
-                    FC.subjects(idx).(fn) = B.(fn);
-                end
-            catch
-            end
-        end
-        try
-            if isfield(subj,'spatialMapNote'), FC.subjects(idx).spatialMapNote = subj.spatialMapNote;
-            elseif isfield(B,'spatialMapNote'), FC.subjects(idx).spatialMapNote = B.spatialMapNote; end
-        catch
-        end
     end
 end
 

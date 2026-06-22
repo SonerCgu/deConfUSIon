@@ -2308,11 +2308,6 @@ try
     delete(findall(pSeedView,'Tag','FC_WarpLabelsButton_20260622'));
 catch
 end
-%% TARGETED_REMOVE_WARP_LABEL_BUTTON_20260623
-try
-    delete(findall(pSeedView,'Tag','FC_WarpLabelsButton_20260622'));
-catch
-end
 % HUMOR_FC_SEED_PANEL_CLEAN_FINAL_20260527_END
 
 
@@ -9770,17 +9765,14 @@ end
 
 
 
-
-
 function fc_manual_align_labels_gui_20260622(mainFig)
 s = guidata(mainFig);
 cs = s.currentSubject;
 if cs < 1 || cs > numel(s.subjects), error('No current subject selected.'); end
 subj = s.subjects(cs);
 if ~isfield(subj,'roiAtlas') || isempty(subj.roiAtlas), error('No ROI label atlas is loaded.'); end
-A0 = fc_manual_build_label_volume_20260623(subj);
-if isempty(A0), error('Could not build ROI label volume from roiAtlas/sliceResults.'); end
-A0 = int32(round(double(A0)));
+A0 = int32(round(double(squeeze(subj.roiAtlas))));
+if ndims(A0)==2, A0 = reshape(A0,size(A0,1),size(A0,2),1); end
 Z = size(A0,3); Awork = A0;
 z = round(Z/2);
 try, if isfield(s,'currentZ') && ~isempty(s.currentZ), z = round(s.currentZ); end, catch, end
@@ -9790,7 +9782,7 @@ U = fc_manual_get_underlay_slice_20260622(subj,z,size(A0,1),size(A0,2));
 f = figure('Name','Manual ROI-label alignment', ...
     'Color',[0.07 0.07 0.075],'NumberTitle','off', ...
     'MenuBar','none','ToolBar','figure', ...
-    'Position',[60 40 1480 940]);
+    'Position',[60 40 1460 930]);
 ax = axes('Parent',f,'Units','normalized','Position',[0.035 0.070 0.705 0.885]);
 uicontrol(f,'Style','text','String','Manual ROI-label alignment', ...
     'Units','normalized','Position',[0.765 0.920 0.22 0.040], ...
@@ -9817,9 +9809,9 @@ hDx=hs(1); hDy=hs(2); hSx=hs(3); hSy=hs(4); hRot=hs(5);
 uicontrol(f,'Style','text','String','Line', ...
     'Units','normalized','Position',[0.765 0.545 0.055 0.032], ...
     'BackgroundColor',[0.07 0.07 0.075],'ForegroundColor',[1 1 1],'HorizontalAlignment','left');
-hLineColor = uicontrol(f,'Style','popupmenu','String',{'White lines','Black lines','Gray lines','White+black'}, ...
-    'Value',3,'Units','normalized','Position',[0.835 0.545 0.110 0.036],'Callback',@(src,evt)fc_manual_align_update_20260622(f));
-hLineSize = uicontrol(f,'Style','edit','String','15', ...
+hLineColor = uicontrol(f,'Style','popupmenu','String',{'White lines','Black lines','White+black'}, ...
+    'Units','normalized','Position',[0.835 0.545 0.110 0.036],'Callback',@(src,evt)fc_manual_align_update_20260622(f));
+hLineSize = uicontrol(f,'Style','edit','String','5', ...
     'Units','normalized','Position',[0.950 0.545 0.040 0.036], ...
     'BackgroundColor',[0.14 0.14 0.16],'ForegroundColor',[1 1 1],'Callback',@(src,evt)fc_manual_align_update_20260622(f));
 uicontrol(f,'Style','pushbutton','String','Update preview','Units','normalized', ...
@@ -9842,58 +9834,7 @@ uicontrol(f,'Style','pushbutton','String','Save && close','Units','normalized','
 uicontrol(f,'Style','pushbutton','String','Cancel','Units','normalized','Position',[0.765 0.035 0.190 0.045],'BackgroundColor',[0.65 0.10 0.10],'ForegroundColor','w','FontWeight','bold','Callback',@(src,evt)fc_manual_align_cancel_20260622(f));
 D = struct('mainFig',mainFig,'ax',ax,'Aorig',A0,'Awork',Awork,'z',z,'outSize',[size(U,1) size(U,2) size(A0,3)], ...
     'hSlice',hSlice,'hDx',hDx,'hDy',hDy,'hSx',hSx,'hSy',hSy,'hRot',hRot,'hLineColor',hLineColor,'hLineSize',hLineSize);
-D.U = U;
-setappdata(f,'D',D);
-fc_manual_align_update_20260622(f);
-uiwait(f);
-end
-
-function A = fc_manual_build_label_volume_20260623(subj)
-A = [];
-try
-    if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
-        SR = subj.sliceResults;
-        fns = {'roiAtlas','labelMap','roiMap','labelMask','roiLabelMask','atlasLabels2D'};
-        tmp = {};
-        for zz = 1:numel(SR)
-            one = [];
-            for ff = 1:numel(fns)
-                if isfield(SR(zz),fns{ff}) && isnumeric(SR(zz).(fns{ff})) && ~isempty(SR(zz).(fns{ff}))
-                    one = squeeze(SR(zz).(fns{ff}));
-                    break;
-                end
-            end
-            if ~isempty(one), tmp{zz} = round(double(one)); end %#ok<AGROW>
-        end
-        good = find(~cellfun(@isempty,tmp));
-        if ~isempty(good)
-            Y = size(tmp{good(1)},1); X = size(tmp{good(1)},2); Z = numel(tmp);
-            A = zeros(Y,X,Z);
-            for zz = 1:Z
-                if zz <= numel(tmp) && ~isempty(tmp{zz})
-                    a = tmp{zz};
-                    if ~isequal(size(a),[Y X]), a = imresize(a,[Y X],'nearest'); end
-                    A(:,:,zz) = round(double(a));
-                elseif zz > 1
-                    A(:,:,zz) = A(:,:,zz-1);
-                end
-            end
-        end
-    end
-catch
-    A = [];
-end
-if isempty(A)
-    try, A = squeeze(round(double(subj.roiAtlas))); catch, A = []; end
-end
-if ~isempty(A) && ndims(A)==2
-    try
-        if isfield(subj,'nSlices') && ~isempty(subj.nSlices), Z = subj.nSlices; else, Z = 1; end
-        A = repmat(A,[1 1 max(1,Z)]);
-    catch
-        A = reshape(A,size(A,1),size(A,2),1);
-    end
-end
+D.U = U; setappdata(f,'D',D); fc_manual_align_update_20260622(f); uiwait(f);
 end
 
 function U = fc_manual_get_underlay_slice_20260622(subj,z,Y,X)
@@ -9931,8 +9872,7 @@ function fc_manual_align_update_20260622(f)
 if ~ishghandle(f), return; end
 D=getappdata(f,'D');
 D.z=max(1,min(get(D.hSlice,'Value'),D.outSize(3)));
-s=guidata(D.mainFig); subj=s.subjects(s.currentSubject);
-D.U=fc_manual_get_underlay_slice_20260622(subj,D.z,D.outSize(1),D.outSize(2));
+s=guidata(D.mainFig); subj=s.subjects(s.currentSubject); D.U=fc_manual_get_underlay_slice_20260622(subj,D.z,D.outSize(1),D.outSize(2));
 setappdata(f,'D',D);
 [dx,dy,sx,sy,rot]=fc_manual_align_params_20260622(D);
 A2=fc_manual_align_transform_slice_20260622(D.Awork(:,:,min(D.z,size(D.Awork,3))),size(D.U),dx,dy,sx,sy,rot);
@@ -9940,15 +9880,9 @@ Ushow=fc_manual_contrast_20260622(D.U); axes(D.ax); cla(D.ax);
 hImg=imagesc(D.ax,Ushow,[0 1]); colormap(D.ax,gray(256)); axis(D.ax,'image'); axis(D.ax,'ij');
 xlim(D.ax,[1 size(Ushow,2)]); ylim(D.ax,[1 size(Ushow,1)]); set(D.ax,'Color',[0 0 0],'XTick',[],'YTick',[]); hold(D.ax,'on');
 [x,y]=fc_manual_align_boundary_xy_20260622(A2);
-lineMode=get(D.hLineColor,'Value'); lw=str2double(get(D.hLineSize,'String')); if ~isfinite(lw)||lw<1, lw=15; end
-hPts=[]; hPts2=[];
-if lineMode==1, hPts=plot(D.ax,x,y,'.','Color',[1 1 1],'MarkerSize',lw); end
-if lineMode==2, hPts=plot(D.ax,x,y,'.','Color',[0 0 0],'MarkerSize',lw); end
-if lineMode==3, hPts=plot(D.ax,x,y,'.','Color',[0.65 0.65 0.65],'MarkerSize',lw); end
-if lineMode==4
-    hPts=plot(D.ax,x,y,'.','Color',[1 1 1],'MarkerSize',lw);
-    hPts2=plot(D.ax,x,y,'.','Color',[0 0 0],'MarkerSize',max(1,lw-5));
-end
+lineMode=get(D.hLineColor,'Value'); lw=str2double(get(D.hLineSize,'String')); if ~isfinite(lw)||lw<1, lw=5; end
+if lineMode==1 || lineMode==3, hPts=plot(D.ax,x,y,'.','Color',[1 1 1],'MarkerSize',lw); else, hPts=[]; end
+if lineMode==2 || lineMode==3, hPts2=plot(D.ax,x,y,'.','Color',[0 0 0],'MarkerSize',max(1,lw-1)); else, hPts2=[]; end
 hold(D.ax,'off');
 title(D.ax,sprintf('Slice %d | dx %.1f dy %.1f sx %.3f sy %.3f rot %.1f°',D.z,dx,dy,sx,sy,rot),'Color',[1 1 1],'Interpreter','none','FontWeight','bold');
 setappdata(f,'Apreview',A2); setappdata(f,'dragStartPoint',[]); setappdata(f,'dragStartDxDy',[]);
@@ -9993,7 +9927,8 @@ function fc_manual_align_reset_20260622(f)
 D=getappdata(f,'D'); set(D.hDx,'String','0'); set(D.hDy,'String','0'); set(D.hSx,'String','1.000'); set(D.hSy,'String','1.000'); set(D.hRot,'String','0'); fc_manual_align_update_20260622(f);
 end
 function fc_manual_align_apply_current_20260622(f)
-D=getappdata(f,'D'); [dx,dy,sx,sy,rot]=fc_manual_align_params_20260622(D); D.z=max(1,min(get(D.hSlice,'Value'),D.outSize(3)));
+D=getappdata(f,'D'); [dx,dy,sx,sy,rot]=fc_manual_align_params_20260622(D);
+D.z=max(1,min(get(D.hSlice,'Value'),D.outSize(3)));
 D.Awork(:,:,D.z)=fc_manual_align_transform_slice_20260622(D.Awork(:,:,D.z),D.outSize(1:2),dx,dy,sx,sy,rot);
 setappdata(f,'D',D); fc_manual_align_save_to_subject_20260622(D); setappdata(D.mainFig,'FCManualAlignApplied_20260622',true); fc_manual_align_reset_20260622(f);
 end
@@ -10008,14 +9943,6 @@ end
 function fc_manual_align_save_to_subject_20260622(D)
 s=guidata(D.mainFig); cs=s.currentSubject; s.subjects(cs).roiAtlas=int32(D.Awork);
 try, s.subjects(cs).labelMap=int32(D.Awork); s.subjects(cs).roiMap=int32(D.Awork); catch, end
-try
-    for zz=1:size(D.Awork,3)
-        s.subjects(cs).sliceResults(zz).roiAtlas=int32(D.Awork(:,:,zz));
-        s.subjects(cs).sliceResults(zz).labelMap=int32(D.Awork(:,:,zz));
-        s.subjects(cs).sliceResults(zz).roiMap=int32(D.Awork(:,:,zz));
-    end
-catch
-end
 try, s.subjects(cs).roiAtlasManualAlign=struct('time',datestr(now),'mode','manual per-slice affine'); catch, end
 try, if iscell(s.roiResults), s.roiResults(cs,:)=cell(1,size(s.roiResults,2)); end, catch, end
 guidata(D.mainFig,s);
@@ -10032,7 +9959,7 @@ function [x,y] = fc_manual_align_boundary_xy_20260622(A)
 A=round(double(A)); B=false(size(A));
 try
 B(:,2:end)=B(:,2:end)|(A(:,2:end)~=A(:,1:end-1)); B(2:end,:)=B(2:end,:)|(A(2:end,:)~=A(1:end-1,:)); B=B&A~=0;
-B(1:4,:)=false; B(end-3:end,:)=false; B(:,1:4)=false; B(:,end-3:end)=false;
+B(1:3,:)=false; B(end-2:end,:)=false; B(:,1:3)=false; B(:,end-2:end)=false;
 [y,x]=find(B); if numel(x)>65000, step=ceil(numel(x)/65000); x=x(1:step:end); y=y(1:step:end); end
 catch, x=[]; y=[]; end
 end

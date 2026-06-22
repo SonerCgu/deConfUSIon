@@ -1,22 +1,21 @@
-function varargout = GroupAnalysis_Common(action, varargin)
+
+% GA_FISHERZ_STATS_PATCH_20260512
+% FC group matrices are averaged/statistically compared in Fisher z space.
+% Convert back with tanh(Z) only for Pearson-r display if needed.
+function varargout = GroupAnalysis_FC(action, varargin)
 
 if nargin < 1 || isempty(action)
-    error('GroupAnalysis_Common requires an action string.');
+    error('GroupAnalysis_FC requires an action string.');
 end
 
 actionIn = strtrim(char(action));
 fnLocal = resolveLocalActionName_GA_dispatch(actionIn);
 
 if isempty(fnLocal)
-    error('Unknown GroupAnalysis_Common action: %s', actionIn);
+    error('Unknown GroupAnalysis_FC action: %s', actionIn);
 end
 
-try
-    fh = eval(['@' fnLocal]);
-catch
-    fh = str2func(fnLocal);
-end
-
+fh = str2func(fnLocal);
 
 try
     if nargout == 0
@@ -25,8 +24,8 @@ try
         [varargout{1:nargout}] = fh(varargin{:});
     end
 catch ME
-    try, GA_printErrorLocal(ME,'caught error in GroupAnalysis_Common.m'); catch, end
-    ga_print_module_error_local(ME, actionIn, fnLocal, 'GroupAnalysis_Common');
+    try, GA_printErrorLocal(ME,'caught error in GroupAnalysis_FC.m'); catch, end
+    ga_print_module_error_local(ME, actionIn, fnLocal, 'GroupAnalysis_FC');
     rethrow(ME);
 end
 end
@@ -105,6 +104,1648 @@ end
 % =====================================================================
 % COPIED LOCAL FUNCTIONS FROM GroupAnalysis.m
 % =====================================================================
+
+function fileList = findFCBundlesRecursive(rootDir)
+fileList = {};
+
+if nargin < 1 || isempty(rootDir) || exist(rootDir,'dir') ~= 7
+    return;
+end
+
+d = dir(fullfile(rootDir,'FC_GroupBundle_*.mat'));
+for i = 1:numel(d)
+    fileList{end+1,1} = fullfile(d(i).folder,d(i).name); %#ok<AGROW>
+end
+
+sub = dir(rootDir);
+for i = 1:numel(sub)
+    if ~sub(i).isdir
+        continue;
+    end
+
+    nm = sub(i).name;
+    if strcmp(nm,'.') || strcmp(nm,'..')
+        continue;
+    end
+
+    more = findFCBundlesRecursive(fullfile(rootDir,nm));
+    if ~isempty(more)
+        fileList = [fileList; more(:)]; %#ok<AGROW>
+    end
+end
+end
+
+function tf = isFCGroupBundleFile(fp)
+tf = false;
+
+if nargin < 1 || isempty(fp) || exist(fp,'file') ~= 2
+    return;
+end
+
+try
+    info = whos('-file',fp);
+    vars = {info.name};
+    if any(strcmp(vars,'fcBundle'))
+        tf = true;
+        return;
+    end
+catch
+end
+
+[~,nm,ext] = fileparts(fp);
+if strcmpi(ext,'.mat') && ~isempty(regexpi(nm,'^FC_GroupBundle_','once'))
+    tf = true;
+end
+end
+
+function [B, cache] = getCachedFCBundle(cache, fp)
+key = makeCacheKey('FCBUNDLE',fp);
+
+if isstruct(cache) && isfield(cache,'fcBundle') && isa(cache.fcBundle,'containers.Map')
+    try
+        if isKey(cache.fcBundle,key)
+            B = cache.fcBundle(key);
+            return;
+        end
+    catch
+    end
+end
+
+L = load(fp);
+
+if isfield(L,'fcBundle')
+    B = L.fcBundle;
+else
+    error('File does not contain variable fcBundle: %s', fp);
+end
+
+if ~isstruct(B) || ~isfield(B,'subjects')
+    error('Invalid FC group bundle: %s', fp);
+end
+
+if isstruct(cache) && isfield(cache,'fcBundle') && isa(cache.fcBundle,'containers.Map')
+    try
+        cache.fcBundle(key) = B;
+    catch
+    end
+end
+end
+
+function [FC, cache] = loadFCGroupBundlesFromFiles(fileList, cache)
+FC = struct();
+FC.files = fileList(:);
+FC.subjects = struct([]);
+FC.nSubjects = 0;
+
+idx = 0;
+
+for i = 1:numel(fileList)
+    fp = fileList{i};
+
+    if ~isFCGroupBundleFile(fp)
+        continue;
+    end
+
+    [B, cache] = getCachedFCBundle(cache, fp);
+
+    for j = 1:numel(B.subjects)
+        subj = B.subjects(j);
+
+        if ~isfield(subj,'labels') || isempty(subj.labels), continue; end
+        if ~isfield(subj,'R')      || isempty(subj.R),      continue; end
+
+        idx = idx + 1;
+        FC.subjects(idx).sourceFile = fp;
+        % FC_META_COPY_V14: preserve ROI/hemisphere/side/provenance fields when present.
+        try, FC.subjects(idx).fcMeta = subj; catch, end
+        try
+            metaFieldsV14 = {'roiSet','roiMode','hemisphere','hemiMode','side','selectionMode','mergedHemisphere', ...
+                'leftRightMode','roiSide','regionSide','analysisMode','atlasLabelFile','labelFile','TR','timeIdx', ...
+                'nSlices','isStepMotor3D','analysisDir','sourceDir'};
+            for mfV14 = 1:numel(metaFieldsV14)
+                ffV14 = metaFieldsV14{mfV14};
+                if isfield(subj,ffV14)
+                    FC.subjects(idx).(ffV14) = subj.(ffV14);
+                end
+            end
+        catch
+        end
+
+        FC.subjects(idx).condition = fcGetFieldCharCompatV14(subj,'condition','');
+        FC.subjects(idx).animalID = fcGetFieldCharCompatV14(subj,'animalID','');
+        FC.subjects(idx).rowIndex = fcGetFieldNumCompatV14(subj,'rowIndex',NaN);
+        FC.subjects(idx).condition = fcGetFieldCharCompatV14(subj,'condition','');
+        FC.subjects(idx).animalID = fcGetFieldCharCompatV14(subj,'animalID','');
+        FC.subjects(idx).rowIndex = fcGetFieldNumCompatV14(subj,'rowIndex',NaN);
+
+        if isfield(subj,'name') && ~isempty(subj.name)
+            FC.subjects(idx).name = strtrimSafe(subj.name);
+        else
+            FC.subjects(idx).name = sprintf('FC_Subject_%02d',idx);
+        end
+
+        if isfield(subj,'group') && ~isempty(subj.group)
+            FC.subjects(idx).group = strtrimSafe(subj.group);
+        else
+            FC.subjects(idx).group = inferFCGroupFromText([FC.subjects(idx).name ' ' fp]);
+        end
+        if isempty(FC.subjects(idx).group) || strcmpi(FC.subjects(idx).group,'All')
+            FC.subjects(idx).group = inferFCGroupFromText([FC.subjects(idx).name ' ' fp]);
+        end
+
+        FC.subjects(idx).labels = double(subj.labels(:));
+
+        if isfield(subj,'names') && ~isempty(subj.names)
+            FC.subjects(idx).names = subj.names(:);
+        else
+            FC.subjects(idx).names = makeDefaultFCNames(FC.subjects(idx).labels);
+        end
+
+        FC.subjects(idx).R = double(subj.R);
+
+        if isfield(subj,'Z') && ~isempty(subj.Z)
+            FC.subjects(idx).Z = double(subj.Z);
+        else
+            Rtmp = max(-0.999999,min(0.999999,double(subj.R)));
+            Ztmp = atanh(Rtmp);
+            Ztmp(1:size(Ztmp,1)+1:end) = 0;
+            FC.subjects(idx).Z = Ztmp;
+        end
+
+        % Preserve step-motor / slice-specific FC fields.
+        FC.subjects(idx).isStepMotor3D = isfield(subj,'isStepMotor3D') && logical(subj.isStepMotor3D);
+        if isfield(subj,'nSlices') && ~isempty(subj.nSlices)
+            FC.subjects(idx).nSlices = double(subj.nSlices);
+        else
+            FC.subjects(idx).nSlices = [];
+        end
+        if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
+            FC.subjects(idx).sliceResults = subj.sliceResults;
+        else
+            FC.subjects(idx).sliceResults = struct([]);
+        end
+
+        % Preserve display-mode fields.
+        if isfield(subj,'displayMatrix') && ~isempty(subj.displayMatrix)
+            FC.subjects(idx).displayMatrix = double(subj.displayMatrix);
+        else
+            FC.subjects(idx).displayMatrix = FC.subjects(idx).R;
+        end
+        if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
+            FC.subjects(idx).displayZ = double(subj.displayZ);
+        else
+            FC.subjects(idx).displayZ = FC.subjects(idx).Z;
+        end
+        if isfield(subj,'displayNames') && ~isempty(subj.displayNames)
+            FC.subjects(idx).displayNames = subj.displayNames(:);
+        else
+            FC.subjects(idx).displayNames = FC.subjects(idx).names;
+        end
+        if isfield(subj,'displayLabels') && ~isempty(subj.displayLabels)
+            FC.subjects(idx).displayLabels = double(subj.displayLabels(:));
+        else
+            FC.subjects(idx).displayLabels = FC.subjects(idx).labels;
+        end
+
+        % Preserve provenance and rich payloads.
+        if isfield(subj,'TR') && ~isempty(subj.TR), FC.subjects(idx).TR = double(subj.TR); else, FC.subjects(idx).TR = []; end
+        if isfield(subj,'analysisDir') && ~isempty(subj.analysisDir), FC.subjects(idx).analysisDir = subj.analysisDir; else, FC.subjects(idx).analysisDir = ''; end
+        if isfield(subj,'meanTS'), FC.subjects(idx).meanTS = subj.meanTS; else, FC.subjects(idx).meanTS = []; end
+        if isfield(subj,'counts'), FC.subjects(idx).counts = subj.counts; else, FC.subjects(idx).counts = []; end
+        if isfield(subj,'timeIdx'), FC.subjects(idx).timeIdx = subj.timeIdx; else, FC.subjects(idx).timeIdx = []; end
+        if isfield(subj,'heatmap'), FC.subjects(idx).heatmap = subj.heatmap; else, FC.subjects(idx).heatmap = struct(); end
+        if isfield(subj,'compareROI'), FC.subjects(idx).compareROI = subj.compareROI; else, FC.subjects(idx).compareROI = struct(); end
+        if isfield(subj,'seedResults'), FC.subjects(idx).seedResults = subj.seedResults; else, FC.subjects(idx).seedResults = struct([]); end
+        if isfield(subj,'allEpochs'), FC.subjects(idx).allEpochs = subj.allEpochs; else, FC.subjects(idx).allEpochs = struct([]); end
+    end
+end
+
+FC.nSubjects = idx;
+end
+
+function names = makeDefaultFCNames(labels)
+names = cell(numel(labels),1);
+for i = 1:numel(labels)
+    names{i} = sprintf('ROI_%g',labels(i));
+end
+end
+
+function g = inferFCGroupFromText(txt)
+g = 'Unassigned';
+
+u = upper(strtrimSafe(txt));
+
+if contains(u,'PACAP') || contains(u,'GROUPA') || contains(u,'CONDA')
+    g = 'PACAP';
+elseif contains(u,'VEHICLE') || contains(u,'VEH') || contains(u,'CONTROL') || contains(u,'GROUPB') || contains(u,'CONDB')
+    g = 'Vehicle';
+end
+end
+
+function G = alignFCSubjectsToCommonROIs(FC)
+if ~isfield(FC,'subjects') || isempty(FC.subjects)
+    error('No FC subjects loaded.');
+end
+
+nSub = numel(FC.subjects);
+
+commonLabels = FC.subjects(1).labels(:);
+
+for i = 2:nSub
+    commonLabels = intersect(commonLabels,FC.subjects(i).labels(:));
+end
+
+commonLabels = sort(commonLabels(:));
+
+if isempty(commonLabels)
+    error('No common ROI labels found across FC subjects.');
+end
+
+nR = numel(commonLabels);
+Zstack = nan(nR,nR,nSub);
+Rstack = nan(nR,nR,nSub);
+names = cell(nR,1);
+
+for i = 1:nSub
+    labs = FC.subjects(i).labels(:);
+
+    idx = nan(nR,1);
+    for k = 1:nR
+        hit = find(double(labs) == double(commonLabels(k)),1,'first');
+        if ~isempty(hit)
+            idx(k) = hit;
+        end
+    end
+
+    if any(~isfinite(idx))
+        error('Internal FC ROI alignment error.');
+    end
+
+    idx = double(idx(:));
+
+    Zstack(:,:,i) = FC.subjects(i).Z(idx,idx);
+    Rstack(:,:,i) = FC.subjects(i).R(idx,idx);
+
+    if i == 1
+        for k = 1:nR
+            srcIdx = idx(k);
+            if srcIdx <= numel(FC.subjects(i).names)
+                names{k} = strtrimSafe(FC.subjects(i).names{srcIdx});
+            else
+                names{k} = sprintf('ROI_%g',commonLabels(k));
+            end
+        end
+    end
+end
+
+G = struct();
+G.labels = commonLabels;
+G.names = names;
+G.Zstack = Zstack;
+G.Rstack = Rstack;
+G.nSubjects = nSub;
+
+G.subjectNames = cell(nSub,1);
+G.groups = cell(nSub,1);
+G.sourceFiles = cell(nSub,1);
+G.conditions = cell(nSub,1);
+G.rowIndex = nan(nSub,1);
+
+for i = 1:nSub
+    G.subjectNames{i} = FC.subjects(i).name;
+    G.groups{i} = FC.subjects(i).group;
+    G.sourceFiles{i} = FC.subjects(i).sourceFile;
+    try, G.conditions{i} = FC.subjects(i).condition; catch, G.conditions{i} = ''; end
+    try, G.rowIndex(i) = FC.subjects(i).rowIndex; catch, G.rowIndex(i) = NaN; end
+end
+end
+
+function R = computeGroupFCStats(G, groupA, groupB)
+idxA = strcmpi(G.groups,groupA);
+idxB = strcmpi(G.groups,groupB);
+
+if ~any(idxA)
+    error(['No FC subjects found for Group A: ' groupA]);
+end
+
+if ~any(idxB)
+    error(['No FC subjects found for Group B: ' groupB]);
+end
+
+ZA = G.Zstack(:,:,idxA);
+ZB = G.Zstack(:,:,idxB);
+
+meanZA = fcNanMean3(ZA);
+meanZB = fcNanMean3(ZB);
+
+diffZ = meanZA - meanZB;
+
+[nR,~,~] = size(G.Zstack);
+pMat = nan(nR,nR);
+tMat = nan(nR,nR);
+
+for r = 1:nR
+    for c = 1:nR
+        a = squeeze(ZA(r,c,:));
+        b = squeeze(ZB(r,c,:));
+
+        a = a(isfinite(a));
+        b = b(isfinite(b));
+
+        if numel(a) >= 2 && numel(b) >= 2
+            [t,p,~] = welchT_vec(a,b);
+            tMat(r,c) = t;
+            pMat(r,c) = p;
+        end
+    end
+end
+
+R = struct();
+R.mode = 'Functional Connectivity';
+R.groupA = groupA;
+R.groupB = groupB;
+R.nA = sum(idxA);
+R.nB = sum(idxB);
+
+R.labels = G.labels;
+R.names = G.names;
+
+R.meanZA = meanZA;
+R.meanZB = meanZB;
+R.meanRA = tanh(meanZA);
+R.meanRB = tanh(meanZB);
+
+R.diffZ = diffZ;
+R.diffR = tanh(meanZA) - tanh(meanZB);
+
+R.pMat = pMat;
+R.tMat = tMat;
+
+R.subjectNames = G.subjectNames;
+R.groups = G.groups;
+R.sourceFiles = G.sourceFiles;
+try, R.conditions = G.conditions; catch, R.conditions = {}; end
+try, R.rowIndex = G.rowIndex; catch, R.rowIndex = []; end
+R.note = 'Statistics are computed on Fisher z. Pearson r matrices are tanh(mean z) for display.';
+end
+
+function R = computeFCStatsFlexible(G, groupA, groupB)
+% Flexible FC stats: two-group comparison if possible, otherwise single-group summary.
+if nargin < 2 || isempty(groupA), groupA = ''; end
+if nargin < 3, groupB = ''; end
+groups = G.groups(:);
+u = uniqueStableFCV14(groups);
+if isempty(u), error('No FC groups available.'); end
+if isempty(groupA) || ~any(strcmpi(groups,groupA)), groupA = u{1}; end
+idxA = strcmpi(groups,groupA);
+idxB = false(size(idxA));
+if ~isempty(groupB) && ~strcmpi(groupA,groupB) && any(strcmpi(groups,groupB))
+    idxB = strcmpi(groups,groupB);
+else
+    if numel(u) >= 2
+        groupB = u{find(~strcmpi(u,groupA),1,'first')};
+        idxB = strcmpi(groups,groupB);
+    else
+        groupB = 'None';
+    end
+end
+singleGroup = ~any(idxB);
+ZA = G.Zstack(:,:,idxA);
+meanZA = fcNanMean3(ZA);
+[nR,~,~] = size(G.Zstack);
+if singleGroup
+    meanZB = nan(nR,nR);
+    diffZ = nan(nR,nR);
+    pMat = nan(nR,nR);
+    tMat = nan(nR,nR);
+else
+    ZB = G.Zstack(:,:,idxB);
+    meanZB = fcNanMean3(ZB);
+    diffZ = meanZA - meanZB;
+    pMat = nan(nR,nR);
+    tMat = nan(nR,nR);
+    for r = 1:nR
+        for c = 1:nR
+            a = squeeze(ZA(r,c,:)); b = squeeze(ZB(r,c,:));
+            a = a(isfinite(a)); b = b(isfinite(b));
+            if numel(a) >= 2 && numel(b) >= 2
+                [t,p,~] = welchT_vec(a,b);
+                tMat(r,c) = t;
+                pMat(r,c) = p;
+            end
+        end
+    end
+end
+R = struct();
+R.mode = 'Functional Connectivity';
+R.singleGroup = singleGroup;
+R.groupA = groupA; R.groupB = groupB;
+R.nA = sum(idxA); R.nB = sum(idxB);
+R.labels = G.labels; R.names = G.names;
+R.meanZA = meanZA; R.meanZB = meanZB;
+R.meanRA = tanh(meanZA); R.meanRB = tanh(meanZB);
+R.diffZ = diffZ; R.diffR = tanh(meanZA) - tanh(meanZB);
+R.pMat = pMat; R.tMat = tMat;
+R.subjectNames = G.subjectNames; R.groups = G.groups; R.sourceFiles = G.sourceFiles;
+try, R.conditions = G.conditions; catch, R.conditions = {}; end
+try, R.rowIndex = G.rowIndex; catch, R.rowIndex = []; end
+R.note = 'Single-group mode is allowed. Two-group p-values require both groups and enough subjects.';
+end
+
+function fcPlotFCAdvancedOneViewV14(ax,FC,R,seedText,viewMode,activeGroup,dispMode,thr,C)
+if nargin < 9 || isempty(C), C = fcDefaultColorsV14(); end
+if nargin < 8 || isempty(thr), thr = 0; end
+if nargin < 7 || isempty(dispMode), dispMode = 'Pearson r'; end
+if nargin < 6 || isempty(activeGroup), activeGroup = R.groupA; end
+if nargin < 5 || isempty(viewMode), viewMode = 'Matrix summary'; end
+cla(ax);
+set(ax,'Visible','on','Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',11);
+viewLower = lower(strtrimSafe(viewMode));
+if contains(viewLower,'seed')
+    fcPlotSeedOneV14(ax,R,seedText,activeGroup,dispMode,thr,C);
+elseif contains(viewLower,'max')
+    fcPlotMaxConnectionsOneV14(ax,R,activeGroup,dispMode,thr,C);
+elseif contains(viewLower,'time')
+    fcPlotROITimeCourseOneV14(ax,FC,R,seedText,activeGroup,C);
+elseif contains(viewLower,'heat') || contains(viewLower,'subject')
+    fcPlotSubjectHeatmapOneV14(ax,FC,R,seedText,activeGroup,dispMode,thr,C);
+else
+    fcPlotMatrixOneV14(ax,R,activeGroup,dispMode,thr,C);
+end
+end
+
+function fcPlotMatrixOneV14(ax,R,activeGroup,dispMode,thr,C)
+[M,climVal,titlePart,ok,msg] = fcGetMatrixForGroupV14(R,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+Mplot = M;
+if thr > 0, Mplot(abs(Mplot) < thr) = 0; end
+imagesc(ax,Mplot);
+axis(ax,'image');
+colormap(ax,fcBlueWhiteRed(256));
+caxis(ax,climVal);
+cb = colorbar(ax);
+try, cb.Color = C.txt; catch, end
+title(ax,[titlePart ' | Hide |r| < ' num2str(thr)],'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',10);
+tickIdx = fcTickIdx(numel(R.names));
+set(ax,'XTick',tickIdx,'XTickLabel',fcAbbrevNames(R.names(tickIdx),14), ...
+    'YTick',tickIdx,'YTickLabel',fcAbbrevNames(R.names(tickIdx),14));
+try, xtickangle(ax,90); catch, end
+end
+
+function fcPlotSeedOneV14(ax,R,seedText,activeGroup,dispMode,thr,C)
+[M,~,titlePart,ok,msg] = fcGetMatrixForGroupV14(R,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+seedIdx = fcFindSeedIndexV14(R,seedText);
+v = M(seedIdx,:);
+v(seedIdx) = NaN;
+if thr > 0, v(abs(v)<thr) = NaN; end
+[~,ord] = sort(abs(v),'descend');
+ord = ord(isfinite(v(ord)));
+N = min(35,numel(ord));
+ord = ord(1:N);
+vals = v(ord);
+labels = fcAbbrevNames(R.names(ord),28);
+cla(ax);
+if isempty(vals)
+    fcNoData(ax,'No seed connections pass the visual threshold.',C); return;
+end
+barh(ax,flipud(vals(:)));
+set(ax,'YTick',1:N,'YTickLabel',flipud(labels(:)));
+grid(ax,'on');
+xlim(ax,[-max(1e-6,max(abs(vals))) max(1e-6,max(abs(vals)))]);
+title(ax,sprintf('Seed profile: %g | %s | %s',R.labels(seedIdx),R.names{seedIdx},titlePart), ...
+    'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+xlabel(ax,'Connection strength');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',10);
+end
+
+function fcPlotMaxConnectionsOneV14(ax,R,activeGroup,dispMode,thr,C)
+[M,~,titlePart,ok,msg] = fcGetMatrixForGroupV14(R,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+n = size(M,1); rows = {};
+for i = 1:n
+    for j = i+1:n
+        v = M(i,j);
+        if isfinite(v) && abs(v) >= thr
+            rows(end+1,:) = {abs(v),v,[fcShortNameV14(R.names{i}) '  ↔  ' fcShortNameV14(R.names{j})]}; %#ok<AGROW>
+        end
+    end
+end
+if isempty(rows), fcNoData(ax,'No edges pass the visual threshold.',C); return; end
+s = cell2mat(rows(:,1));
+[~,ord] = sort(s,'descend');
+ord = ord(1:min(35,numel(ord)));
+vals = cell2mat(rows(ord,2)); labs = rows(ord,3);
+barh(ax,flipud(vals(:)));
+set(ax,'YTick',1:numel(vals),'YTickLabel',flipud(labs(:)));
+grid(ax,'on');
+title(ax,['Strongest connections | ' titlePart],'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+xlabel(ax,'Connection strength');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',9);
+end
+
+function fcPlotROITimeCourseOneV14(ax,FC,R,seedText,activeGroup,C)
+seedIdx = fcFindSeedIndexV14(R,seedText);
+label = R.labels(seedIdx);
+[T,subNames,ok,msg] = fcCollectSeedTimeCoursesV14(FC,label,activeGroup,R);
+if ~ok
+    fcNoData(ax,msg,C); return;
+end
+cla(ax); hold(ax,'on');
+plot(ax,T,'Color',[0.45 0.45 0.45]);
+m = nanmean_local(T,2);
+plot(ax,m,'LineWidth',3);
+hold(ax,'off'); grid(ax,'on');
+title(ax,sprintf('ROI time course: %g | %s | %s | %d stored frames | n=%d', ...
+    label,R.names{seedIdx},activeGroup,size(T,1),size(T,2)), ...
+    'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+xlabel(ax,'Frame stored in FC bundle'); ylabel(ax,'ROI signal');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',11);
+try, legend(ax,[subNames(:); {'mean'}],'Interpreter','none','TextColor',C.txt,'Color',C.axisBg,'Location','bestoutside'); catch, end
+end
+
+function fcPlotSubjectHeatmapOneV14(ax,FC,R,seedText,activeGroup,dispMode,thr,C)
+seedIdx = fcFindSeedIndexV14(R,seedText);
+label = R.labels(seedIdx);
+[H,subNames,ok,msg] = fcCollectSeedRowsV14(FC,R,label,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+if thr > 0, H(abs(H)<thr) = 0; end
+imagesc(ax,H);
+colormap(ax,fcBlueWhiteRed(256));
+if strcmpi(strtrimSafe(dispMode),'Fisher z'), caxis(ax,[-2.5 2.5]); else, caxis(ax,[-1 1]); end
+cb = colorbar(ax);
+try, cb.Color = C.txt; catch, end
+title(ax,sprintf('Subject heatmap: seed %g | %s | %s',label,R.names{seedIdx},activeGroup), ...
+    'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',9);
+tickIdx = fcTickIdx(size(H,2));
+set(ax,'XTick',tickIdx,'XTickLabel',fcAbbrevNames(R.names(tickIdx),14), ...
+    'YTick',1:numel(subNames),'YTickLabel',subNames);
+try, xtickangle(ax,90); catch, end
+xlabel(ax,'Target region'); ylabel(ax,'Subject');
+end
+
+function [M,climVal,titlePart,ok,msg] = fcGetMatrixForGroupV14(R,activeGroup,dispMode)
+ok = true; msg = '';
+if nargin < 3 || isempty(dispMode), dispMode = 'Pearson r'; end
+if nargin < 2 || isempty(activeGroup), activeGroup = R.groupA; end
+useZ = strcmpi(strtrimSafe(dispMode),'Fisher z');
+isDiff = contains(lower(strtrimSafe(activeGroup)),'diff');
+if isDiff
+    if isfield(R,'singleGroup') && R.singleGroup
+        ok = false; msg = 'Difference is unavailable in single-group mode.';
+        M = []; climVal = []; titlePart = ''; return;
+    end
+    if useZ, M = R.diffZ; climVal = [-1 1]; unitTxt = 'Fisher z'; else, M = R.diffR; climVal = [-1 1]; unitTxt = 'Pearson r'; end
+    titlePart = [R.groupA ' - ' R.groupB ' (' unitTxt ')'];
+elseif strcmpi(strtrimSafe(activeGroup),strtrimSafe(R.groupB))
+    if isfield(R,'singleGroup') && R.singleGroup
+        ok = false; msg = 'Group B is unavailable in single-group mode.';
+        M = []; climVal = []; titlePart = ''; return;
+    end
+    if useZ, M = R.meanZB; climVal = [-2.5 2.5]; unitTxt = 'Fisher z'; else, M = R.meanRB; climVal = [-1 1]; unitTxt = 'Pearson r'; end
+    titlePart = [R.groupB ' mean FC (' unitTxt ')'];
+else
+    if useZ, M = R.meanZA; climVal = [-2.5 2.5]; unitTxt = 'Fisher z'; else, M = R.meanRA; climVal = [-1 1]; unitTxt = 'Pearson r'; end
+    titlePart = [R.groupA ' mean FC (' unitTxt ')'];
+end
+end
+
+function idx = fcFindSeedIndexV14(R,seedText)
+idx = 1; seedText = strtrimSafe(seedText);
+if isempty(seedText), return; end
+lab = str2double(seedText);
+if isfinite(lab)
+    hit = find(double(R.labels)==lab,1,'first');
+    if ~isempty(hit), idx = hit; return; end
+end
+s = lower(seedText);
+for ii = 1:numel(R.names)
+    if contains(lower(strtrimSafe(R.names{ii})),s)
+        idx = ii; return;
+    end
+end
+end
+
+function [T,subNames,ok,msg] = fcCollectSeedTimeCoursesV14(FC,label,activeGroup,R)
+T = []; subNames = {}; ok = false;
+msg = 'No ROI time courses found. The FC bundle must contain meanTS/roiTS/timeCourses for this view.';
+if ~isfield(FC,'subjects') || isempty(FC.subjects), return; end
+for ii = 1:numel(FC.subjects)
+    s = FC.subjects(ii);
+    g = strtrimSafe(s.group);
+    if contains(lower(strtrimSafe(activeGroup)),'diff')
+        useThis = true;
+    else
+        useThis = strcmpi(g,activeGroup);
+        if ~useThis && strcmpi(activeGroup,R.groupA), useThis = strcmpi(g,R.groupA); end
+        if ~useThis && strcmpi(activeGroup,R.groupB), useThis = strcmpi(g,R.groupB); end
+    end
+    if ~useThis, continue; end
+    [X,labs] = fcGetSubjectTimeCourseMatrixV14(s);
+    if isempty(X) || isempty(labs), continue; end
+    hit = find(double(labs)==double(label),1,'first');
+    if isempty(hit), continue; end
+    if size(X,2)==numel(labs)
+        tc = X(:,hit);
+    elseif size(X,1)==numel(labs)
+        tc = X(hit,:)';
+    else
+        continue;
+    end
+    T(:,end+1) = double(tc(:)); %#ok<AGROW>
+    subNames{end+1,1} = strtrimSafe(s.name); %#ok<AGROW>
+end
+ok = ~isempty(T);
+if ok, msg = ''; end
+end
+
+function [X,labs] = fcGetSubjectTimeCourseMatrixV14(s)
+X = []; labs = [];
+try, labs = double(s.labels(:)); catch, labs = []; end
+fields = {'meanTS','roiTS','timeCourses','roiTimeCourses','TS','tc'};
+for ii = 1:numel(fields)
+    ff = fields{ii};
+    try
+        if isfield(s,ff) && ~isempty(s.(ff)) && isnumeric(s.(ff))
+            X = double(s.(ff));
+            return;
+        end
+    catch
+    end
+end
+end
+
+function [H,subNames,ok,msg] = fcCollectSeedRowsV14(FC,R,label,activeGroup,dispMode)
+H = []; subNames = {}; ok = false; msg = 'No subject FC matrices found.';
+if ~isfield(FC,'subjects') || isempty(FC.subjects), return; end
+for ii = 1:numel(FC.subjects)
+    s = FC.subjects(ii);
+    g = strtrimSafe(s.group);
+    if contains(lower(strtrimSafe(activeGroup)),'diff')
+        useThis = true;
+    else
+        useThis = strcmpi(g,activeGroup);
+    end
+    if ~useThis, continue; end
+    try, labs = double(s.labels(:)); catch, continue; end
+    hit = find(double(labs)==double(label),1,'first'); if isempty(hit), continue; end
+    if strcmpi(strtrimSafe(dispMode),'Fisher z') && isfield(s,'Z'), M = s.Z; else, M = s.R; end
+    [~,idx] = ismember(double(R.labels),double(labs));
+    if any(idx < 1), continue; end
+    H(end+1,:) = double(M(hit,idx)); %#ok<AGROW>
+    subNames{end+1,1} = strtrimSafe(s.name); %#ok<AGROW>
+end
+ok = ~isempty(H);
+if ok, msg = ''; end
+end
+
+function u = uniqueStableFCV14(c)
+u = {};
+for ii = 1:numel(c)
+    s = strtrimSafe(c{ii});
+    if isempty(s), s = 'Unassigned'; end
+    if ~any(strcmpi(u,s)), u{end+1,1} = s; end %#ok<AGROW>
+end
+end
+
+function s = fcShortNameV14(s)
+s = strtrimSafe(s);
+if numel(s) > 34, s = [s(1:31) '...']; end
+end
+
+function C = fcDefaultColorsV14()
+C = struct();
+C.bg = [0.04 0.04 0.04];
+C.axisBg = [0.02 0.02 0.02];
+C.txt = [1 1 1];
+C.muted = [0.75 0.75 0.75];
+end
+ZA_FisherZ_GroupA.csv'),R.meanZA,names);
+writeFCMatrixCSV(fullfile(outRoot,'meanZB_FisherZ_GroupB.csv'),R.meanZB,names);
+writeFCMatrixCSV(fullfile(outRoot,'diffZ_GroupA_minus_GroupB.csv'),R.diffZ,names);
+writeFCMatrixCSV(fullfile(outRoot,'p_values.csv'),R.pMat,names);
+fcWriteRegionListCSV_V14(fullfile(outRoot,'region_labels_and_names.csv'),R.labels,names);
+fcWriteSubjectMetadataCSV_V14(fullfile(outRoot,'subject_metadata_fc.csv'),S,R);
+fcWriteTopConnectionsCSV_V14(fullfile(outRoot,'top_connections_GroupA.csv'),R,names,R.groupA,250);
+if ~isfield(R,'singleGroup') || ~R.singleGroup
+    fcWriteTopConnectionsCSV_V14(fullfile(outRoot,'top_connections_GroupB.csv'),R,names,R.groupB,250);
+    fcWriteTopConnectionsCSV_V14(fullfile(outRoot,'top_differences_A_minus_B.csv'),R,names,'Difference A-B',250);
+end
+seedText = ''; try, seedText = S.fcSeedRegion; catch, end
+if ~isempty(seedText), fcWriteSeedSummaryCSV_V14(fullfile(outRoot,'seed_region_summary.csv'),R,names,seedText); end
+try
+    FC = S.FC;
+    views = {'Matrix summary','Seed profile','Max connections','ROI time course','Subject heatmap'};
+    groups = {R.groupA};
+    if ~isfield(R,'singleGroup') || ~R.singleGroup
+        groups = {R.groupA,R.groupB,'Difference A-B'};
+    end
+    f = figure('Visible','off','Color',C.bg,'InvertHardcopy','off','Position',[100 100 1500 1000]);
+    ax = axes('Parent',f,'Position',[0.08 0.10 0.82 0.80]);
+    for gi = 1:numel(groups)
+        for vi = 1:numel(views)
+            cla(ax);
+            fcPlotFCAdvancedOneViewV14(ax,FC,R,seedText,views{vi},groups{gi},'Pearson r',0,C);
+            outFig = fullfile(outRoot,[sanitizeFilename(groups{gi}) '_' sanitizeFilename(views{vi}) '.png']);
+            print(f,outFig,'-dpng','-r220');
+        end
+    end
+    close(f);
+catch
+    try, close(f); catch, end
+end
+FC = struct(); try, FC = S.FC; catch, end
+save(fullfile(outRoot,'FC_GroupAnalysis_Results.mat'),'R','FC','names','-v7.3');
+msgbox(sprintf('FC export complete:\n\n%s',outRoot),'FC export');
+fprintf('\n[FC export] Saved:\n%s\n',outRoot);
+end
+
+function namesOut = fcNamesFromAtlasFileV14(labels,namesIn,labelFile)
+namesOut = namesIn;
+try
+    T = fileread(labelFile);
+    L = regexp(T,'\r\n|\n|\r','split');
+    mp = containers.Map('KeyType','double','ValueType','char');
+    for ii = 1:numel(L)
+        s = strtrim(L{ii});
+        if isempty(s) || s(1)=='#', continue; end
+        tok = regexp(s,'^\s*(\d+)[,\t ]+(.+?)\s*$','tokens','once');
+        if ~isempty(tok)
+            id = str2double(tok{1}); nm = strtrim(tok{2});
+            if isfinite(id) && ~isempty(nm), mp(id)=nm; end
+        end
+    end
+    for i = 1:numel(labels)
+        id = double(labels(i));
+        if isKey(mp,id), namesOut{i}=mp(id); end
+    end
+catch
+end
+end
+
+function fcWriteRegionListCSV_V14(outFile,labels,names)
+fid = fopen(outFile,'w'); if fid < 0, error('Could not write %s',outFile); end
+cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
+fprintf(fid,'label,name\n');
+for i = 1:numel(labels), fprintf(fid,'%g,%s\n',labels(i),csvEscapeFC(names{i})); end
+end
+
+function fcWriteSubjectMetadataCSV_V14(outFile,S,R)
+fid = fopen(outFile,'w'); if fid < 0, error('Could not write %s',outFile); end
+cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
+fprintf(fid,'subject,group,condition,rowIndex,rowSide_or_hemi,sourceFile,roiSet,roiMode,hemisphere,hemiMode,side,selectionMode,mergedHemisphere,nLabels,nSlices,isStepMotor3D,analysisDir\n');
+FC = struct(); try, FC = S.FC; catch, end
+if ~isfield(FC,'subjects'), return; end
+for i = 1:numel(FC.subjects)
+    s = FC.subjects(i);
+    rowSide = '';
+    rowIndex = NaN;
+    try, rowIndex = s.rowIndex; catch, end
+    try
+        if isfinite(rowIndex) && isfield(S,'rowPacapSide') && numel(S.rowPacapSide) >= rowIndex
+            rowSide = strtrimSafe(S.rowPacapSide{rowIndex});
+        end
+    catch
+    end
+    fprintf(fid,'%s,%s,%s,%.0f,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%s,%s\n', ...
+        csvEscapeFC(fcGetMetaStringV14(s,'name')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'group')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'condition')), ...
+        rowIndex, ...
+        csvEscapeFC(rowSide), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'sourceFile')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'roiSet')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'roiMode')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'hemisphere')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'hemiMode')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'side')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'selectionMode')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'mergedHemisphere')), ...
+        numel(fcGetLabelsV14(s)), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'nSlices')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'isStepMotor3D')), ...
+        csvEscapeFC(fcGetMetaStringV14(s,'analysisDir')));
+end
+end
+
+function labels = fcGetLabelsV14(s)
+labels = []; try, labels = s.labels(:); catch, end
+end
+
+function v = fcGetMetaStringV14(s,fieldName)
+v = '';
+try
+    if isstruct(s) && isfield(s,fieldName) && ~isempty(s.(fieldName))
+        x = s.(fieldName);
+        if ischar(x), v = x;
+        elseif isstring(x), v = char(x);
+        elseif isnumeric(x) || islogical(x), v = mat2str(x);
+        else, v = class(x);
+        end
+    end
+catch
+end
+end
+
+function fcWriteTopConnectionsCSV_V14(outFile,R,names,activeGroup,N)
+if nargin < 5, N = 250; end
+[M,~,~,ok,~] = fcGetMatrixForGroupV14(R,activeGroup,'Pearson r');
+if ~ok, return; end
+n = numel(R.labels); rows = {};
+for i = 1:n
+    for j = i+1:n
+        v = M(i,j);
+        if isfinite(v)
+            rows(end+1,:) = {abs(v),v,R.labels(i),names{i},R.labels(j),names{j}}; %#ok<AGROW>
+        end
+    end
+end
+if isempty(rows), return; end
+s = cell2mat(rows(:,1)); [~,ord] = sort(s,'descend'); ord = ord(1:min(N,numel(ord))); rows = rows(ord,:);
+fid = fopen(outFile,'w'); if fid < 0, error('Could not write %s',outFile); end
+cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
+fprintf(fid,'rank,abs_value,value,label_i,name_i,label_j,name_j\n');
+for k = 1:size(rows,1)
+    fprintf(fid,'%d,%.10g,%.10g,%g,%s,%g,%s\n',k,rows{k,1},rows{k,2},rows{k,3},csvEscapeFC(rows{k,4}),rows{k,5},csvEscapeFC(rows{k,6}));
+end
+end
+
+function fcWriteSeedSummaryCSV_V14(outFile,R,names,seedText)
+seedIdx = fcFindSeedIndexV14(R,seedText);
+fid = fopen(outFile,'w'); if fid < 0, error('Could not write %s',outFile); end
+cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
+fprintf(fid,'seed_label,seed_name,target_label,target_name,meanR_A,meanR_B,diffR,p,t\n');
+for j = 1:numel(names)
+    if j == seedIdx, continue; end
+    fprintf(fid,'%g,%s,%g,%s,%.10g,%.10g,%.10g,%.10g,%.10g\n', ...
+        R.labels(seedIdx),csvEscapeFC(names{seedIdx}),R.labels(j),csvEscapeFC(names{j}), ...
+        R.meanRA(seedIdx,j),R.meanRB(seedIdx,j),R.diffR(seedIdx,j),R.pMat(seedIdx,j),R.tMat(seedIdx,j));
+end
+end
+
+function fcPlotFCAdvancedOneViewV15(ax,FC,R,reg1,reg2,viewMode,activeGroup,hemiMode,dispMode,thr,C)
+if nargin < 11 || isempty(C), C = fcDefaultColorsV15(); end
+if nargin < 10 || isempty(thr), thr = 0; end
+if nargin < 9 || isempty(dispMode), dispMode = 'Pearson r'; end
+if nargin < 8 || isempty(hemiMode), hemiMode = 'All / merged'; end
+if nargin < 7 || isempty(activeGroup), activeGroup = R.groupA; end
+if nargin < 6 || isempty(viewMode), viewMode = 'Matrix summary'; end
+cla(ax);
+set(ax,'Visible','on','Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',11);
+viewLower = lower(strtrimSafe(viewMode));
+if contains(viewLower,'pair')
+    fcPlotPairCorrelationV15(ax,FC,R,reg1,reg2,activeGroup,dispMode,C);
+elseif contains(viewLower,'seed')
+    fcPlotSeedOneV15(ax,R,reg1,activeGroup,hemiMode,dispMode,thr,C);
+elseif contains(viewLower,'max')
+    fcPlotMaxConnectionsOneV15(ax,R,activeGroup,hemiMode,dispMode,thr,C);
+elseif contains(viewLower,'time')
+    fcPlotROITimeCourseOneV15(ax,FC,R,reg1,activeGroup,C);
+elseif contains(viewLower,'heat') || contains(viewLower,'subject')
+    fcPlotSubjectHeatmapOneV15(ax,FC,R,reg1,activeGroup,hemiMode,dispMode,thr,C);
+elseif contains(viewLower,'graph') || contains(viewLower,'overlay')
+    fcPlotRegionGraphOneV15(ax,R,reg1,activeGroup,hemiMode,dispMode,thr,C);
+else
+    fcPlotMatrixOneV15(ax,R,activeGroup,hemiMode,dispMode,thr,C);
+end
+end
+
+function fcPlotMatrixOneV15(ax,R,activeGroup,hemiMode,dispMode,thr,C)
+[M,climVal,titlePart,ok,msg] = fcGetMatrixForGroupV15(R,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+[Mplot,namesPlot,labelsPlot,msg2] = fcApplyHemisphereModeV15(M,R.names,R.labels,hemiMode);
+if isempty(Mplot), fcNoData(ax,msg2,C); return; end
+if thr > 0, Mplot(abs(Mplot)<thr)=0; end
+imagesc(ax,Mplot);
+axis(ax,'image');
+colormap(ax,fcBlueWhiteRed(256));
+caxis(ax,climVal);
+cb = colorbar(ax); try, cb.Color = C.txt; catch, end
+title(ax,[titlePart ' | ' hemiMode ' | visual hide |r|<' num2str(thr)], ...
+    'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',10);
+tickIdx = fcTickIdx(numel(namesPlot));
+set(ax,'XTick',tickIdx,'XTickLabel',fcAbbrevNames(namesPlot(tickIdx),14), ...
+    'YTick',tickIdx,'YTickLabel',fcAbbrevNames(namesPlot(tickIdx),14));
+try, xtickangle(ax,90); catch, end
+xlabel(ax,'Target regions'); ylabel(ax,'Seed/source regions');
+end
+
+function fcPlotSeedOneV15(ax,R,reg1,activeGroup,hemiMode,dispMode,thr,C)
+[M,~,titlePart,ok,msg] = fcGetMatrixForGroupV15(R,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+seedIdx = fcFindRegionIndexV15(R,reg1);
+v = M(seedIdx,:); v(seedIdx)=NaN;
+keep = fcHemisphereKeepMaskV15(R.names,hemiMode);
+if contains(lower(hemiMode),'left vs right')
+    keep = fcHemisphereMaskV15(R.names,'right');
+end
+v(~keep) = NaN;
+if thr > 0, v(abs(v)<thr)=NaN; end
+[~,ord] = sort(abs(v),'descend');
+ord = ord(isfinite(v(ord)));
+N = min(35,numel(ord));
+ord = ord(1:N);
+vals = v(ord);
+labels = fcAbbrevNames(R.names(ord),30);
+cla(ax);
+if isempty(vals), fcNoData(ax,'No seed connections pass the visual threshold / hemisphere filter.',C); return; end
+barh(ax,flipud(vals(:)));
+set(ax,'YTick',1:N,'YTickLabel',flipud(labels(:)));
+grid(ax,'on');
+mx = max(abs(vals)); if ~isfinite(mx) || mx<=0, mx=1; end
+xlim(ax,[-mx mx]);
+title(ax,sprintf('Seed profile: %g | %s | %s | %s',R.labels(seedIdx),R.names{seedIdx},titlePart,hemiMode), ...
+    'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+xlabel(ax,'Connection strength');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',10);
+end
+
+function fcPlotPairCorrelationV15(ax,FC,R,reg1,reg2,activeGroup,dispMode,C)
+idx1 = fcFindRegionIndexV15(R,reg1);
+idx2 = fcFindRegionIndexV15(R,reg2);
+[M,~,titlePart,ok,msg] = fcGetMatrixForGroupV15(R,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+val = M(idx1,idx2);
+cla(ax); axis(ax,'off'); set(ax,'Color',C.axisBg);
+lines = {};
+lines{end+1} = 'Pair correlation';
+lines{end+1} = '';
+lines{end+1} = sprintf('Region 1: %g | %s',R.labels(idx1),R.names{idx1});
+lines{end+1} = sprintf('Region 2: %g | %s',R.labels(idx2),R.names{idx2});
+lines{end+1} = '';
+lines{end+1} = sprintf('%s',titlePart);
+lines{end+1} = sprintf('Value: %.4f',val);
+lines{end+1} = '';
+if strcmpi(strtrimSafe(dispMode),'Fisher z')
+    lines{end+1} = 'Displayed value is Fisher z.';
+else
+    lines{end+1} = 'Displayed value is Pearson r.';
+end
+text(ax,0.05,0.92,sprintf('%s\n',lines{:}),'Units','normalized', ...
+    'VerticalAlignment','top','Color',C.txt,'FontName','Consolas','FontSize',15,'Interpreter','none');
+end
+
+function fcPlotMaxConnectionsOneV15(ax,R,activeGroup,hemiMode,dispMode,thr,C)
+[M,~,titlePart,ok,msg] = fcGetMatrixForGroupV15(R,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+[Mf,namesPlot,~,msg2] = fcApplyHemisphereModeV15(M,R.names,R.labels,hemiMode);
+if isempty(Mf), fcNoData(ax,msg2,C); return; end
+n = size(Mf,1); rows = {};
+for i=1:n
+    for j=i+1:n
+        v = Mf(i,j);
+        if isfinite(v) && abs(v) >= thr
+            rows(end+1,:) = {abs(v),v,[fcShortNameV15(namesPlot{i}) '  <->  ' fcShortNameV15(namesPlot{j})]}; %#ok<AGROW>
+        end
+    end
+end
+if isempty(rows), fcNoData(ax,'No edges pass the visual threshold.',C); return; end
+s = cell2mat(rows(:,1)); [~,ord]=sort(s,'descend'); ord=ord(1:min(35,numel(ord)));
+vals = cell2mat(rows(ord,2)); labs = rows(ord,3);
+barh(ax,flipud(vals(:)));
+set(ax,'YTick',1:numel(vals),'YTickLabel',flipud(labs(:)));
+grid(ax,'on');
+title(ax,['Strongest connections | ' titlePart ' | ' hemiMode],'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+xlabel(ax,'Connection strength');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',9);
+end
+
+function fcPlotROITimeCourseOneV15(ax,FC,R,reg1,activeGroup,C)
+seedIdx = fcFindRegionIndexV15(R,reg1);
+label = R.labels(seedIdx);
+[T,subNames,ok,msg] = fcCollectSeedTimeCoursesV15(FC,label,activeGroup,R);
+if ~ok, fcNoData(ax,msg,C); return; end
+cla(ax); hold(ax,'on');
+hLines = plot(ax,T,'Color',[0.45 0.45 0.45]); %#ok<NASGU>
+m = nanmean_local(T,2);
+hMean = plot(ax,m,'LineWidth',3); %#ok<NASGU>
+hold(ax,'off'); grid(ax,'on');
+title(ax,sprintf('ROI time course: %g | %s | %s | %d frames | n=%d',label,R.names{seedIdx},activeGroup,size(T,1),size(T,2)), ...
+    'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+xlabel(ax,'Frame stored in FC bundle'); ylabel(ax,'ROI signal from FC bundle');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',11);
+try
+    if numel(subNames) <= 10
+        legend(ax,[subNames(:); {'group mean'}],'Interpreter','none','TextColor',C.txt,'Color',C.axisBg,'Location','bestoutside');
+    else
+        legend(ax,{'individual subjects','group mean'},'TextColor',C.txt,'Color',C.axisBg,'Location','best');
+    end
+catch
+end
+end
+
+function fcPlotSubjectHeatmapOneV15(ax,FC,R,reg1,activeGroup,hemiMode,dispMode,thr,C)
+seedIdx = fcFindRegionIndexV15(R,reg1);
+label = R.labels(seedIdx);
+[H,subNames,namesUse,ok,msg] = fcCollectSeedRowsV15(FC,R,label,activeGroup,hemiMode,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+if thr > 0, H(abs(H)<thr)=0; end
+imagesc(ax,H);
+colormap(ax,fcBlueWhiteRed(256));
+if strcmpi(strtrimSafe(dispMode),'Fisher z'), caxis(ax,[-2.5 2.5]); else, caxis(ax,[-1 1]); end
+cb=colorbar(ax); try, cb.Color=C.txt; catch, end
+title(ax,sprintf('Subject heatmap: seed %g | %s | %s | %s',label,R.names{seedIdx},activeGroup,hemiMode), ...
+    'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',9);
+tickIdx = fcTickIdx(size(H,2));
+set(ax,'XTick',tickIdx,'XTickLabel',fcAbbrevNames(namesUse(tickIdx),14),'YTick',1:numel(subNames),'YTickLabel',subNames);
+try, xtickangle(ax,90); catch, end
+xlabel(ax,'Target regions'); ylabel(ax,'Subjects');
+end
+
+function fcPlotRegionGraphOneV15(ax,R,reg1,activeGroup,hemiMode,dispMode,thr,C)
+[M,~,titlePart,ok,msg] = fcGetMatrixForGroupV15(R,activeGroup,dispMode);
+if ~ok, fcNoData(ax,msg,C); return; end
+[Mf,namesPlot,labelsPlot,msg2] = fcApplyHemisphereModeV15(M,R.names,R.labels,hemiMode);
+if isempty(Mf), fcNoData(ax,msg2,C); return; end
+seedIdx0 = fcFindRegionIndexV15(R,reg1);
+seedLabel = R.labels(seedIdx0);
+seedIdx = find(double(labelsPlot)==double(seedLabel),1,'first');
+if isempty(seedIdx), seedIdx = 1; end
+v = Mf(seedIdx,:); v(seedIdx)=NaN;
+if thr > 0, v(abs(v)<thr)=NaN; end
+[~,ord]=sort(abs(v),'descend'); ord=ord(isfinite(v(ord))); ord=ord(1:min(20,numel(ord)));
+nNodes = numel(ord)+1;
+nodeIdx = [seedIdx ord(:)'];
+theta = linspace(0,2*pi,nNodes+1); theta(end)=[];
+x = cos(theta); y = sin(theta);
+cla(ax); hold(ax,'on'); axis(ax,'equal'); axis(ax,'off'); set(ax,'Color',C.axisBg);
+for k=2:nNodes
+    j = nodeIdx(k); val = Mf(seedIdx,j);
+    lw = 0.5 + 4*min(1,abs(val));
+    if val >= 0, col = [1 0.35 0.15]; else, col = [0.25 0.55 1]; end
+    plot(ax,[x(1) x(k)],[y(1) y(k)],'-','Color',col,'LineWidth',lw);
+end
+scatter(ax,x,y,120,'filled','MarkerFaceColor',[0.9 0.9 0.9],'MarkerEdgeColor',[0 0 0]);
+text(ax,x(1)*1.10,y(1)*1.10,['SEED: ' fcShortNameV15(namesPlot{seedIdx})],'Color',C.txt,'FontWeight','bold','Interpreter','none');
+for k=2:nNodes
+    text(ax,x(k)*1.12,y(k)*1.12,fcShortNameV15(namesPlot{nodeIdx(k)}),'Color',C.txt,'FontSize',8,'Interpreter','none');
+end
+title(ax,['Region graph / network view | ' titlePart ' | ' hemiMode],'Color',C.txt,'Interpreter','none','FontSize',15,'FontWeight','bold');
+hold(ax,'off');
+end
+
+function [M,climVal,titlePart,ok,msg] = fcGetMatrixForGroupV15(R,activeGroup,dispMode)
+ok=true; msg='';
+if nargin<3 || isempty(dispMode), dispMode='Pearson r'; end
+if nargin<2 || isempty(activeGroup), activeGroup=R.groupA; end
+useZ = strcmpi(strtrimSafe(dispMode),'Fisher z');
+isDiff = contains(lower(strtrimSafe(activeGroup)),'diff');
+if isDiff
+    if isfield(R,'singleGroup') && R.singleGroup
+        ok=false; msg='Difference unavailable in single-subject/single-group mode.'; M=[]; climVal=[]; titlePart=''; return;
+    end
+    if useZ, M=R.diffZ; unitTxt='Fisher z'; else, M=R.diffR; unitTxt='Pearson r'; end
+    climVal=[-1 1]; titlePart=[R.groupA ' - ' R.groupB ' (' unitTxt ')'];
+elseif strcmpi(strtrimSafe(activeGroup),strtrimSafe(R.groupB))
+    if isfield(R,'singleGroup') && R.singleGroup
+        ok=false; msg='Group B unavailable in single-group mode.'; M=[]; climVal=[]; titlePart=''; return;
+    end
+    if useZ, M=R.meanZB; climVal=[-2.5 2.5]; unitTxt='Fisher z'; else, M=R.meanRB; climVal=[-1 1]; unitTxt='Pearson r'; end
+    titlePart=[R.groupB ' mean FC (' unitTxt ')'];
+else
+    if useZ, M=R.meanZA; climVal=[-2.5 2.5]; unitTxt='Fisher z'; else, M=R.meanRA; climVal=[-1 1]; unitTxt='Pearson r'; end
+    titlePart=[R.groupA ' mean FC (' unitTxt ')'];
+end
+end
+
+function [Mf,namesF,labelsF,msg] = fcApplyHemisphereModeV15(M,names,labels,hemiMode)
+msg='';
+hemi = lower(strtrimSafe(hemiMode));
+namesF = names; labelsF = labels; Mf = M;
+if isempty(hemi) || contains(hemi,'all') || contains(hemi,'merged')
+    return;
+end
+L = fcHemisphereMaskV15(names,'left');
+R = fcHemisphereMaskV15(names,'right');
+if contains(hemi,'left vs right')
+    if ~any(L) || ~any(R), Mf=[]; namesF={}; labelsF=[]; msg='No left/right labels detected in region names.'; return; end
+    Mf = M(L,R);
+    namesF = names(R);
+    labelsF = labels(R);
+elseif contains(hemi,'left')
+    if ~any(L), Mf=[]; namesF={}; labelsF=[]; msg='No left labels detected in region names.'; return; end
+    Mf = M(L,L); namesF = names(L); labelsF = labels(L);
+elseif contains(hemi,'right')
+    if ~any(R), Mf=[]; namesF={}; labelsF=[]; msg='No right labels detected in region names.'; return; end
+    Mf = M(R,R); namesF = names(R); labelsF = labels(R);
+end
+end
+
+function keep = fcHemisphereKeepMaskV15(names,hemiMode)
+hemi = lower(strtrimSafe(hemiMode));
+if contains(hemi,'left') && ~contains(hemi,'left vs right')
+    keep = fcHemisphereMaskV15(names,'left');
+elseif contains(hemi,'right')
+    keep = fcHemisphereMaskV15(names,'right');
+else
+    keep = true(numel(names),1);
+end
+end
+
+function mask = fcHemisphereMaskV15(names,side)
+n = numel(names); mask = false(n,1); side = lower(side);
+for ii=1:n
+    s = lower(strtrimSafe(names{ii}));
+    if strcmp(side,'left')
+        mask(ii) = ~isempty(regexp(s,'(^|[\s_\-\(\[])(l|left|lh)([\s_\-\)\]]|$)','once')) || contains(s,'_l_') || contains(s,' left') || contains(s,'(left');
+    else
+        mask(ii) = ~isempty(regexp(s,'(^|[\s_\-\(\[])(r|right|rh)([\s_\-\)\]]|$)','once')) || contains(s,'_r_') || contains(s,' right') || contains(s,'(right');
+    end
+end
+end
+
+function idx = fcFindRegionIndexV15(R,regionText)
+idx=1; regionText=strtrimSafe(regionText);
+if isempty(regionText), return; end
+tok = regexp(regionText,'^\s*([+-]?\d+\.?\d*)','tokens','once');
+if ~isempty(tok)
+    lab = str2double(tok{1});
+else
+    lab = str2double(regionText);
+end
+if isfinite(lab)
+    hit=find(double(R.labels)==lab,1,'first');
+    if ~isempty(hit), idx=hit; return; end
+end
+s = lower(regionText);
+s = regexprep(s,'^\s*[+-]?\d+\.?\d*\s*\|\s*','');
+for ii=1:numel(R.names)
+    if contains(lower(strtrimSafe(R.names{ii})),s), idx=ii; return; end
+end
+end
+
+function [T,subNames,ok,msg] = fcCollectSeedTimeCoursesV15(FC,label,activeGroup,R)
+T=[]; subNames={}; ok=false;
+msg='No ROI time courses found. The FC bundle must contain meanTS / roiTS / timeCourses for this view.';
+if ~isfield(FC,'subjects') || isempty(FC.subjects), return; end
+for ii=1:numel(FC.subjects)
+    s=FC.subjects(ii);
+    g=strtrimSafe(s.group);
+    if ~contains(lower(strtrimSafe(activeGroup)),'diff') && ~strcmpi(g,activeGroup), continue; end
+    [X,labs]=fcGetSubjectTimeCourseMatrixV15(s);
+    if isempty(X) || isempty(labs), continue; end
+    hit=find(double(labs)==double(label),1,'first');
+    if isempty(hit), continue; end
+    if size(X,2)==numel(labs)
+        tc=X(:,hit);
+    elseif size(X,1)==numel(labs)
+        tc=X(hit,:)';
+    else
+        continue;
+    end
+    T(:,end+1)=double(tc(:)); %#ok<AGROW>
+    subNames{end+1,1}=strtrimSafe(s.name); %#ok<AGROW>
+end
+ok=~isempty(T); if ok, msg=''; end
+end
+
+function [X,labs] = fcGetSubjectTimeCourseMatrixV15(s)
+X=[]; labs=[];
+try, labs=double(s.labels(:)); catch, labs=[]; end
+fields={'meanTS','roiTS','timeCourses','roiTimeCourses','TS','tc'};
+for ii=1:numel(fields)
+    ff=fields{ii};
+    try
+        if isfield(s,ff) && ~isempty(s.(ff)) && isnumeric(s.(ff))
+            X=double(s.(ff)); return;
+        end
+    catch
+    end
+end
+end
+
+function [H,subNames,namesUse,ok,msg] = fcCollectSeedRowsV15(FC,R,label,activeGroup,hemiMode,dispMode)
+H=[]; subNames={}; namesUse=R.names; ok=false; msg='No subject FC matrices found.';
+if ~isfield(FC,'subjects') || isempty(FC.subjects), return; end
+keep = fcHemisphereKeepMaskV15(R.names,hemiMode);
+if contains(lower(strtrimSafe(hemiMode)),'left vs right'), keep = fcHemisphereMaskV15(R.names,'right'); end
+namesUse = R.names(keep);
+for ii=1:numel(FC.subjects)
+    s=FC.subjects(ii);
+    g=strtrimSafe(s.group);
+    if ~contains(lower(strtrimSafe(activeGroup)),'diff') && ~strcmpi(g,activeGroup), continue; end
+    try, labs=double(s.labels(:)); catch, continue; end
+    hit=find(double(labs)==double(label),1,'first'); if isempty(hit), continue; end
+    if strcmpi(strtrimSafe(dispMode),'Fisher z') && isfield(s,'Z'), M=s.Z; else, M=s.R; end
+    [~,idx]=ismember(double(R.labels(keep)),double(labs));
+    if any(idx<1), continue; end
+    H(end+1,:)=double(M(hit,idx)); %#ok<AGROW>
+    subNames{end+1,1}=strtrimSafe(s.name); %#ok<AGROW>
+end
+ok=~isempty(H); if ok, msg=''; end
+end
+
+function s = fcShortNameV15(s)
+s=strtrimSafe(s); if numel(s)>36, s=[s(1:33) '...']; end
+end
+
+function C = fcDefaultColorsV15()
+C=struct(); C.bg=[0.04 0.04 0.04]; C.axisBg=[0.02 0.02 0.02]; C.txt=[1 1 1]; C.muted=[0.75 0.75 0.75];
+end
+ZA_FisherZ_GroupA.csv'),R.meanZA,names);
+writeFCMatrixCSV(fullfile(outRoot,'meanZB_FisherZ_GroupB.csv'),R.meanZB,names);
+writeFCMatrixCSV(fullfile(outRoot,'diffZ_GroupA_minus_GroupB.csv'),R.diffZ,names);
+writeFCMatrixCSV(fullfile(outRoot,'p_values.csv'),R.pMat,names);
+fcWriteSubjectMetadataCSV_V15(fullfile(outRoot,'subject_metadata_fc.csv'),S,R);
+try
+    FC=S.FC;
+    reg1=''; reg2=''; hemiMode='All / merged'; activeGroup=R.groupA;
+    try, reg1=S.fcRegion1; catch, end
+    try, reg2=S.fcRegion2; catch, end
+    try, hemiMode=S.fcHemiMode; catch, end
+    views={'Matrix summary','Seed profile','Pair correlation','Max connections','ROI time course','Subject heatmap','Region graph'};
+    groups={R.groupA};
+    if ~isfield(R,'singleGroup') || ~R.singleGroup, groups={R.groupA,R.groupB,'Difference A-B'}; end
+    f=figure('Visible','off','Color',C.bg,'InvertHardcopy','off','Position',[100 100 1600 1050]);
+    ax=axes('Parent',f,'Position',[0.08 0.10 0.82 0.80]);
+    for gi=1:numel(groups)
+        activeGroup=groups{gi};
+        for vi=1:numel(views)
+            cla(ax);
+            fcPlotFCAdvancedOneViewV15(ax,FC,R,reg1,reg2,views{vi},activeGroup,hemiMode,'Pearson r',0,C);
+            print(f,fullfile(outRoot,[sanitizeFilename(activeGroup) '_' sanitizeFilename(views{vi}) '.png']),'-dpng','-r220');
+        end
+    end
+    close(f);
+catch
+    try, close(f); catch, end
+end
+FC=struct(); try, FC=S.FC; catch, end
+save(fullfile(outRoot,'FC_GroupAnalysis_Results.mat'),'R','FC','names','-v7.3');
+msgbox(sprintf('FC export complete:\n\n%s',outRoot),'FC export');
+fprintf('\n[FC export] Saved:\n%s\n',outRoot);
+end
+
+function fcWriteSubjectMetadataCSV_V15(outFile,S,R)
+fid=fopen(outFile,'w'); if fid<0, error('Could not write %s',outFile); end
+cleanup=onCleanup(@() fclose(fid)); %#ok<NASGU>
+fprintf(fid,'subject,group,condition,rowIndex,rowSide_or_hemi,sourceFile,roiSet,roiMode,hemisphere,hemiMode,side,selectionMode,mergedHemisphere,nLabels,nSlices,isStepMotor3D,analysisDir\n');
+FC=struct(); try, FC=S.FC; catch, end
+if ~isfield(FC,'subjects'), return; end
+for i=1:numel(FC.subjects)
+    s=FC.subjects(i); rowIndex=NaN; rowSide='';
+    try, rowIndex=s.rowIndex; catch, end
+    try
+        if isfinite(rowIndex) && isfield(S,'rowPacapSide') && numel(S.rowPacapSide)>=rowIndex
+            rowSide=strtrimSafe(S.rowPacapSide{rowIndex});
+        end
+    catch
+    end
+    fprintf(fid,'%s,%s,%s,%.0f,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%s,%s\n', ...
+        csvEscapeFC(fcGetMetaStringV15(s,'name')),csvEscapeFC(fcGetMetaStringV15(s,'group')),csvEscapeFC(fcGetMetaStringV15(s,'condition')),rowIndex, ...
+        csvEscapeFC(rowSide),csvEscapeFC(fcGetMetaStringV15(s,'sourceFile')),csvEscapeFC(fcGetMetaStringV15(s,'roiSet')),csvEscapeFC(fcGetMetaStringV15(s,'roiMode')), ...
+        csvEscapeFC(fcGetMetaStringV15(s,'hemisphere')),csvEscapeFC(fcGetMetaStringV15(s,'hemiMode')),csvEscapeFC(fcGetMetaStringV15(s,'side')), ...
+        csvEscapeFC(fcGetMetaStringV15(s,'selectionMode')),csvEscapeFC(fcGetMetaStringV15(s,'mergedHemisphere')),numel(fcGetLabelsV15(s)), ...
+        csvEscapeFC(fcGetMetaStringV15(s,'nSlices')),csvEscapeFC(fcGetMetaStringV15(s,'isStepMotor3D')),csvEscapeFC(fcGetMetaStringV15(s,'analysisDir')));
+end
+end
+
+function labels=fcGetLabelsV15(s)
+labels=[]; try, labels=s.labels(:); catch, end
+end
+
+function v=fcGetMetaStringV15(s,fieldName)
+v='';
+try
+    if isstruct(s) && isfield(s,fieldName) && ~isempty(s.(fieldName))
+        x=s.(fieldName);
+        if ischar(x), v=x; elseif isnumeric(x)||islogical(x), v=mat2str(x); else, v=class(x); end
+    end
+catch
+end
+end
+
+
+function exportGroupFCResults(varargin)
+% Clean single FC export function inserted by V16 duplicate-fix patch.
+S = [];
+if nargin >= 1 && isstruct(varargin{1})
+    S = varargin{1};
+end
+if isempty(S) || ~isstruct(S)
+    error('Missing GroupAnalysis state struct for FC export.');
+end
+if ~isfield(S,'lastFC') || isempty(fieldnames(S.lastFC))
+    error('Compute FC first.');
+end
+R = S.lastFC;
+
+startDir = pwd;
+try
+    if isfield(S,'outDir') && exist(S.outDir,'dir') == 7
+        startDir = S.outDir;
+    end
+catch
+end
+
+outDir = uigetdir(startDir,'Select folder for FC export');
+if isequal(outDir,0), return; end
+
+tag = datestr(now,'yyyymmdd_HHMMSS');
+outRoot = fullfile(outDir,['FC_GroupAnalysis_' sanitizeFilename([R.groupA '_vs_' R.groupB]) '_' tag]);
+if exist(outRoot,'dir') ~= 7
+    mkdir(outRoot);
+end
+
+names = R.names;
+
+% Core matrices.
+try, writeFCMatrixCSV(fullfile(outRoot,'meanRA_PearsonR_GroupA.csv'),R.meanRA,names); catch ME, warning(ME.message); end
+try, writeFCMatrixCSV(fullfile(outRoot,'meanRB_PearsonR_GroupB.csv'),R.meanRB,names); catch ME, warning(ME.message); end
+try, writeFCMatrixCSV(fullfile(outRoot,'diffR_GroupA_minus_GroupB.csv'),R.diffR,names); catch ME, warning(ME.message); end
+try, writeFCMatrixCSV(fullfile(outRoot,'meanZA_FisherZ_GroupA.csv'),R.meanZA,names); catch ME, warning(ME.message); end
+try, writeFCMatrixCSV(fullfile(outRoot,'meanZB_FisherZ_GroupB.csv'),R.meanZB,names); catch ME, warning(ME.message); end
+try, writeFCMatrixCSV(fullfile(outRoot,'diffZ_GroupA_minus_GroupB.csv'),R.diffZ,names); catch ME, warning(ME.message); end
+try, writeFCMatrixCSV(fullfile(outRoot,'p_values.csv'),R.pMat,names); catch ME, warning(ME.message); end
+
+% Metadata.
+try
+    fcWriteSubjectMetadataCSV_V15(fullfile(outRoot,'subject_metadata_fc.csv'),S,R);
+catch ME
+    warning(['Could not export FC subject metadata: ' ME.message]);
+end
+
+% Export current/standard figures if the plotting helper exists.
+try
+    C = fcDefaultColorsV15();
+catch
+    C = struct();
+    C.bg = [0.04 0.04 0.04];
+    C.axisBg = [0.02 0.02 0.02];
+    C.txt = [1 1 1];
+    C.muted = [0.75 0.75 0.75];
+end
+
+try
+    FC = S.FC;
+    reg1 = ''; reg2 = ''; hemiMode = 'All / merged';
+    try, reg1 = S.fcRegion1; catch, end
+    try, reg2 = S.fcRegion2; catch, end
+    try, hemiMode = S.fcHemiMode; catch, end
+    views = {'Matrix summary','Seed profile','Pair correlation','Max connections','ROI time course','Subject heatmap','Region graph'};
+    groups = {R.groupA};
+    if ~isfield(R,'singleGroup') || ~R.singleGroup
+        groups = {R.groupA,R.groupB,'Difference A-B'};
+    end
+    f = figure('Visible','off','Color',C.bg,'InvertHardcopy','off','Position',[100 100 1600 1050]);
+    ax = axes('Parent',f,'Position',[0.08 0.10 0.82 0.80]);
+    for gi = 1:numel(groups)
+        for vi = 1:numel(views)
+            cla(ax);
+            try
+                fcPlotFCAdvancedOneViewV15(ax,FC,R,reg1,reg2,views{vi},groups{gi},hemiMode,'Pearson r',0,C);
+                print(f,fullfile(outRoot,[sanitizeFilename(groups{gi}) '_' sanitizeFilename(views{vi}) '.png']),'-dpng','-r220');
+            catch MEplot
+                warning(['Could not export FC view ' views{vi} ': ' MEplot.message]);
+            end
+        end
+    end
+    close(f);
+catch ME
+    try, close(f); catch, end
+    warning(['Could not export FC figures: ' ME.message]);
+end
+
+FC = struct();
+try, FC = S.FC; catch, end
+try
+    save(fullfile(outRoot,'FC_GroupAnalysis_Results.mat'),'R','FC','names','-v7.3');
+catch ME
+    warning(['Could not save FC_GroupAnalysis_Results.mat: ' ME.message]);
+end
+
+msgbox(sprintf('FC export complete:\n\n%s',outRoot),'FC export');
+fprintf('\n[FC export] Saved:\n%s\n',outRoot);
+end
+
+function M = fcNanMean3(X)
+[n1,n2,~] = size(X);
+M = nan(n1,n2);
+
+for r = 1:n1
+    for c = 1:n2
+        v = squeeze(X(r,c,:));
+        v = v(isfinite(v));
+        if ~isempty(v)
+            M(r,c) = mean(v);
+        end
+    end
+end
+end
+
+function fcNoData(ax,titleStr,C)
+cla(ax);
+
+text(ax,0.5,0.5,'No data', ...
+    'HorizontalAlignment','center', ...
+    'VerticalAlignment','middle', ...
+    'Color',C.txt, ...
+    'FontName','Arial', ...
+    'FontSize',12, ...
+    'FontWeight','bold');
+
+set(ax,'Color',C.axisBg, ...
+    'XColor',C.muted, ...
+    'YColor',C.muted, ...
+    'XTick',[], ...
+    'YTick',[]);
+
+title(ax,titleStr,'Color',C.txt,'FontWeight','bold','Interpreter','none');
+end
+
+function fcPlotMatrix(ax,M,climVal,titleStr,names,C)
+cla(ax);
+
+if isempty(M)
+    fcNoData(ax,titleStr,C);
+    return;
+end
+
+imagesc(ax,M);
+axis(ax,'image');
+caxis(ax,climVal);
+colormap(ax,fcBlueWhiteRed(256));
+cb = colorbar(ax);
+try, set(cb,'Color',[1 1 1]); catch, end
+
+set(ax,'Color',C.axisBg, ...
+    'XColor',C.muted, ...
+    'YColor',C.muted, ...
+    'FontName','Arial', ...
+    'FontSize',8, ...
+    'TickLength',[0 0]);
+
+title(ax,titleStr,'Color',C.txt,'FontWeight','bold','Interpreter','none');
+
+nR = size(M,1);
+tickIdx = fcTickIdx(nR);
+
+set(ax,'XTick',tickIdx,'YTick',tickIdx, ...
+    'XTickLabel',fcAbbrevNames(names(tickIdx),10), ...
+    'YTickLabel',fcAbbrevNames(names(tickIdx),10));
+
+try
+    xtickangle(ax,90);
+catch
+end
+end
+
+function fcPlotPMatrix(ax,P,titleStr,names,C)
+cla(ax);
+
+if isempty(P)
+    fcNoData(ax,titleStr,C);
+    return;
+end
+
+Plog = -log10(P);
+Plog(~isfinite(Plog)) = NaN;
+
+imagesc(ax,Plog);
+axis(ax,'image');
+caxis(ax,[0 3]);
+colormap(ax,hot(256));
+cb = colorbar(ax);
+try, set(cb,'Color',[1 1 1]); catch, end
+
+set(ax,'Color',C.axisBg, ...
+    'XColor',C.muted, ...
+    'YColor',C.muted, ...
+    'FontName','Arial', ...
+    'FontSize',8, ...
+    'TickLength',[0 0]);
+
+title(ax,[titleStr ' (-log10 p)'],'Color',C.txt,'FontWeight','bold','Interpreter','none');
+
+nR = size(P,1);
+tickIdx = fcTickIdx(nR);
+
+set(ax,'XTick',tickIdx,'YTick',tickIdx, ...
+    'XTickLabel',fcAbbrevNames(names(tickIdx),10), ...
+    'YTickLabel',fcAbbrevNames(names(tickIdx),10));
+
+try
+    xtickangle(ax,90);
+catch
+end
+end
+
+function idx = fcTickIdx(nR)
+if nR <= 35
+    step = 1;
+elseif nR <= 70
+    step = 2;
+elseif nR <= 120
+    step = 4;
+elseif nR <= 200
+    step = 6;
+else
+    step = max(8,ceil(nR/30));
+end
+
+idx = 1:step:nR;
+end
+
+function out = fcAbbrevNames(names,n)
+if nargin < 2
+    n = 10;
+end
+
+out = names;
+
+for i = 1:numel(out)
+    s = strtrimSafe(out{i});
+    s = regexprep(s,'\s*\[[^\]]*\]\s*$','');
+    parts = regexp(s,'\s+','split');
+
+    if ~isempty(parts)
+        s = parts{1};
+    end
+
+    if numel(s) > n
+        s = [s(1:max(1,n-3)) '...'];
+    end
+
+    out{i} = s;
+end
+end
+
+function cmap = fcBlueWhiteRed(n)
+if nargin < 1
+    n = 256;
+end
+
+n1 = floor(n/2);
+n2 = n - n1;
+
+b = [0.00 0.25 0.95];
+w = [1.00 1.00 1.00];
+r = [0.95 0.20 0.20];
+
+c1 = [linspace(b(1),w(1),n1)' linspace(b(2),w(2),n1)' linspace(b(3),w(3),n1)'];
+c2 = [linspace(w(1),r(1),n2)' linspace(w(2),r(2),n2)' linspace(w(3),r(3),n2)'];
+
+cmap = [c1; c2];
+end
+
+function writeFCMatrixCSV(fileName,M,names)
+fid = fopen(fileName,'w');
+
+if fid < 0
+    error(['Could not write CSV: ' fileName]);
+end
+
+cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
+
+fprintf(fid,'ROI');
+
+for j = 1:numel(names)
+    fprintf(fid,',%s',csvEscapeFC(names{j}));
+end
+
+fprintf(fid,'\n');
+
+for i = 1:size(M,1)
+    fprintf(fid,'%s',csvEscapeFC(names{i}));
+
+    for j = 1:size(M,2)
+        fprintf(fid,',%.10g',M(i,j));
+    end
+
+    fprintf(fid,'\n');
+end
+end
+
+function s = csvEscapeFC(s0)
+s = char(s0);
+s = strrep(s,'"','""');
+s = ['"' s '"'];
+end
+
+function saveFCAxisPNG(ax,fileName,C)
+try
+    f = figure('Visible','off', ...
+        'Color',C.bg, ...
+        'InvertHardcopy','off', ...
+        'MenuBar','none', ...
+        'ToolBar','none', ...
+        'NumberTitle','off');
+
+    set(f,'Position',[100 100 1100 900]);
+
+    ax2 = copyobj(ax,f);
+    set(ax2,'Units','normalized','Position',[0.10 0.13 0.74 0.74]);
+
+    set(f,'PaperPositionMode','auto');
+    print(f,fileName,'-dpng','-r250');
+    close(f);
+catch
+end
+end
 
 function h = mkBtn(parent, txt, pos, bg, cb)
 h = uicontrol(parent,'Style','pushbutton','String',txt, ...
@@ -234,7 +1875,8 @@ for i = 1:size(subj,1)
     end
 end
 end
-function [idx, missingIdx] = findActiveBundleRowsGA(S)
+
+      function [idx, missingIdx] = findActiveBundleRowsGA(S)
     idx = [];
     missingIdx = [];
 
@@ -252,13 +1894,7 @@ function [idx, missingIdx] = findActiveBundleRowsGA(S)
             continue;
         end
 
-        bf = '';
-        try
-            bf = strtrimSafe(S.subj{r,8});
-        catch
-            bf = '';
-        end
-
+        bf = strtrimSafe(S.subj{r,8});
         if isempty(bf)
             try
                 bf = resolveGroupBundlePath(S, S.subj(r,:));
@@ -268,7 +1904,7 @@ function [idx, missingIdx] = findActiveBundleRowsGA(S)
         end
 
         if isempty(bf) || ~isScmGroupBundleFile(bf)
-            missingIdx = [missingIdx r]; %#ok<AGROW>
+            missingIdx = [missingIdx getRowsForBundleEntityKey(S, key)]; %#ok<AGROW>
         else
             idx(end+1) = r; %#ok<AGROW>
         end
@@ -276,6 +1912,7 @@ function [idx, missingIdx] = findActiveBundleRowsGA(S)
 
     missingIdx = unique(missingIdx,'stable');
 end
+
 function col = colAsStr(C, j)
 col = cell(size(C,1),1);
 for i = 1:size(C,1)
@@ -2022,8 +3659,7 @@ try
         hdrRg = ws.Range(sprintf('A1:%s1', lastCol));
         hdrRg.Font.Bold = true;
         hdrRg.Font.Size = 12;
-        hdrRg.Interior.Color = excelRGB(31,78,121);
-        try, hdrRg.Font.Color = excelRGB(255,255,255); catch, end
+        hdrRg.Interior.Color = excelRGB(217,217,217);
         hdrRg.HorizontalAlignment = -4108;
         hdrRg.VerticalAlignment   = -4108;
         hdrRg.WrapText = true;
@@ -2110,21 +3746,7 @@ try
                 dataCol = excelColLetter(c);
 
                 blockRg = ws.Range(sprintf('%s1:%s%d', dataCol, dataCol, nRows));
-                                grpValBlock  = excelCellChar(ws.Range(sprintf('%s4', dataCol)).Value);
-                condValBlock = excelCellChar(ws.Range(sprintf('%s5', dataCol)).Value);
-
-                blockColor = excelPastelColor(animalIdx);
-                headerColor = blockColor;
-
-                if isGroupAName(grpValBlock) || contains(upper(strtrimSafe(condValBlock)),'CONDA') || strcmpi(strtrimSafe(condValBlock),'A')
-                    blockColor  = excelRGB(221,235,247);  % soft blue for Group/Condition A
-                    headerColor = excelRGB(155,194,230);  % stronger blue header
-                elseif isGroupBName(grpValBlock) || contains(upper(strtrimSafe(condValBlock)),'CONDB') || strcmpi(strtrimSafe(condValBlock),'B')
-                    blockColor  = excelRGB(252,228,214);  % soft orange for Group/Condition B
-                    headerColor = excelRGB(244,176,132);  % stronger orange header
-                end
-
-                blockRg.Interior.Color = blockColor;
+                blockRg.Interior.Color = excelPastelColor(animalIdx);
                 blockRg.HorizontalAlignment = -4108;
                 blockRg.VerticalAlignment   = -4108;
 
@@ -2132,18 +3754,6 @@ try
                 topRg.Font.Bold = true;
                 topRg.Font.Size = 12;
                 topRg.WrapText = true;
-                try
-                    topRg.Interior.Color = headerColor;
-                    topRg.Font.Color = excelRGB(0,0,0);
-                    topRg.HorizontalAlignment = -4108;
-                    topRg.VerticalAlignment   = -4108;
-                catch
-                end
-                try
-                    ws.Range(sprintf('%s4:%s5', dataCol, dataCol)).Font.Bold = true;
-                    ws.Range(sprintf('%s4:%s5', dataCol, dataCol)).Interior.Color = headerColor;
-                catch
-                end
 
                 if nRows >= 9
                     hdr2Rg = ws.Range(sprintf('%s9:%s9', dataCol, dataCol));
@@ -2234,7 +3844,7 @@ try
 
 catch ME
 
-    try, GA_printErrorLocal(ME,'caught error in GroupAnalysis_Common.m'); catch, end
+    try, GA_printErrorLocal(ME,'caught error in GroupAnalysis_FC.m'); catch, end
     try
         if ~isempty(wb), wb.Close(false); end
     catch
@@ -2380,164 +3990,40 @@ function rs = repSize(sz, dim)
 rs = ones(1,numel(sz));
 rs(dim) = sz(dim);
 end
-function [ok, tMin, psc] = tryReadSCMroiExportTxt(fname)
-% Robust SCM ROI TXT reader.
-% Accepts:
-%   3 columns: frame/time_sec, time_min, PSC
-%   3 columns: frame, time_sec, PSC  -> converts time_sec to min if needed
-%   2 columns: time_min or time_sec, PSC
-% Rejects coordinate-mask TXT files by requiring mostly increasing time.
 
+function [ok, tMin, psc] = tryReadSCMroiExportTxt(fname)
 ok = false;
 tMin = [];
 psc = [];
-
-if nargin < 1 || isempty(fname)
-    return;
-end
-
+if nargin<1 || isempty(fname), return; end
 fname = strtrim(char(fname));
-if exist(fname,'file') ~= 2
-    return;
-end
-
+if exist(fname,'file')~=2, return; end
 fid = fopen(fname,'r');
-if fid < 0
-    return;
-end
-cleanupObj = onCleanup(@() fclose(fid)); %#ok<NASGU>
+if fid<0, return; end
+cln = onCleanup(@() fclose(fid)); %#ok<NASGU>
 
-A = [];
-headerText = '';
-
+inTable = false;
 while true
     ln = fgetl(fid);
-    if ~ischar(ln)
-        break;
-    end
-
+    if ~ischar(ln), break; end
     ln = strtrim(ln);
-    if isempty(ln)
-        continue;
-    end
-
-    if ln(1)=='#' || ln(1)=='%' || ln(1)==';'
-        headerText = [headerText ' ' lower(ln)]; %#ok<AGROW>
-        continue;
-    end
-
-    vals = sscanf(ln,'%f');
-    if numel(vals) >= 2
-        if isempty(A)
-            A = nan(0,numel(vals));
-        elseif numel(vals) > size(A,2)
-            A(:,end+1:numel(vals)) = NaN;
+    if isempty(ln), continue; end
+    if ln(1)=='#'
+        if ~isempty(strfind(lower(ln),'# columns:')) && ~isempty(strfind(lower(ln),'psc'))
+            inTable = true;
         end
-        row = nan(1,size(A,2));
-        row(1:numel(vals)) = vals(:)';
-        A(end+1,:) = row; %#ok<AGROW>
+        continue;
+    end
+    if inTable
+        vals = sscanf(ln,'%f');
+        if numel(vals) >= 3
+            tMin(end+1,1) = vals(2); %#ok<AGROW>
+            psc(end+1,1)  = vals(3); %#ok<AGROW>
+        end
     end
 end
-
-if isempty(A) || size(A,1) < 3
-    return;
+if numel(tMin) >= 5 && numel(psc)==numel(tMin), ok = true; end
 end
-
-A = double(A);
-A = A(any(isfinite(A),2),:);
-
-if size(A,1) < 3
-    return;
-end
-
-% Pick columns.
-if size(A,2) >= 3 && all(isfinite(A(:,3)))
-    % Most SCM exports are: frame, time_min, PSC.
-    candT = A(:,2);
-    candY = A(:,3);
-
-    d = diff(candT);
-    d = d(isfinite(d));
-    incOK = ~isempty(d) && sum(d > 0) >= 0.80*numel(d);
-
-    if ~incOK
-        % Fallback: maybe col1 is time.
-        candT = A(:,1);
-        candY = A(:,2);
-    end
-else
-    candT = A(:,1);
-    candY = A(:,2);
-end
-
-candT = double(candT(:));
-candY = double(candY(:));
-
-keep = isfinite(candT) & isfinite(candY);
-candT = candT(keep);
-candY = candY(keep);
-
-if numel(candT) < 5
-    return;
-end
-
-% Sort and unique time points.
-[candT, ord] = sort(candT);
-candY = candY(ord);
-[candT, ia] = unique(candT,'stable');
-candY = candY(ia);
-
-if numel(candT) < 5
-    return;
-end
-
-dt = diff(candT);
-dt = dt(isfinite(dt));
-
-if isempty(dt) || sum(dt > 0) < 0.80*numel(dt)
-    return;
-end
-
-% Convert seconds to minutes if the axis is clearly too large for minutes.
-% This fixes TXT files where the first/second column is time_sec.
-if max(candT) > 300
-    candT = candT ./ 60;
-end
-
-% Reject obvious coordinate-mask files unless the header says PSC/timecourse.
-hasPSCHeader = contains(headerText,'psc') || contains(headerText,'signal change') || contains(headerText,'%sc') || contains(headerText,'time');
-if ~hasPSCHeader
-    if max(candT) > 300 || median(diff(candT)) > 5
-        return;
-    end
-end
-
-tMin = candT(:);
-psc  = candY(:);
-ok = true;
-end
-
-
-function tf = isMostlyIncreasing(x)
-x = double(x(:));
-x = x(isfinite(x));
-
-if numel(x) < 3
-    tf = false;
-    return;
-end
-
-d = diff(x);
-d = d(isfinite(d));
-
-if isempty(d)
-    tf = false;
-    return;
-end
-
-tf = sum(d > 0) >= 0.80 * numel(d);
-end
-
 
 function D = loadPipelineStruct(fp)
 L = load(fp);
@@ -2631,68 +4117,35 @@ tcRaw = roiMeanTimecourse(I, roi);
 T = numel(tcRaw);
 tMin = (0:(T-1))*(TR/60);
 end
+
 function [tcRaw, tMin] = extractROITC_legacyMat(fp)
-% Robust legacy ROI MAT reader.
-% MATLAB 2017b-safe and intentionally simple.
-
 L = load(fp);
-
 if isfield(L,'roiTC')
     tc = L.roiTC;
 elseif isfield(L,'TC')
     tc = L.TC;
-elseif isfield(L,'tc')
-    tc = L.tc;
-elseif isfield(L,'timecourse')
-    tc = L.timecourse;
 else
-    error('ROI mat must contain roiTC, TC, tc, or timecourse: %s', fp);
+    error('ROI mat must contain roiTC or TC: %s', fp);
 end
-
 tc = double(tc);
-
-% Make time dimension horizontal.
-if size(tc,1) > size(tc,2)
-    tc = tc.';
-end
-
-% If multiple ROI traces are present, average manually while ignoring NaNs.
+if size(tc,1) > size(tc,2), tc = tc.'; end
 if size(tc,1) > 1
-    good = isfinite(tc);
-    tc0 = tc;
-    tc0(~good) = 0;
-    nGood = sum(good,1);
-    nGood(nGood <= 0) = NaN;
-    tc = sum(tc0,1) ./ nGood;
+    try
+        tc = mean(tc,1,'omitnan');
+    catch
+        tc = mean(tc,1);
+    end
 end
-
-tcRaw = double(tc(:)');
+tcRaw = tc(:)';
 
 if isfield(L,'tSec') && ~isempty(L.tSec)
-    tMin = double(L.tSec(:)') / 60;
-elseif isfield(L,'tsec') && ~isempty(L.tsec)
-    tMin = double(L.tsec(:)') / 60;
-elseif isfield(L,'timeSec') && ~isempty(L.timeSec)
-    tMin = double(L.timeSec(:)') / 60;
-elseif isfield(L,'tMin') && ~isempty(L.tMin)
-    tMin = double(L.tMin(:)');
+    tMin = double(L.tSec(:)')/60;
 elseif isfield(L,'TR') && ~isempty(L.TR)
     TR = double(L.TR);
-    if numel(TR) > 1
-        TR = TR(end);
-    end
-    if ~isfinite(TR) || TR <= 0
-        error('ROI mat has invalid TR: %s', fp);
-    end
-    tMin = (0:(numel(tcRaw)-1)) * (TR/60);
+    tMin = (0:(numel(tcRaw)-1))*(TR/60);
 else
-    error('ROI mat must contain tSec, tsec, timeSec, tMin, or TR: %s', fp);
+    error('ROI mat must contain tSec or TR.');
 end
-
-% Keep vectors same length.
-n = min(numel(tcRaw), numel(tMin));
-tcRaw = tcRaw(1:n);
-tMin = tMin(1:n);
 end
 
 function m = trimmedMean(x, trimPct)
@@ -2733,6 +4186,100 @@ for i=iStart:(iEnd-w+1)
     if val > best, best = val; end
 end
 if isfinite(best), pv = best; end
+end
+
+function colors = assignGroupColorsWithMode(gNames, S)
+colors = struct();
+[~,pal] = palette20();
+
+if strcmpi(S.colorMode,'Manual A/B')
+    colA = pal(max(1,min(size(pal,1),S.manualColorA)),:);
+    colB = pal(max(1,min(size(pal,1),S.manualColorB)),:);
+    gA = strtrimSafe(S.manualGroupA);
+    gB = strtrimSafe(S.manualGroupB);
+    base = lines(max(1,numel(gNames)));
+    for i=1:numel(gNames)
+        nm = strtrimSafe(gNames{i});
+        if ~isempty(gA) && strcmpi(nm,gA)
+            col = colA;
+        elseif ~isempty(gB) && strcmpi(nm,gB)
+            col = colB;
+        else
+            col = base(i,:);
+        end
+        colors.(makeField(nm)) = col;
+    end
+    return;
+end
+
+scheme = strtrimSafe(S.colorScheme);
+
+if strcmpi(scheme,'Blue/Red')
+    base = [0.20 0.65 0.90; 0.90 0.25 0.25];
+elseif strcmpi(scheme,'Purple/Green')
+    base = [0.65 0.40 0.95; 0.25 0.85 0.55];
+elseif strcmpi(scheme,'Gray/Orange')
+    base = [0.65 0.65 0.65; 0.95 0.55 0.20];
+elseif strcmpi(scheme,'Distinct')
+    base = lines(max(2,numel(gNames)));
+else
+    base = [];
+end
+
+if ~isempty(base) && ~strcmpi(scheme,'PACAP/Vehicle')
+    for i=1:numel(gNames)
+        colors.(makeField(gNames{i})) = base(1+mod(i-1,size(base,1)),:);
+    end
+    return;
+end
+
+if strcmpi(scheme,'PACAP/Vehicle')
+    n = numel(gNames);
+    isPAC = false(1,n);
+    isVEH = false(1,n);
+    for i=1:n
+        nmU = upper(strtrimSafe(gNames{i}));
+        isPAC(i) = contains(nmU,'PACAP');
+        isVEH(i) = contains(nmU,'VEH') || contains(nmU,'CONTROL') || contains(nmU,'VEHICLE');
+    end
+
+    if n==2 && sum(isPAC)==1
+        pacIdx = find(isPAC,1,'first');
+        otherIdx = setdiff(1:2,pacIdx);
+        colors.(makeField(gNames{pacIdx})) = [0.20 0.65 0.90];
+        colors.(makeField(gNames{otherIdx})) = [0.65 0.65 0.65];
+        return;
+    elseif n==2 && sum(isVEH)==1
+        vehIdx = find(isVEH,1,'first');
+        otherIdx = setdiff(1:2,vehIdx);
+        colors.(makeField(gNames{vehIdx})) = [0.65 0.65 0.65];
+        colors.(makeField(gNames{otherIdx})) = [0.20 0.65 0.90];
+        return;
+    elseif n==2
+        colors.(makeField(gNames{1})) = [0.20 0.65 0.90];
+        colors.(makeField(gNames{2})) = [0.65 0.65 0.65];
+        return;
+    end
+
+    for i=1:n
+        nmU = upper(strtrimSafe(gNames{i}));
+        if contains(nmU,'PACAP')
+            col = [0.20 0.65 0.90];
+        elseif contains(nmU,'VEH') || contains(nmU,'CONTROL') || contains(nmU,'VEHICLE')
+            col = [0.65 0.65 0.65];
+        else
+            b2 = lines(n);
+            col = b2(i,:);
+        end
+        colors.(makeField(gNames{i})) = col;
+    end
+    return;
+end
+
+base = lines(max(1,numel(gNames)));
+for i=1:numel(gNames)
+    colors.(makeField(gNames{i})) = base(i,:);
+end
 end
 
 function clr = excelPastelColor(idx)
@@ -2988,14 +4535,10 @@ function key = makeCacheKey(varargin)
 parts = cellfun(@(x) strtrimSafe(x), varargin, 'UniformOutput', false);
 key = strjoin(parts,'||');
 end
+
 function [entry, cache] = getCachedROIEntry(cache, dataFile, roiFile)
-% Robust cached ROI timecourse reader.
-
 entry = [];
-dataFile = strtrimSafe(dataFile);
-roiFile  = strtrimSafe(roiFile);
-
-key = makeCacheKey('ROI', dataFile, roiFile);
+key = makeCacheKey('ROI',dataFile,roiFile);
 
 if isstruct(cache) && isfield(cache,'roiTC') && isa(cache.roiTC,'containers.Map')
     if isKey(cache.roiTC, key)
@@ -3005,48 +4548,37 @@ if isstruct(cache) && isfield(cache,'roiTC') && isa(cache.roiTC,'containers.Map'
 end
 
 [okTxt, tMin, psc] = tryReadSCMroiExportTxt(roiFile);
-
 if okTxt
-    entry.tc = double(psc(:)');
-    entry.tMin = double(tMin(:)');
+    entry.tc = double(psc(:))';
+    entry.tMin = double(tMin(:))';
     entry.isPSCInput = true;
 else
-    if isempty(roiFile) || exist(roiFile,'file') ~= 2
-        error('ROI file missing or not found: %s', roiFile);
+    if isempty(roiFile) || exist(roiFile,'file')~=2
+        error('ROIFile missing or not found: %s', roiFile);
     end
-
     [~,~,ext] = fileparts(roiFile);
     ext = lower(ext);
-
     if strcmp(ext,'.mat')
         [tcRaw, tMin2] = extractROITC_legacyMat(roiFile);
-        entry.tc = double(tcRaw(:)');
-        entry.tMin = double(tMin2(:)');
+        entry.tc = double(tcRaw(:))';
+        entry.tMin = double(tMin2(:))';
         entry.isPSCInput = false;
     else
-        if isempty(dataFile) || exist(dataFile,'file') ~= 2
+        if isempty(dataFile) || exist(dataFile,'file')~=2
             error('DATA .mat required for raw ROI txt: %s', dataFile);
         end
         [tcRaw, tMin2] = extractROITC_fromDataAndROI(dataFile, roiFile);
-        entry.tc = double(tcRaw(:)');
-        entry.tMin = double(tMin2(:)');
+        entry.tc = double(tcRaw(:))';
+        entry.tMin = double(tMin2(:))';
         entry.isPSCInput = false;
     end
 end
 
-% Final sanity.
-entry.tc = double(entry.tc(:)');
-entry.tMin = double(entry.tMin(:)');
-n = min(numel(entry.tc), numel(entry.tMin));
-entry.tc = entry.tc(1:n);
-entry.tMin = entry.tMin(1:n);
-
-if n < 2
-    error('ROI timecourse has fewer than 2 points: %s', roiFile);
-end
-
 if isstruct(cache) && isfield(cache,'roiTC') && isa(cache.roiTC,'containers.Map')
-    cache.roiTC(key) = entry;
+    try
+        cache.roiTC(key) = entry;
+    catch
+    end
 end
 end
 
@@ -3192,17 +4724,8 @@ R.showSEM = S.tc_showSEM;
 end
 
 function p = p_to_stars(pv)
-% GA_ROI_STATS_STAR_FIX_20260504
-% Significance labels:
-%   ns    : p > 0.05
-%   *     : p < 0.05
-%   **    : p < 0.01
-%   ***   : p < 0.001
-%   ****  : p < 0.0001
 if ~isfinite(pv)
-    p = 'ns';
-elseif pv < 0.0001
-    p = '****';
+    p = 'p=?';
 elseif pv < 0.001
     p = '***';
 elseif pv < 0.01
@@ -3210,100 +4733,52 @@ elseif pv < 0.01
 elseif pv < 0.05
     p = '*';
 else
-    p = 'ns';
+    p = 'n.s.';
 end
 end
+
 function annotateStatsBottom(ax, R, S)
-% GA_ROI_STATS_BAR_FONT_FIX_20260504
-% Larger lower-plot significance star and p-value text.
 p = R.stats.p;
-alpha = R.stats.alpha; %#ok<NASGU>
+alpha = R.stats.alpha;
 stars = p_to_stars(p);
 [~,fg] = previewColors(S.previewStyle);
 
-try
-    yl = ylim(ax);
-catch
-    return;
-end
-
-ySpan = yl(2) - yl(1);
-if ~isfinite(ySpan) || ySpan <= 0
-    ySpan = 1;
-end
-
-% Highest animal dot / metric value
-yMaxDot = NaN;
-try
-    vv = double(R.metricVals(:));
-    vv = vv(isfinite(vv));
-    if ~isempty(vv)
-        yMaxDot = max(vv);
-    end
-catch
-end
-
-if ~isfinite(yMaxDot)
-    yMaxDot = yl(2) - 0.25*ySpan;
-end
-
-% Always place significance bar above the highest dot.
-yBar = yMaxDot + 0.10*ySpan;
-yNeedTop = yBar + 0.18*ySpan;
-
-if yNeedTop > yl(2)
-    ylim(ax, [yl(1) yNeedTop]);
-    yl = ylim(ax);
-    ySpan = yl(2) - yl(1);
-    if ~isfinite(ySpan) || ySpan <= 0
-        ySpan = 1;
-    end
-    yBar = yMaxDot + 0.08*ySpan;
-end
+yl = ylim(ax);
+ySpan = yl(2)-yl(1);
+if ~isfinite(ySpan) || ySpan<=0, ySpan = 1; end
+yBar = yl(2) - 0.10*ySpan;
 
 gN = numel(R.groupNames);
 tType = '';
-if isfield(R.stats,'type')
-    tType = strtrimSafe(R.stats.type);
-end
+if isfield(R.stats,'type'), tType = strtrimSafe(R.stats.type); end
 
-isTwo = contains(lower(tType),'student') || contains(lower(tType),'welch') || ...
-        contains(lower(tType),'two-sample') || contains(lower(tType),'t-test');
+isTwo = contains(lower(tType),'student') || contains(lower(tType),'welch') || contains(lower(tType),'two-sample') || contains(lower(tType),'t-test');
 
 if gN >= 2 && isTwo
     x1 = 1;
     x2 = 2;
-    tickH = 0.030*ySpan;
-
-    plot(ax, [x1 x1 x2 x2], [yBar-tickH yBar yBar yBar-tickH], '-', ...
-        'LineWidth', 2.3, 'Color', fg, 'HandleVisibility', 'off');
-
-    text(ax, (x1+x2)/2, yBar + 0.025*ySpan, stars, ...
-        'Color',fg,'FontSize',24,'FontWeight','bold', ...
-        'HorizontalAlignment','center','VerticalAlignment','bottom', ...
-        'Clipping','off');
-
-    if S.showPText
-        text(ax, (x1+x2)/2, yBar - 0.060*ySpan, sprintf('p = %.3g', p), ...
-            'Color',fg,'FontSize',15,'FontWeight','bold', ...
-            'HorizontalAlignment','center','VerticalAlignment','top', ...
-            'Clipping','off');
-    end
+    plot(ax, [x1 x1 x2 x2], [yBar-0.02*ySpan yBar yBar yBar-0.02*ySpan], '-', 'LineWidth', 2, 'Color', fg);
+    text(ax, (x1+x2)/2, yBar + 0.02*ySpan, stars, ...
+        'Color',fg,'FontSize',16,'FontWeight','bold', ...
+        'HorizontalAlignment','center','VerticalAlignment','bottom');
+   if S.showPText
+    text(ax, (x1+x2)/2, yBar - 0.06*ySpan, sprintf('p = %.3g', p), ...
+        'Color',fg,'FontSize',11, ...
+        'HorizontalAlignment','center','VerticalAlignment','top');
+end
 else
     txt = sprintf('%s | p=%.3g', shortType(tType), p);
-    text(ax, mean(xlim(ax)), yBar, txt, ...
-        'Color',fg,'FontSize',15,'FontWeight','bold', ...
-        'HorizontalAlignment','center','VerticalAlignment','bottom', ...
-        'Clipping','off');
-
+    text(ax, mean(xlim(ax)), yl(2)-0.04*ySpan, txt, ...
+        'Color',fg,'FontSize',12,'FontWeight','bold', ...
+        'HorizontalAlignment','center','VerticalAlignment','top');
     if isfinite(p) && p < alpha
-        text(ax, mean(xlim(ax)), yBar + 0.060*ySpan, stars, ...
-            'Color',fg,'FontSize',24,'FontWeight','bold', ...
-            'HorizontalAlignment','center','VerticalAlignment','bottom', ...
-            'Clipping','off');
+        text(ax, mean(xlim(ax)), yl(2)-0.09*ySpan, stars, ...
+            'Color',fg,'FontSize',16,'FontWeight','bold', ...
+            'HorizontalAlignment','center','VerticalAlignment','top');
     end
 end
 end
+
 function annotateStatsTopText(ax, R, S)
 p = R.stats.p;
 alpha = R.stats.alpha;
@@ -4547,473 +6022,122 @@ end
     end
 
 
-function colors = buildMapSideTableColorsDisplayOnly(rows, mapRows)
-% Fallback table coloring helper for Group Maps side table.
-% Does not require S, so it is safe in split modules.
 
-    n = size(rows,1);
-    colors = repmat([0.12 0.12 0.12], max(n,2), 1);
 
-    for i = 1:n
-        if isempty(mapRows) || i > numel(mapRows) || ~isfinite(mapRows(i))
-            colors(i,:) = [0.12 0.12 0.12];
-            continue;
+function M = ga_fc_prefer_fisher_z_matrix(subj)
+% GA helper: use Fisher z for FC averaging/statistics.
+% Priority: displayStatMatrix/displayZ/statMatrix/Z, fallback atanh(displayR/R).
+M = [];
+try
+    if isstruct(subj)
+        if isfield(subj,'displayStatMatrix') && ~isempty(subj.displayStatMatrix)
+            M = double(subj.displayStatMatrix); return;
         end
-
-        side = '';
-        try
-            side = strtrimSafe(rows{i,4});
-        catch
-            side = '';
+        if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
+            M = double(subj.displayZ); return;
         end
+        if isfield(subj,'statMatrix') && ~isempty(subj.statMatrix)
+            M = double(subj.statMatrix); return;
+        end
+        if isfield(subj,'Z') && ~isempty(subj.Z)
+            M = double(subj.Z); return;
+        end
+        if isfield(subj,'displayR') && ~isempty(subj.displayR)
+            R = max(-0.999999,min(0.999999,double(subj.displayR)));
+            M = atanh(R);
+            M(1:size(M,1)+1:end) = 0;
+            return;
+        end
+        if isfield(subj,'R') && ~isempty(subj.R)
+            R = max(-0.999999,min(0.999999,double(subj.R)));
+            M = atanh(R);
+            M(1:size(M,1)+1:end) = 0;
+            return;
+        end
+    end
+catch
+end
+end
 
-        if strcmpi(side,'Unknown') || isempty(side) || strcmp(side,'-')
-            colors(i,:) = [0.28 0.16 0.08];
+function R = ga_fc_prefer_pearson_r_matrix(subj)
+% GA helper: use Pearson r for visual display.
+R = [];
+try
+    if isstruct(subj)
+        if isfield(subj,'displayMatrix') && ~isempty(subj.displayMatrix)
+            R = double(subj.displayMatrix); return;
+        end
+        if isfield(subj,'displayR') && ~isempty(subj.displayR)
+            R = double(subj.displayR); return;
+        end
+        if isfield(subj,'R') && ~isempty(subj.R)
+            R = double(subj.R); return;
+        end
+        if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
+            R = tanh(double(subj.displayZ)); return;
+        end
+        if isfield(subj,'Z') && ~isempty(subj.Z)
+            R = tanh(double(subj.Z)); return;
+        end
+    end
+catch
+end
+end
+
+
+
+function s = fcGetFieldCharCompatV14(S,fieldName,fb)
+% Safe field-to-char helper used by FC bundle loading/export patches.
+s = fb;
+try
+    if isstruct(S) && isfield(S,fieldName) && ~isempty(S.(fieldName))
+        x = S.(fieldName);
+        if ischar(x)
+            s = strtrim(x);
+        elseif iscell(x) && ~isempty(x)
+            try
+                s = strtrim(char(x{1}));
+            catch
+                s = fb;
+            end
+        elseif isnumeric(x) || islogical(x)
+            try
+                s = mat2str(x);
+            catch
+                s = fb;
+            end
         else
-            colors(i,:) = [0.12 0.30 0.16];
-        end
-    end
-end
-function updatePreviewAxes(varargin)
-% Safe fallback for GroupAnalysis ROI preview axes styling.
-% This is intentionally simple and GUI-safe.
-
-for ii = 1:nargin
-    h = varargin{ii};
-
-    if isstruct(h)
-        try
-            if isfield(h,'ax1')
-                updatePreviewAxes(h.ax1);
+            try
+                s = strtrim(char(x));
+            catch
+                s = fb;
             end
-            if isfield(h,'ax2')
-                updatePreviewAxes(h.ax2);
-            end
-        catch
         end
-        continue;
     end
-
-    try
-        if ishghandle(h) && strcmpi(get(h,'Type'),'axes')
-            try, set(h,'Box','off'); catch, end
-            try, set(h,'Color',[0 0 0]); catch, end
-            try, set(h,'XColor',[1 1 1]); catch, end
-            try, set(h,'YColor',[1 1 1]); catch, end
-            try, set(get(h,'Title'),'Color',[1 1 1]); catch, end
-            try, set(get(h,'XLabel'),'Color',[1 1 1]); catch, end
-            try, set(get(h,'YLabel'),'Color',[1 1 1]); catch, end
-        end
-    catch
-    end
-end
-end
-
-
-% GA_ROI_PREVIEW_STANDALONE_START
-function exportOnePreview(ax, which, S, styleName)
-% Local ROI preview renderer used by GroupAnalysis.m and GroupAnalysis_Common.m.
-if nargin < 4 || isempty(styleName), styleName = 'Dark'; end
-if isempty(ax) || ~ishghandle(ax), return; end
-if ~isfield(S,'lastROI') || isempty(S.lastROI) || ~isstruct(S.lastROI), return; end
-R = S.lastROI;
-if ~isfield(R,'mode') || ~strcmpi(R.mode,'ROI Timecourse'), return; end
-gaPrevClear(ax,styleName,gaPrevField(S,'previewShowGrid',false));
-if which == 1
-    gaPrevTop(ax,R,S,styleName);
-else
-    gaPrevBottom(ax,R,S,styleName);
-end
-drawnow limitrate;
-end
-
-function gaPrevTop(ax,R,S,styleName)
-[~,fg] = gaPrevColors(styleName);
-hold(ax,'on');
-t = double(R.tMin(:)');
-allY = [];
-for g = 1:numel(R.group)
-    y = double(R.group(g).mean(:)');
-    e = double(R.group(g).sem(:)');
-    if gaPrevField(S,'tc_previewSmooth',false)
-        dtSec = median(diff(t))*60;
-        y = gaPrevSmooth(y,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
-        e = gaPrevSmooth(e,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
-    end
-    col = gaPrevGroupColor(R,R.group(g).name,g);
-    if gaPrevField(S,'tc_showSEM',true) && numel(e)==numel(y)
-        patch(ax,[t fliplr(t)],[y+e fliplr(y-e)],col,'FaceAlpha',gaPrevField(S,'displaySemAlpha',0.25),'EdgeColor','none','HandleVisibility','off');
-    end
-    plot(ax,t,y,'Color',col,'LineWidth',2.4,'DisplayName',gaPrevDisplayName(R,g));
-    allY = [allY y(:)'];
-end
-xlabel(ax,'Time (min)','Color',fg,'FontWeight','bold');
-if isfield(R,'unitsPercent') && R.unitsPercent, ylabel(ax,'% signal change','Color',fg,'FontWeight','bold'); else, ylabel(ax,'Signal','Color',fg,'FontWeight','bold'); end
-title(ax,'Group ROI timecourse','Color',fg,'FontWeight','bold');
-gaPrevApplyY(ax,allY,gaPrevField(S,'plotTop',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
-if gaPrevField(S,'tc_showInjectionBox',true)
-    yl = ylim(ax);
-    x0 = gaPrevField(S,'tc_injMin0',NaN); x1 = gaPrevField(S,'tc_injMin1',NaN);
-    if isfinite(x0) && isfinite(x1) && x1 > x0
-        hp = patch(ax,[x0 x1 x1 x0],[yl(1) yl(1) yl(2) yl(2)],[1 1 0],'FaceAlpha',0.10,'EdgeColor','none','HandleVisibility','off');
-        try, uistack(hp,'bottom'); catch, end
-    end
-end
-try, legend(ax,'Location','best','TextColor',fg,'Color','none','Box','off'); catch, end
-hold(ax,'off');
-end
-
-function gaPrevBottom(ax,R,S,styleName)
-[~,fg] = gaPrevColors(styleName);
-hold(ax,'on');
-vals = double(R.metricVals(:));
-grp = R.subjTable(:,3);
-gNames = R.groupNames;
-allY = vals(:)';
-for g = 1:numel(gNames)
-    idx = strcmpi(grp,gNames{g});
-    v = vals(idx); v = v(isfinite(v));
-    if isempty(v), continue; end
-    mu = mean(v);
-    se = std(v,0)./sqrt(max(1,numel(v)));
-    col = gaPrevGroupColor(R,gNames{g},g);
-    bar(ax,g,mu,0.55,'FaceColor',col,'EdgeColor','none');
-    errorbar(ax,g,mu,se,'Color',fg,'LineWidth',1.5,'CapSize',12);
-    xj = g + linspace(-0.12,0.12,numel(v));
-    scatter(ax,xj,v,55,'MarkerFaceColor',col,'MarkerEdgeColor',fg,'LineWidth',0.8);
-end
-set(ax,'XTick',1:numel(gNames),'XTickLabel',gaPrevDisplayNames(R));
-try, xtickangle(ax,20); catch, end
-ylabel(ax,gaPrevField(R,'metricName','Metric'),'Color',fg,'FontWeight','bold','Interpreter','none');
-title(ax,'Per-animal ROI metric','Color',fg,'FontWeight','bold');
-gaPrevApplyY(ax,allY,gaPrevField(S,'plotBot',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
-gaPrevStatsText(ax,R,S,styleName);
-hold(ax,'off');
-end
-
-function gaPrevStatsText(ax,R,S,styleName)
-[~,fg] = gaPrevColors(styleName);
-if ~isfield(R,'stats') || ~isfield(R.stats,'p'), return; end
-p = R.stats.p;
-if ~isfinite(p), return; end
-yl = ylim(ax); dy = yl(2)-yl(1); if ~isfinite(dy) || dy<=0, dy=1; end
-stars = gaPrevStars(p);
-x = mean(xlim(ax));
-text(ax,x,yl(2)-0.06*dy,sprintf('%s   p = %.3g',stars,p),'Color',fg,'FontWeight','bold','FontSize',12,'HorizontalAlignment','center','VerticalAlignment','top');
-end
-
-function gaPrevClear(ax,styleName,showGrid)
-try, cla(ax,'reset'); catch, cla(ax); end
-[bg,fg] = gaPrevColors(styleName);
-set(ax,'Color',bg,'XColor',fg,'YColor',fg,'FontName','Arial','FontSize',12,'Box','off');
-if showGrid, grid(ax,'on'); else, grid(ax,'off'); end
-end
-
-function [bg,fg] = gaPrevColors(styleName)
-if strcmpi(styleName,'Light'), bg=[1 1 1]; fg=[0 0 0]; else, bg=[0 0 0]; fg=[1 1 1]; end
-end
-
-function val = gaPrevField(S,name,fb)
-val = fb;
-try, if isstruct(S) && isfield(S,name) && ~isempty(S.(name)), val = S.(name); end; catch, end
-end
-
-function y2 = gaPrevSmooth(y,dtSec,winSec)
-y = double(y(:)'); y2 = y;
-if ~isfinite(dtSec) || dtSec<=0 || ~isfinite(winSec) || winSec<=0, return; end
-w = max(1,round(winSec/dtSec));
-if w <= 1, return; end
-if any(~isfinite(y))
-    ii = find(isfinite(y));
-    if numel(ii) >= 2, y = interp1(ii,y(ii),1:numel(y),'linear','extrap'); end
-end
-k = ones(1,w)./w;
-padL = repmat(y(1),1,floor(w/2));
-padR = repmat(y(end),1,w-1-floor(w/2));
-y2 = conv([padL y padR],k,'valid');
-end
-
-function col = gaPrevGroupColor(R,name,idx)
-col = lines(max(2,idx)); col = col(idx,:);
-try
-    f = gaPrevMakeField(name);
-    if isfield(R,'groupColors') && isfield(R.groupColors,f), col = R.groupColors.(f); end
 catch
+    s = fb;
 end
 end
 
-function f = gaPrevMakeField(s)
-try, f = matlab.lang.makeValidName(char(s)); catch, f = regexprep(char(s),'[^A-Za-z0-9_]','_'); end
-if isempty(f), f = 'Group'; end
-end
-
-function names = gaPrevDisplayNames(R)
-if isfield(R,'groupDisplayNames') && numel(R.groupDisplayNames)==numel(R.groupNames)
-    names = R.groupDisplayNames;
-else
-    names = R.groupNames;
-end
-end
-
-function s = gaPrevDisplayName(R,g)
-names = gaPrevDisplayNames(R);
-try, s = names{g}; catch, s = R.group(g).name; end
-end
-
-function gaPrevApplyY(ax,dataVec,cfg)
-dataVec = dataVec(isfinite(dataVec));
-if isempty(dataVec), return; end
-auto = gaPrevField(cfg,'auto',true);
-forceZero = gaPrevField(cfg,'forceZero',false);
-if auto
-    lo = min(dataVec); hi = max(dataVec);
-    if lo == hi, lo = lo-1; hi = hi+1; end
-    pad = 0.08*(hi-lo); lo = lo-pad; hi = hi+pad;
-    if forceZero, lo = 0; end
-else
-    lo = gaPrevField(cfg,'ymin',min(dataVec)); hi = gaPrevField(cfg,'ymax',max(dataVec));
-    if forceZero, lo = 0; end
-end
-if isfinite(lo) && isfinite(hi) && hi > lo, ylim(ax,[lo hi]); end
-step = gaPrevField(cfg,'step',0);
-if isfinite(step) && step > 0
-    yl = ylim(ax); ticks = ceil(yl(1)/step)*step:step:floor(yl(2)/step)*step;
-    if numel(ticks) >= 2 && numel(ticks) < 60, set(ax,'YTick',ticks); end
-end
-end
-
-function s = gaPrevStars(p)
-if p < 0.001, s='***'; elseif p < 0.01, s='**'; elseif p < 0.05, s='*'; else, s='n.s.'; end
-end
-% GA_ROI_PREVIEW_STANDALONE_END
-
-
-function groupColors = assignGroupColorsWithMode(gNames, varargin)
-% Robust group color assignment for ROI preview and exports.
-% Accepts old and new call styles.
-
-if nargin < 1 || isempty(gNames)
-    groupColors = zeros(0,3);
-    return;
-end
-
-if ischar(gNames)
-    gNames = cellstr(gNames);
-end
-
-nG = numel(gNames);
-palette = [ ...
-    0.20 0.63 0.86; ... % blue / PACAP
-    0.25 0.75 0.45; ... % green / Vehicle
-    0.90 0.35 0.25; ... % red
-    0.70 0.45 0.90; ... % purple
-    0.95 0.70 0.25; ... % yellow
-    0.20 0.75 0.75];    % cyan
-
-groupColors = zeros(nG,3);
-for i = 1:nG
-    groupColors(i,:) = palette(1+mod(i-1,size(palette,1)),:);
-end
-
-S = struct();
-for q = 1:numel(varargin)
-    if isstruct(varargin{q})
-        S = varargin{q};
-    end
-end
-
-aGroup = gaText_cleanfix(gaFieldAny_cleanfix(S,{'tc_groupA','groupA','groupAName','plotGroupA','roiGroupA','selectedGroupA','selectedA','previewGroupA','statGroupA','metricGroupA','group1'}));
-bGroup = gaText_cleanfix(gaFieldAny_cleanfix(S,{'tc_groupB','groupB','groupBName','plotGroupB','roiGroupB','selectedGroupB','selectedB','previewGroupB','statGroupB','metricGroupB','group2'}));
-aColTxt = gaFieldAny_cleanfix(S,{'tc_colorA','tcColorA','colorA','groupColorA','plotColorA','lineColorA','roiColorA','groupAColor','colorNameA','lineColorAName'});
-bColTxt = gaFieldAny_cleanfix(S,{'tc_colorB','tcColorB','colorB','groupColorB','plotColorB','lineColorB','roiColorB','groupBColor','colorNameB','lineColorBName'});
-
-% Also support direct call style: assignGroupColorsWithMode(gNames,A,B,colorA,colorB)
-colorCandidates = {};
-for q = 1:numel(varargin)
-    v = varargin{q};
-    if isstruct(v)
-        continue;
-    end
-    s = gaText_cleanfix(v);
-    if isempty(s)
-        if isnumeric(v) && numel(v)==3
-            colorCandidates{end+1} = v;
-        end
-        continue;
-    end
-
-    isGroupName = false;
-    for gg = 1:nG
-        if strcmpi(s,gaText_cleanfix(gNames{gg}))
-            isGroupName = true;
-            break;
-        end
-    end
-
-    if isGroupName && isempty(aGroup)
-        aGroup = s;
-    elseif isGroupName && isempty(bGroup) && ~strcmpi(s,aGroup)
-        bGroup = s;
-    else
-        cTry = gaColor_cleanfix(v);
-        if ~any(isnan(cTry))
-            colorCandidates{end+1} = v;
-        end
-    end
-end
-
-if isempty(aGroup) && nG >= 1, aGroup = gaText_cleanfix(gNames{1}); end
-if isempty(bGroup) && nG >= 2, bGroup = gaText_cleanfix(gNames{2}); end
-
-aRGB = gaColor_cleanfix(aColTxt);
-bRGB = gaColor_cleanfix(bColTxt);
-
-if any(isnan(aRGB)) && numel(colorCandidates) >= 1
-    aRGB = gaColor_cleanfix(colorCandidates{1});
-end
-if any(isnan(bRGB)) && numel(colorCandidates) >= 2
-    bRGB = gaColor_cleanfix(colorCandidates{2});
-end
-
-if any(isnan(aRGB)), aRGB = gaColor_cleanfix(aGroup); end
-if any(isnan(bRGB)), bRGB = gaColor_cleanfix(bGroup); end
-
-if any(isnan(aRGB)), aRGB = palette(1,:); end
-if any(isnan(bRGB)), bRGB = palette(2,:); end
-
-for i = 1:nG
-    gi = gaText_cleanfix(gNames{i});
-    if ~isempty(aGroup) && strcmpi(gi,aGroup)
-        groupColors(i,:) = aRGB;
-    elseif ~isempty(bGroup) && strcmpi(gi,bGroup)
-        groupColors(i,:) = bRGB;
-    else
-        guess = gaColor_cleanfix(gi);
-        if ~any(isnan(guess))
-            groupColors(i,:) = guess;
-        end
-    end
-end
-
-groupColors = max(0,min(1,groupColors));
-end
-
-function v = gaFieldAny_cleanfix(S, fields)
-v = [];
-if ~isstruct(S), return; end
-for k = 1:numel(fields)
-    f = fields{k};
-    if isfield(S,f) && ~isempty(S.(f))
-        v = S.(f);
-        if iscell(v) && ~isempty(v)
-            v = v{1};
-        end
-        return;
-    end
-end
-end
-
-function s = gaText_cleanfix(v)
-s = '';
-if isempty(v), return; end
-if iscell(v) && ~isempty(v), v = v{1}; end
-if isnumeric(v), return; end
+function v = fcGetFieldNumCompatV14(S,fieldName,fb)
+% Safe field-to-number helper used by FC bundle loading/export patches.
+v = fb;
 try
-    s = strtrim(char(v));
-catch
-    s = '';
-end
-end
-
-function rgb = gaColor_cleanfix(v)
-rgb = [NaN NaN NaN];
-if isempty(v), return; end
-
-if isnumeric(v) && numel(v) == 3
-    rgb = double(v(:)');
-    if max(rgb) > 1, rgb = rgb ./ 255; end
-    return;
-end
-
-s = lower(gaText_cleanfix(v));
-if isempty(s), return; end
-s = strrep(s,'_',' ');
-s = strrep(s,'-',' ');
-s = strtrim(s);
-
-if ~isempty(strfind(s,'pacap')) || ~isempty(strfind(s,'blue')) || strcmp(s,'conda') || strcmp(s,'condition a') || strcmp(s,'a')
-    rgb = [0.20 0.63 0.86]; return;
-end
-if ~isempty(strfind(s,'vehicle')) || ~isempty(strfind(s,'green')) || strcmp(s,'condb') || strcmp(s,'condition b') || strcmp(s,'b')
-    rgb = [0.25 0.75 0.45]; return;
-end
-if ~isempty(strfind(s,'red')) || ~isempty(strfind(s,'orange')) || ~isempty(strfind(s,'salmon'))
-    rgb = [0.90 0.35 0.25]; return;
-end
-if ~isempty(strfind(s,'purple')) || ~isempty(strfind(s,'violet'))
-    rgb = [0.70 0.45 0.90]; return;
-end
-if ~isempty(strfind(s,'yellow')) || ~isempty(strfind(s,'gold'))
-    rgb = [0.95 0.70 0.25]; return;
-end
-if ~isempty(strfind(s,'cyan')) || ~isempty(strfind(s,'turquoise'))
-    rgb = [0.20 0.75 0.75]; return;
-end
-if ~isempty(strfind(s,'black'))
-    rgb = [0 0 0]; return;
-end
-if ~isempty(strfind(s,'white'))
-    rgb = [1 1 1]; return;
-end
-if ~isempty(strfind(s,'gray')) || ~isempty(strfind(s,'grey'))
-    rgb = [0.5 0.5 0.5]; return;
-end
-end
-
-
-function key = makeAuditMatchKey(row)
-% GA_EXCEL_AUDIT_MATCHKEY_FIX_20260504
-% Robust row key used by Excel export / outlier audit matching.
-key = '';
-try
-    sid = localAuditCellToStr(row,2);
-    grp = localAuditCellToStr(row,3);
-    cnd = localAuditCellToStr(row,4);
-    pid = localAuditCellToStr(row,5);
-    key = lower(strtrim([sid '|' grp '|' cnd '|' pid]));
-catch
-    key = '';
-end
-
-    function s = localAuditCellToStr(C,j)
-        s = '';
-        try
-            if iscell(C)
-                v = C{1,j};
-            else
-                v = C(1,j);
-            end
-            if isstring(v)
-                s = strtrim(char(v));
-            elseif ischar(v)
-                s = strtrim(v);
-            elseif isnumeric(v)
-                if isempty(v) || ~isfinite(v(1))
-                    s = '';
-                else
-                    s = strtrim(num2str(v(1)));
-                end
-            elseif islogical(v)
-                s = char(string(logical(v(1))));
-            else
-                try
-                    s = strtrim(char(v));
-                catch
-                    s = '';
-                end
-            end
-        catch
-            s = '';
+    if isstruct(S) && isfield(S,fieldName) && ~isempty(S.(fieldName))
+        x = S.(fieldName);
+        if isnumeric(x) || islogical(x)
+            x = double(x);
+            v = x(1);
+        elseif ischar(x)
+            tmp = str2double(strtrim(x));
+            if isfinite(tmp), v = tmp; end
+        elseif iscell(x) && ~isempty(x)
+            tmp = str2double(strtrim(char(x{1})));
+            if isfinite(tmp), v = tmp; end
         end
     end
+catch
+    v = fb;
 end
+end
+

@@ -2371,34 +2371,8 @@ G.display.exportStyle = 'SCM_gui_6tile_black_editable_ppt';
         G.underlayInfo.regionInfo = state.regionInfo;
         G.mask2DCurrentSlice = mask2D; G.maskAtlas = passedMask; G.maskIsInclude = passedMaskIsInclude; G.injectionSide = '?';
         [outFile, saveReport] = safeSaveScmGroupBundleLocal(outFile, G);
-
-        % TARGETED_SCM_LOCAL_BUNDLE_COPY_20260622
-        % Also copy the saved bundle into the loaded animal folder.
-        localCopyFile = '';
-        localCopyReport = '';
-        try
-            if isfield(Pexp,'localBundleDir') && ~isempty(Pexp.localBundleDir)
-                safeMkdirIfNeeded(Pexp.localBundleDir);
-                [~,copyName,copyExt] = fileparts(outFile);
-                if isempty(copyExt), copyExt = '.mat'; end
-                localCopyFile = fullfile(Pexp.localBundleDir, [copyName copyExt]);
-                if ~strcmpi(char(localCopyFile), char(outFile))
-                    copyfile(outFile, localCopyFile);
-                    localCopyReport = sprintf('\n\nAdditional copy saved in loaded-animal folder:\n%s', localCopyFile);
-                    fprintf('[SCM EXPORT] Additional local copy: %s\n', localCopyFile);
-                end
-            end
-        catch MEcopy
-            localCopyReport = sprintf('\n\nWarning: could not create additional loaded-animal copy:\n%s', MEcopy.message);
-            try, warning('%s', strtrim(localCopyReport)); catch, end
-        end
-
-        tipFile = outFile;
-        if ~isempty(localCopyFile)
-            tipFile = sprintf('%s\nLocal copy: %s', outFile, localCopyFile);
-        end
-        set(info1,'String',['Group bundle saved: ' shortenPath(outFile,85)], 'TooltipString', tipFile);
-        msgbox(sprintf('Saved GroupAnalysis bundle:\n%s%s', outFile, localCopyReport), 'SCM group export');
+        set(info1,'String',['Group bundle saved: ' shortenPath(outFile,85)], 'TooltipString', outFile);
+        msgbox(sprintf('Saved GroupAnalysis bundle:\n%s', outFile), 'SCM group export');
     catch ME
         errordlg(ME.message, 'Export for Group Analysis failed');
     end
@@ -7162,18 +7136,6 @@ function Pexp = getGroupBundleExportPathsLocal()
     analysedRoot = getCentralAnalysedRootForGroupBundlesLocal(base);
     meta = deriveGroupBundleMetaLocal();
 
-    % TARGETED_SCM_LOCAL_BUNDLE_COPY_20260622
-    % In addition to the central GroupAnalysis bundle folder, also keep a copy
-    % inside the currently loaded animal analysed folder:
-    %   <animal>\GroupAnalysis\SCM Bundle
-    loadedAnimalRoot = base;
-    try
-        loadedAnimalRoot = guessAnalysedRoot(loadedAnimalRoot);
-        loadedAnimalRoot = normalizeSelectorRoot(loadedAnimalRoot);
-    catch
-    end
-    localBundleDir = fullfile(loadedAnimalRoot, 'GroupAnalysis', 'SCM Bundle');
-
     bundleRoot = fullfile(analysedRoot, 'GroupAnalysis', 'Bundles', 'SCM');
     subjectKey = sanitizeName(sprintf('%s_%s_%s', meta.animalID, meta.session, meta.scanID));
     if isempty(subjectKey)
@@ -7184,7 +7146,6 @@ function Pexp = getGroupBundleExportPathsLocal()
     Pexp.root = analysedRoot;
     Pexp.bundleRoot = bundleRoot;
     Pexp.bundleDir = fullfile(bundleRoot, subjectKey);
-    Pexp.localBundleDir = localBundleDir;
     Pexp.subjectKey = subjectKey;
     Pexp.animalID = meta.animalID;
     Pexp.session = meta.session;
