@@ -2371,34 +2371,8 @@ G.display.exportStyle = 'SCM_gui_6tile_black_editable_ppt';
         G.underlayInfo.regionInfo = state.regionInfo;
         G.mask2DCurrentSlice = mask2D; G.maskAtlas = passedMask; G.maskIsInclude = passedMaskIsInclude; G.injectionSide = '?';
         [outFile, saveReport] = safeSaveScmGroupBundleLocal(outFile, G);
-
-        % TARGETED_SCM_LOCAL_BUNDLE_COPY_20260622
-        % Also copy the saved bundle into the loaded animal folder.
-        localCopyFile = '';
-        localCopyReport = '';
-        try
-            if isfield(Pexp,'localBundleDir') && ~isempty(Pexp.localBundleDir)
-                safeMkdirIfNeeded(Pexp.localBundleDir);
-                [~,copyName,copyExt] = fileparts(outFile);
-                if isempty(copyExt), copyExt = '.mat'; end
-                localCopyFile = fullfile(Pexp.localBundleDir, [copyName copyExt]);
-                if ~strcmpi(char(localCopyFile), char(outFile))
-                    copyfile(outFile, localCopyFile);
-                    localCopyReport = sprintf('\n\nAdditional copy saved in loaded-animal folder:\n%s', localCopyFile);
-                    fprintf('[SCM EXPORT] Additional local copy: %s\n', localCopyFile);
-                end
-            end
-        catch MEcopy
-            localCopyReport = sprintf('\n\nWarning: could not create additional loaded-animal copy:\n%s', MEcopy.message);
-            try, warning('%s', strtrim(localCopyReport)); catch, end
-        end
-
-        tipFile = outFile;
-        if ~isempty(localCopyFile)
-            tipFile = sprintf('%s\nLocal copy: %s', outFile, localCopyFile);
-        end
-        set(info1,'String',['Group bundle saved: ' shortenPath(outFile,85)], 'TooltipString', tipFile);
-        msgbox(sprintf('Saved GroupAnalysis bundle:\n%s%s', outFile, localCopyReport), 'SCM group export');
+        set(info1,'String',['Group bundle saved: ' shortenPath(outFile,85)], 'TooltipString', outFile);
+        msgbox(sprintf('Saved GroupAnalysis bundle:\n%s', outFile), 'SCM group export');
     catch ME
         errordlg(ME.message, 'Export for Group Analysis failed');
     end
@@ -7162,18 +7136,6 @@ function Pexp = getGroupBundleExportPathsLocal()
     analysedRoot = getCentralAnalysedRootForGroupBundlesLocal(base);
     meta = deriveGroupBundleMetaLocal();
 
-    % TARGETED_SCM_LOCAL_BUNDLE_COPY_20260622
-    % In addition to the central GroupAnalysis bundle folder, also keep a copy
-    % inside the currently loaded animal analysed folder:
-    %   <animal>\GroupAnalysis\SCM Bundle
-    loadedAnimalRoot = base;
-    try
-        loadedAnimalRoot = guessAnalysedRoot(loadedAnimalRoot);
-        loadedAnimalRoot = normalizeSelectorRoot(loadedAnimalRoot);
-    catch
-    end
-    localBundleDir = fullfile(loadedAnimalRoot, 'GroupAnalysis', 'SCM Bundle');
-
     bundleRoot = fullfile(analysedRoot, 'GroupAnalysis', 'Bundles', 'SCM');
     subjectKey = sanitizeName(sprintf('%s_%s_%s', meta.animalID, meta.session, meta.scanID));
     if isempty(subjectKey)
@@ -7184,7 +7146,6 @@ function Pexp = getGroupBundleExportPathsLocal()
     Pexp.root = analysedRoot;
     Pexp.bundleRoot = bundleRoot;
     Pexp.bundleDir = fullfile(bundleRoot, subjectKey);
-    Pexp.localBundleDir = localBundleDir;
     Pexp.subjectKey = subjectKey;
     Pexp.animalID = meta.animalID;
     Pexp.session = meta.session;
@@ -7219,57 +7180,17 @@ end
 
 function meta = deriveGroupBundleMetaLocal()
     meta = struct('animalID','','session','','scanID','');
-    txts = {fileLabel, safeParFieldLocal('loadedFile'), safeParFieldLocal('loadedPath'), ...
-            safeParFieldLocal('exportPath'), safeParFieldLocal('activeDataset'), ...
-            safeParFieldLocal('datasetName'), safeParFieldLocal('sourceFile'), ...
-            safeParFieldLocal('rawFile'), safeParFieldLocal('file'), safeParFieldLocal('path')};
-    try
-        if isfield(par,'scmPerSliceUnderlayFiles') && ~isempty(par.scmPerSliceUnderlayFiles)
-            for kk = 1:numel(par.scmPerSliceUnderlayFiles)
-                txts{end+1} = char(par.scmPerSliceUnderlayFiles{kk}); %#ok<AGROW>
-            end
-        end
-    catch
-    end
+    txts = {fileLabel, safeParFieldLocal('loadedFile'), safeParFieldLocal('loadedPath')};
     for ii = 1:numel(txts)
         s = txts{ii}; if isempty(s), continue; end
-        tok = regexpi(s,'(?:^|[\\\/ _-])([A-Za-z]{1,16}\d{6}[A-Za-z]?|\d{3,6})[_\- ]+(S\d+).*?((?:FUS[_\-]?\d+)|(?:scan\d+(?:_[A-Za-z0-9]+)?))','tokens','once');
+        tok = regexpi(s,'([A-Za-z]{1,16}\d{6}[A-Za-z]?)_(S\d+).*?(FUS_\d+)','tokens','once');
         if ~isempty(tok), meta.animalID=sanitizeName(tok{1}); meta.session=sanitizeName(tok{2}); meta.scanID=sanitizeName(tok{3}); return; end
     end
     for ii = 1:numel(txts)
         s = txts{ii}; if isempty(s), continue; end
-        if isempty(meta.animalID)
-            tokA = regexpi(s,'([A-Za-z]{1,16}\d{6}[A-Za-z]?)','tokens','once');
-            if ~isempty(tokA), meta.animalID=sanitizeName(tokA{1}); end
-        end
-        if isempty(meta.animalID)
-            % Numeric animal at the beginning of label/folder, e.g. 1160_S75_...
-            tokA = regexpi(s,'(?:^|[\\\/])(\d{3,6})(?=[_\-\\\/\s]|$)','tokens','once');
-            if ~isempty(tokA), meta.animalID=sanitizeName(tokA{1}); end
-        end
-        if isempty(meta.animalID)
-            % PACAP/RGRO style: RGRO_260512_1024_MM_B6J_1005 -> 1005
-            tokA = regexpi(s,'[A-Za-z]+[_\-]\d{6}[_\-]\d{3,6}[_\-][A-Za-z]+[_\-][A-Za-z0-9]+[_\-](\d{3,6})(?:[_\-.\\\/ ]|$)','tokens','once');
-            if ~isempty(tokA), meta.animalID=sanitizeName(tokA{1}); end
-        end
-        if isempty(meta.animalID)
-            % General strain marker style: MM_B6J_1005 or F_C57BL6J_1160
-            tokA = regexpi(s,'(?:^|[_\\\/\-])(MM|M|F|MALE|FEMALE)?[_\\\/\-]*(B6J|C57BL6J|C57|BL6J)[_\\\/\-]+(\d{3,6})(?:[_\\\/\-. ]|$)','tokens','once');
-            if ~isempty(tokA), meta.animalID=sanitizeName(tokA{end}); end
-        end
+        if isempty(meta.animalID), tokA = regexpi(s,'([A-Za-z]{1,16}\d{6}[A-Za-z]?)','tokens','once'); if ~isempty(tokA), meta.animalID=sanitizeName(tokA{1}); end, end
         if isempty(meta.session), tokS = regexpi(s,'(S\d+)','tokens','once'); if ~isempty(tokS), meta.session=sanitizeName(tokS{1}); end, end
-        if isempty(meta.scanID)
-            tokF = regexpi(s,'(FUS[_\-]?\d+)','tokens','once');
-            if ~isempty(tokF)
-                tmpF = strrep(tokF{1},'-','_');
-                tmpF = regexprep(tmpF,'^FUS(\d+)$','FUS_$1','ignorecase');
-                meta.scanID=sanitizeName(upper(tmpF));
-            end
-        end
-        if isempty(meta.scanID)
-            tokF = regexpi(s,'(scan\d+(?:_[A-Za-z0-9]+)?)','tokens','once');
-            if ~isempty(tokF), meta.scanID=sanitizeName(tokF{1}); end
-        end
+        if isempty(meta.scanID), tokF = regexpi(s,'(FUS_\d+)','tokens','once'); if ~isempty(tokF), meta.scanID=sanitizeName(tokF{1}); end, end
     end
     if isempty(meta.animalID), meta.animalID = 'Animal'; end
     if isempty(meta.session), meta.session = 'S1'; end
@@ -7302,21 +7223,10 @@ function titleStr = makeFullTitle(lbl)
 end
 
 function s = getAnimalID(lbl)
-    s = '';
-    cands = {lbl, safeParFieldLocal('loadedFile'), safeParFieldLocal('loadedPath'), ...
-             safeParFieldLocal('exportPath'), safeParFieldLocal('activeDataset'), ...
-             safeParFieldLocal('datasetName'), safeParFieldLocal('sourceFile'), ...
-             safeParFieldLocal('rawFile'), safeParFieldLocal('file'), safeParFieldLocal('path')};
-    for ii = 1:numel(cands)
-        try, s0 = char(cands{ii}); catch, s0 = ''; end
-        if isempty(s0), continue; end
-        tok = regexp(s0,'(WT\d+[A-Za-z]?(?:_\w+)?_S\d+)','tokens','once'); if ~isempty(tok), s = sanitizeName(tok{1}); return; end
-        tok = regexp(s0,'(WT\d+[A-Za-z]?)','tokens','once'); if ~isempty(tok), s = sanitizeName(tok{1}); return; end
-        tok = regexp(s0,'([A-Za-z]{1,16}\d{6}[A-Za-z]?)','tokens','once'); if ~isempty(tok), s = sanitizeName(tok{1}); return; end
-        tok = regexpi(s0,'(?:^|[\\\/])(\d{3,6})(?=[_\-\\\/\s]|$)','tokens','once'); if ~isempty(tok), s = sanitizeName(tok{1}); return; end
-        tok = regexpi(s0,'[A-Za-z]+[_\-]\d{6}[_\-]\d{3,6}[_\-][A-Za-z]+[_\-][A-Za-z0-9]+[_\-](\d{3,6})(?:[_\-.\\\/ ]|$)','tokens','once'); if ~isempty(tok), s = sanitizeName(tok{1}); return; end
-        tok = regexpi(s0,'(?:^|[_\\\/\-])(MM|M|F|MALE|FEMALE)?[_\\\/\-]*(B6J|C57BL6J|C57|BL6J)[_\\\/\-]+(\d{3,6})(?:[_\\\/\-. ]|$)','tokens','once'); if ~isempty(tok), s = sanitizeName(tok{end}); return; end
-    end
+    s0 = char(lbl);
+    tok = regexp(s0,'(WT\d+[A-Za-z]?(?:_\w+)?_S\d+)','tokens','once'); if ~isempty(tok), s = tok{1}; return; end
+    tok = regexp(s0,'(WT\d+[A-Za-z]?)','tokens','once'); if ~isempty(tok), s = tok{1}; return; end
+    tok = regexp(s0,'([A-Za-z]{1,16}\d{6}[A-Za-z]?)','tokens','once'); if ~isempty(tok), s = tok{1}; return; end
     s = 'Animal';
 end
 

@@ -2273,46 +2273,6 @@ try
 catch ME_seed_clean
     try, fprintf('FC seed panel clean-final warning: %s\n',ME_seed_clean.message); catch, end
 end
-%% TARGETED_FC_MANUAL_WARP_BUTTON_20260622
-try
-    delete(findall(pSeedView,'Tag','FC_WarpLabelsButton_20260622'));
-    if exist('pSeedDisplayFinal','var') && ishghandle(pSeedDisplayFinal)
-        uicontrol('Parent',pSeedDisplayFinal,'Style','pushbutton','Units','normalized', ...
-            'Position',[0.135 0.030 0.260 0.055], ...
-            'String','Warp labels','Tag','FC_WarpLabelsButton_20260622', ...
-            'BackgroundColor',C.orange,'ForegroundColor','w', ...
-            'FontName',C.font,'FontWeight','bold','FontSize',6.8, ...
-            'TooltipString','Manually apply Registration2D / Transformation.mat to ROI label atlas', ...
-            'Callback',@onWarpAtlasLabels);
-    end
-catch ME_warpbtn
-    try, fprintf('FC Warp labels button warning: %s\n',ME_warpbtn.message); catch, end
-end
-%% TARGETED_FC_MANUAL_ALIGN_BUTTON_20260622
-try
-    delete(findall(pSeedView,'Tag','FC_ManualAlignLabelsButton_20260622'));
-    if exist('pSeedDisplayFinal','var') && ishghandle(pSeedDisplayFinal)
-        uicontrol('Parent',pSeedDisplayFinal,'Style','pushbutton','Units','normalized', ...
-            'Position',[0.520 0.030 0.270 0.055], ...
-            'String','Manual align','Tag','FC_ManualAlignLabelsButton_20260622', ...
-            'BackgroundColor',[0.10 0.45 0.95],'ForegroundColor','w', ...
-            'FontName',C.font,'FontWeight','bold','FontSize',6.8, ...
-            'TooltipString','Manually translate / scale / rotate ROI label overlay', ...
-            'Callback',@onManualAlignLabels);
-    end
-catch ME_manualbtn
-    try, fprintf('FC Manual align button warning: %s\n',ME_manualbtn.message); catch, end
-end
-%% TARGETED_REMOVE_WARP_LABEL_BUTTON_20260622
-try
-    delete(findall(pSeedView,'Tag','FC_WarpLabelsButton_20260622'));
-catch
-end
-%% TARGETED_REMOVE_WARP_LABEL_BUTTON_20260623
-try
-    delete(findall(pSeedView,'Tag','FC_WarpLabelsButton_20260622'));
-catch
-end
 % HUMOR_FC_SEED_PANEL_CLEAN_FINAL_20260527_END
 
 
@@ -2439,8 +2399,7 @@ try
         sPre.loadedSegmentationFile = sPre.opts.preloadSegmentationFile;
         if ~isempty(roiAtlasPre)
             try
-                ApreRaw = fc_auto_apply_label_transform_20260622(fc_repair_signed_label_map(roiAtlasPre), sPre, sPre.opts.preloadSegmentationFile);
-Apre = fc_fit_volume(ApreRaw, sPre.Y, sPre.X, sPre.Z, false);
+                Apre = fc_fit_volume(fc_repair_signed_label_map(roiAtlasPre), sPre.Y, sPre.X, sPre.Z, false);
                 if ~isempty(Apre) && fc_looks_like_roi_label_map(Apre)
                     sPre.subjects(sPre.currentSubject).roiAtlas = round(double(Apre));
                 end
@@ -3430,104 +3389,6 @@ function onMapClick(~,~)
         refreshAll();
     end
 
-    function onWarpAtlasLabels(~,~)
-        s = guidata(fig);
-        try
-            subj = s.subjects(s.currentSubject);
-            if isempty(subj.roiAtlas)
-                errordlg('No ROI label atlas is loaded yet. Load ROI labels / Seg MAT first.','Warp labels');
-                return;
-            end
-
-            modeChoice = questdlg(['Choose warp source:' newline newline ...
-                'Single transform MAT: choose one Transformation/Registration2D MAT file.' newline ...
-                'Step-motor folder: choose a folder containing one transform per slice/source.'], ...
-                'Warp ROI labels', ...
-                'Single transform MAT','Step-motor folder','Cancel','Single transform MAT');
-            if isempty(modeChoice) || strcmpi(modeChoice,'Cancel'), return; end
-
-            dirChoice = questdlg(['How should the transform be applied?' newline newline ...
-                'Atlas labels -> current fUS/data is usually correct for overlay/extraction.' newline ...
-                'Use the opposite direction only if the first result is worse.'], ...
-                'Transform direction', ...
-                'Atlas labels -> current fUS/data','Opposite direction','Cancel', ...
-                'Atlas labels -> current fUS/data');
-            if isempty(dirChoice) || strcmpi(dirChoice,'Cancel'), return; end
-            useInverse = strcmpi(dirChoice,'Atlas labels -> current fUS/data');
-
-            A0 = round(double(subj.roiAtlas));
-            Anew = [];
-            usedInfo = '';
-
-            if strcmpi(modeChoice,'Step-motor folder')
-                startDir = fc_start_dir(subj,s.opts);
-                folder = uigetdir(startDir,'Select Registration2D / Transformation folder');
-                if isequal(folder,0), return; end
-                files = fc_find_transform_files_manual_20260622(folder);
-                if isempty(files)
-                    errordlg('No transform MAT files found in selected folder.','Warp labels');
-                    return;
-                end
-                Anew = zeros(s.Y,s.X,s.Z);
-                for zz = 1:s.Z
-                    ff = files{min(zz,numel(files))};
-                    Anew(:,:,zz) = fc_warp_label_slice_manual_20260622(A0(:,:,min(zz,size(A0,3))),ff,[s.Y s.X],useInverse);
-                end
-                usedInfo = sprintf('step-motor folder, %d transform file(s)',numel(files));
-            else
-                startDir = fc_start_dir(subj,s.opts);
-                [f,p] = uigetfile({'*.mat','Transform MAT (*.mat)'},'Select Transformation / Registration2D MAT',startDir);
-                if isequal(f,0), return; end
-                tfFile = fullfile(p,f);
-                Anew = fc_warp_label_volume_manual_20260622(A0,tfFile,[s.Y s.X s.Z],useInverse);
-                usedInfo = tfFile;
-            end
-
-            if isempty(Anew) || ~any(Anew(:) ~= 0)
-                errordlg('Warp produced an empty ROI label map. Try the opposite direction or another transform.','Warp labels');
-                return;
-            end
-
-            s.subjects(s.currentSubject).roiAtlas = int32(round(double(Anew)));
-            s.roiResults(s.currentSubject,:) = {[]};
-            try, s.subjects(s.currentSubject).roiAtlasWarpInfo = usedInfo; catch, end
-            guidata(fig,s);
-            setStatus(['ROI labels warped. Recompute ROI current before interpreting ROI FC. Source: ' usedInfo],C.good);
-            refreshAll();
-
-            msgbox({'ROI labels were warped.','','Now check overlay alignment.','Then click ROI current / recompute ROI FC before export.'},'Warp labels');
-        catch ME
-            try, setStatus(['Warp labels failed: ' ME.message],C.warn); catch, end
-            errordlg(ME.message,'Warp labels failed');
-        end
-    end
-    function onManualAlignLabels(~,~)
-        try
-            setappdata(fig,'FCManualAlignApplied_20260622',false);
-            fc_manual_align_labels_gui_20260622(fig);
-
-            % After the manual GUI closes, refresh and recompute ROI current if applied.
-            s = guidata(fig);
-            wasApplied = false;
-            try, wasApplied = logical(getappdata(fig,'FCManualAlignApplied_20260622')); catch, end
-            if wasApplied
-                try
-                    cs = s.currentSubject;
-                    ep = s.currentEpoch;
-                    setStatus(sprintf('Manual label alignment applied. Recomputing ROI current for subject %d...',cs),C.dim);
-                    s = computeROI(s,cs,ep);
-                    guidata(fig,s);
-                catch MEroi
-                    try, warning('ROI recompute after manual alignment failed: %s',MEroi.message); catch, end
-                end
-                try, refreshAll(); catch, end
-                try, setStatus('Manual ROI-label alignment applied. Check overlay, then Export GA.',C.good); catch, end
-            end
-        catch ME
-            try, setStatus(['Manual align failed: ' ME.message],C.warn); catch, end
-            errordlg(ME.message,'Manual ROI-label alignment failed');
-        end
-    end
     function onLoadAtlas(~,~)
         s = guidata(fig);
         subj = s.subjects(s.currentSubject);
@@ -3547,10 +3408,7 @@ function onMapClick(~,~)
             P = deConfUSIon_FC_stepmotor_read_folder(folder,s.Y,s.X,s.Z);
             did = false;
             if ~isempty(P.atlas)
-                % TARGETED_FC_STEPMOTOR_ATLAS_TRANSFORM_20260622
-                Astep = fc_auto_apply_label_transform_20260622(P.atlas,s,folder);
-                Astep = fc_fit_volume(Astep,s.Y,s.X,s.Z,false);
-                s.subjects(s.currentSubject).roiAtlas = round(double(Astep));
+                s.subjects(s.currentSubject).roiAtlas = round(double(P.atlas));
                 s.roiResults(s.currentSubject,:) = {[]};
                 did = true;
             end
@@ -3583,10 +3441,7 @@ function onMapClick(~,~)
                 s.subjects(s.currentSubject).roiNameTable = P.names;
             end
             if ~isempty(P.atlas)
-                % TARGETED_FC_STEPMOTOR_ATLAS_TRANSFORM_20260622
-                Astep = fc_auto_apply_label_transform_20260622(P.atlas,s,fullFile);
-                Astep = fc_fit_volume(Astep,s.Y,s.X,s.Z,false);
-                s.subjects(s.currentSubject).roiAtlas = round(double(Astep));
+                s.subjects(s.currentSubject).roiAtlas = round(double(P.atlas));
                 s.roiResults(s.currentSubject,:) = {[]};
             end
             if isempty(P.names.labels) && isempty(P.atlas)
@@ -3599,9 +3454,6 @@ function onMapClick(~,~)
             return;
         end
         a = fc_read_atlas_any(fullFile,s.Y,s.X,s.Z);
-        % TARGETED_FC_DIRECT_ATLAS_TRANSFORM_20260622
-        a = fc_auto_apply_label_transform_20260622(a,s,fullFile);
-        a = fc_fit_volume(a,s.Y,s.X,s.Z,false);
         if isempty(a)
             errordlg('No compatible ROI label map found.','ROI labels');
             return;
@@ -3756,8 +3608,7 @@ function onMapClick(~,~)
             % If Segmentation.m saved a label map, use it for ROI overlay / compare map.
             if ~isempty(roiAtlasFromSeg)
                 try
-                    Araw = fc_auto_apply_label_transform_20260622(fc_repair_signed_label_map(roiAtlasFromSeg), s, fullFile);
-A = fc_fit_volume(Araw, s.Y, s.X, s.Z, false);
+                    A = fc_fit_volume(fc_repair_signed_label_map(roiAtlasFromSeg), s.Y, s.X, s.Z, false);
                     if ~isempty(A) && fc_looks_like_roi_label_map(A)
                         s.subjects(s.currentSubject).roiAtlas = round(double(A));
                     end
@@ -4024,38 +3875,6 @@ end
     function onExportGroupAnalysis(~,~)
         s = guidata(fig);
         try
-            % TARGETED_FC_EXPORT_RECOMPUTE_20260622
-            % If labels were warped, ROI results were cleared. Recompute before export
-            % so the GroupAnalysis bundle is rich and not only metadata (~30 KB).
-            try
-                epNow = s.currentEpoch;
-                nDone = 0;
-                for ii = 1:s.nSub
-                    hasI4 = isfield(s.subjects(ii),'I4') && ~isempty(s.subjects(ii).I4);
-                    hasAtlas = isfield(s.subjects(ii),'roiAtlas') && ~isempty(s.subjects(ii).roiAtlas);
-                    resEmpty = true;
-                    try
-                        if iscell(s.roiResults) && ii <= size(s.roiResults,1) && epNow <= size(s.roiResults,2)
-                            resEmpty = isempty(s.roiResults{ii,epNow});
-                        end
-                    catch
-                        resEmpty = true;
-                    end
-                    if hasI4 && hasAtlas && resEmpty
-                        setStatus(sprintf('ROI FC missing before GA export. Computing subject %d/%d...',ii,s.nSub),C.dim);
-                        s = computeROI(s,ii,epNow);
-                        nDone = nDone + 1;
-                    end
-                end
-                if nDone > 0
-                    guidata(fig,s);
-                    refreshAll();
-                    setStatus(sprintf('Computed ROI FC for %d subject(s). Exporting GA bundle...',nDone),C.good);
-                end
-            catch MEpre
-                warning('Pre-export ROI recompute failed: %s',MEpre.message);
-            end
-
             outFile = fc_export_group_analysis_bundle_auto_v4(s);
             if ~isempty(outFile)
                 setStatus(['Saved GroupAnalysis FC bundle: ' outFile],C.good);
@@ -4065,6 +3884,7 @@ end
             errordlg(ME.message,'Export FC bundle for GroupAnalysis');
         end
     end
+
 % =========================================================================
 % REFRESH FUNCTIONS
 % =========================================================================
@@ -7090,23 +6910,6 @@ for i = 1:s.nSub
     fcBundle.subjects(i).timeIdx = res.timeIdx;
     fcBundle.subjects(i).labels = res.labels;
     fcBundle.subjects(i).names = res.names;
-    % TARGETED_FC_V1_SPATIAL_FULLNAMES_20260622
-    try, fcBundle.subjects(i).fullNames = res.fullNames; catch, fcBundle.subjects(i).fullNames = {}; end
-    try, fcBundle.subjects(i).sourceFile = res.sourceFile; fcBundle.subjects(i).roiSourceFile = res.sourceFile; catch, end
-    try
-        atlasNow = [];
-        if isfield(res,'roiAtlas') && ~isempty(res.roiAtlas), atlasNow = res.roiAtlas; end
-        if isempty(atlasNow) && isfield(res,'labelMap') && ~isempty(res.labelMap), atlasNow = res.labelMap; end
-        if isempty(atlasNow) && isfield(s.subjects(i),'roiAtlas') && ~isempty(s.subjects(i).roiAtlas), atlasNow = s.subjects(i).roiAtlas; end
-        if ~isempty(atlasNow)
-            atlasNow = int32(round(double(atlasNow)));
-            fcBundle.subjects(i).roiAtlas = atlasNow;
-            fcBundle.subjects(i).labelMap = atlasNow;
-            fcBundle.subjects(i).roiMap = atlasNow;
-            fcBundle.subjects(i).spatialMapNote = 'roiAtlas/labelMap saved from FunctionalConnectivity export';
-        end
-    catch
-    end
     fcBundle.subjects(i).counts = res.counts;
     fcBundle.subjects(i).meanTS = res.meanTS;
     fcBundle.subjects(i).R = res.M;
@@ -7500,36 +7303,6 @@ end
 res = struct();
 res.labels = labels(:);
 res.names = names(:);
-res.fullNames = names(:); % TARGETED_FC_RES_FULLNAMES_MAPS_20260622
-try
-    if exist('labelsBase','var') && exist('nmFull','var') && ~isempty(labelsBase) && ~isempty(nmFull)
-        fnTmp = cell(numel(labels),1);
-        for kk = 1:numel(labels)
-            idxFull = find(abs(double(labelsBase(:))) == abs(double(labels(kk))),1,'first');
-            if ~isempty(idxFull) && idxFull <= numel(nmFull) && ~isempty(strtrim(char(nmFull{idxFull})))
-                fnTmp{kk} = strtrim(char(nmFull{idxFull}));
-            else
-                fnTmp{kk} = regexprep(strtrim(char(names{kk})),'\s*\[[^\]]*\]\s*$','');
-            end
-        end
-        res.fullNames = fnTmp(:);
-    end
-catch
-end
-res.roiAtlas = [];
-res.labelMap = [];
-res.roiMap = [];
-res.spatialMapNote = '';
-try
-    if exist('roiAtlas','var') && ~isempty(roiAtlas)
-        Aroi = int32(round(double(roiAtlas)));
-        res.roiAtlas = Aroi;
-        res.labelMap = Aroi;
-        res.roiMap = Aroi;
-        res.spatialMapNote = 'roiAtlas saved from segmentation result in FC space';
-    end
-catch
-end
 res.counts = counts(:);
 res.meanTS = meanTS;
 res.M = Rfc;
@@ -8729,23 +8502,6 @@ for i = 1:nSub
     fcBundle.subjects(i).labels = double(fc_get_v3(res,'labels',[]));
     fcBundle.subjects(i).labels = fcBundle.subjects(i).labels(:);
     fcBundle.subjects(i).names = fc_cellstr_v3(fc_get_v3(res,'names',{}));
-    % TARGETED_FC_SAFE_V3_SPATIAL_FULLNAMES_20260622
-    try, fcBundle.subjects(i).fullNames = fc_cellstr_v3(fc_get_v3(res,'fullNames',{})); catch, fcBundle.subjects(i).fullNames = {}; end
-    if isempty(fcBundle.subjects(i).fullNames), fcBundle.subjects(i).fullNames = fcBundle.subjects(i).names; end
-    try, fcBundle.subjects(i).sourceFile = fc_getc_v3(res,'sourceFile',''); fcBundle.subjects(i).roiSourceFile = fcBundle.subjects(i).sourceFile; catch, end
-    try
-        atlasNow = fc_get_v3(res,'roiAtlas',[]);
-        if isempty(atlasNow), atlasNow = fc_get_v3(res,'labelMap',[]); end
-        if isempty(atlasNow), atlasNow = fc_get_v3(subj,'roiAtlas',[]); end
-        if ~isempty(atlasNow)
-            atlasNow = int32(round(double(atlasNow)));
-            fcBundle.subjects(i).roiAtlas = atlasNow;
-            fcBundle.subjects(i).labelMap = atlasNow;
-            fcBundle.subjects(i).roiMap = atlasNow;
-            fcBundle.subjects(i).spatialMapNote = 'roiAtlas/labelMap saved from FunctionalConnectivity safe-v3 export';
-        end
-    catch
-    end
     fcBundle.subjects(i).counts = double(fc_get_v3(res,'counts',[]));
     fcBundle.subjects(i).meanTS = double(fc_get_v3(res,'meanTS',[]));
     fcBundle.subjects(i).R = R;
@@ -8827,13 +8583,12 @@ end
 
 function tmpl = fc_subject_template_v3()
 tmpl = struct('name','','group','','TR',NaN,'analysisDir','','hasROI',false, ...
-    'epochName','','timeIdx',[],'labels',[],'names',{{}},'fullNames',{{}},'counts',[],'meanTS',[], ...
+    'epochName','','timeIdx',[],'labels',[],'names',{{}},'counts',[],'meanTS',[], ...
     'R',[],'M',[],'Z',[],'statMatrix',[],'statSpace','Fisher z', ...
     'displayMatrix',[],'displayZ',[],'displayStatMatrix',[],'displaySpace','Pearson r', ...
     'displayLabels',[],'displayNames',{{}},'heatmap',struct(),'heatmapInfo',struct(), ...
     'timecourseInfo',struct(),'isStepMotor3D',false,'nSlices',[],'sliceResults',struct([]), ...
-    'seedResults',struct([]),'allEpochs',struct([]), ...
-    'sourceFile','','roiSourceFile','','roiMap',[],'labelMap',[],'roiAtlas',[],'spatialMapNote','');
+    'seedResults',struct([]),'allEpochs',struct([]));
 end
 
 function res = fc_current_roi_result_v3(s,i)
@@ -9130,20 +8885,6 @@ for i = 1:nSub
     rec.analysisDir = fc_getc_auto_v4(subj,'analysisDir','');
     rec.isStepMotor3D = fc_getn_auto_v4(s,'Z',1) > 1;
     rec.nSlices = fc_getn_auto_v4(s,'Z',1);
-    % TARGETED_FC_EXPORT_STORE_ATLAS_20260622
-    try
-        atlasNow = fc_get_auto_v4(subj,'roiAtlas',[]);
-        if ~isempty(atlasNow)
-            atlasNow = int32(round(double(atlasNow)));
-            rec.roiAtlas = atlasNow;
-            rec.labelMap = atlasNow;
-            rec.roiMap = atlasNow;
-            rec.spatialMapNote = 'roiAtlas/labelMap exported from current FunctionalConnectivity subject state';
-        end
-        rec.roiSourceFile = fc_getc_auto_v4(subj,'roiSourceFile','');
-        rec.sourceFile = fc_getc_auto_v4(subj,'sourceFile','');
-    catch
-    end
 
     res = fc_current_roi_auto_v4(s,i);
     if ~isempty(res) && isstruct(res) && isfield(res,'M') && ~isempty(res.M)
@@ -9153,28 +8894,6 @@ for i = 1:nSub
         rec.epochName = fc_getc_auto_v4(res,'epochName','');
         rec.labels = double(fc_get_auto_v4(res,'labels',[])); rec.labels = rec.labels(:);
         rec.names = fc_cellstr_auto_v4(fc_get_auto_v4(res,'names',{}));
-        % TARGETED_FC_EXPORT_FULLNAMES_20260622
-        rec.fullNames = fc_cellstr_auto_v4(fc_get_auto_v4(res,'fullNames',{}));
-        if isempty(rec.fullNames), rec.fullNames = rec.names; end
-        % TARGETED_FC_AUTO_V4_SPATIAL_FULLNAMES_20260622
-        rec.fullNames = fc_cellstr_auto_v4(fc_get_auto_v4(res,'fullNames',{}));
-        if isempty(rec.fullNames), rec.fullNames = rec.names; end
-        rec.sourceFile = fc_getc_auto_v4(res,'sourceFile','');
-        rec.roiSourceFile = rec.sourceFile;
-        try
-            atlasNow = fc_get_auto_v4(res,'roiAtlas',[]);
-            if isempty(atlasNow), atlasNow = fc_get_auto_v4(res,'labelMap',[]); end
-            if isempty(atlasNow), atlasNow = fc_get_auto_v4(subj,'roiAtlas',[]); end
-            if isempty(atlasNow), atlasNow = fc_get_auto_v4(s,'roiAtlas',[]); end
-            if ~isempty(atlasNow)
-                atlasNow = int32(round(double(atlasNow)));
-                rec.roiAtlas = atlasNow;
-                rec.labelMap = atlasNow;
-                rec.roiMap = atlasNow;
-                rec.spatialMapNote = 'roiAtlas/labelMap saved from FunctionalConnectivity export';
-            end
-        catch
-        end
         rec.counts = double(fc_get_auto_v4(res,'counts',[])); rec.counts = rec.counts(:);
         rec.meanTS = double(fc_get_auto_v4(res,'meanTS',[]));
         rec.timeIdx = fc_get_auto_v4(res,'timeIdx',[]);
@@ -9221,13 +8940,12 @@ end
 
 function tmpl = fc_subject_template_auto_v4()
 tmpl = struct('name','','group','','TR',NaN,'analysisDir','','hasROI',false, ...
-    'epochName','','labels',[],'names',{{}},'fullNames',{{}},'counts',[],'meanTS',[],'timeIdx',[], ...
+    'epochName','','labels',[],'names',{{}},'counts',[],'meanTS',[],'timeIdx',[], ...
     'R',[],'M',[],'Z',[],'statMatrix',[],'statSpace','Fisher z', ...
     'displayMatrix',[],'displayZ',[],'displayStatMatrix',[],'displaySpace','Pearson r', ...
     'displayLabels',[],'displayNames',{{}},'heatmapInfo',struct(),'timecourseInfo',struct(), ...
     'compareROI',struct(),'isStepMotor3D',false,'nSlices',[],'sliceResults',struct([]), ...
-    'seedResults',struct([]),'allEpochs',struct([]), ...
-    'sourceFile','','roiSourceFile','','roiMap',[],'labelMap',[],'roiAtlas',[],'spatialMapNote','');
+    'seedResults',struct([]),'allEpochs',struct([]));
 end
 
 function res = fc_current_roi_auto_v4(s,i)
@@ -9554,485 +9272,3 @@ function sr = deConfUSIon_FCGA_findSliceRecursive_SAFE_20260617(X,depth)
 sr = [];
 end
 % FC_GA_EXPORT_ENRICH_SAFE_20260617_END
-
-
-
-function Aout = fc_auto_apply_label_transform_20260622(Ain,s,sourcePath)
-% Apply saved atlas-registration transform to ROI label maps before FC display/export.
-% Default assumes Transf.M maps scan/native data -> atlas space, therefore labels need inv(M).
-Aout = Ain;
-try
-    if isempty(Ain) || ~isnumeric(Ain), return; end
-    Ain = squeeze(Ain);
-    if ndims(Ain) ~= 3, return; end
-    if ~exist('affine3d','file') || ~exist('imwarp','file') || ~exist('imref3d','file')
-        return;
-    end
-    tfFile = fc_find_transformation_file_20260622(s,sourcePath);
-    if isempty(tfFile), return; end
-    L = load(tfFile);
-    M = [];
-    if isfield(L,'Transf') && isstruct(L.Transf) && isfield(L.Transf,'M'), M = L.Transf.M; end
-    if isempty(M) && isfield(L,'M'), M = L.M; end
-    if isempty(M) && isfield(L,'tform') && isa(L.tform,'affine3d'), M = L.tform.T; end
-    if isempty(M) || ~isequal(size(M),[4 4]), return; end
-    Y = fc_getn_auto_v4(s,'Y',size(Ain,1));
-    X = fc_getn_auto_v4(s,'X',size(Ain,2));
-    Z = fc_getn_auto_v4(s,'Z',size(Ain,3));
-    Rout = imref3d([Y X Z]);
-    Tinv = affine3d(inv(double(M)));
-    Atry = imwarp(double(Ain),Tinv,'nearest','OutputView',Rout,'FillValues',0);
-    Atry = round(double(Atry));
-    if fc_looks_like_roi_label_map(Atry)
-        Aout = Atry;
-        try, fprintf('[FC] Applied inverse registration transform to ROI labels: %s\n',tfFile); catch, end
-        return;
-    end
-catch ME
-    try, fprintf('[FC] ROI label transform skipped: %s\n',ME.message); catch, end
-end
-end
-
-function tfFile = fc_find_transformation_file_20260622(s,sourcePath)
-tfFile = '';
-roots = {};
-try, if nargin >= 3 && ~isempty(sourcePath), if exist(sourcePath,'dir')==7, roots{end+1}=sourcePath; else, roots{end+1}=fileparts(sourcePath); end, end, catch, end
-try, roots{end+1}=fc_getc_auto_v4(s,'saveRoot',''); catch, end
-try, roots{end+1}=fc_getc_auto_v4(s,'qcDir',''); catch, end
-try, roots{end+1}=fc_getc_auto_v4(s,'loadedSegmentationFile',''); catch, end
-try, if isfield(s,'opts'), roots{end+1}=fc_getc_auto_v4(s.opts,'registrationPath',''); end, catch, end
-try, if isfield(s,'opts'), roots{end+1}=fc_getc_auto_v4(s.opts,'registration2DPath',''); end, catch, end
-try
-    cs = round(fc_getn_auto_v4(s,'currentSubject',1));
-    if isfield(s,'subjects') && cs >= 1 && cs <= numel(s.subjects)
-        roots{end+1}=fc_getc_auto_v4(s.subjects(cs),'analysisDir','');
-        roots{end+1}=fc_getc_auto_v4(s.subjects(cs),'saveRoot','');
-    end
-catch
-end
-cleanRoots = {};
-for i = 1:numel(roots)
-    r = roots{i};
-    if isempty(r), continue; end
-    if exist(r,'file')==2, r = fileparts(r); end
-    if exist(r,'dir')==7 && ~any(strcmp(cleanRoots,r)), cleanRoots{end+1}=r; end
-end
-for i = 1:numel(cleanRoots)
-    r = cleanRoots{i};
-    cand = {fullfile(r,'Transformation.mat'), fullfile(r,'Registration','Transformation.mat'), fullfile(r,'Registration2D','Transformation.mat'), fullfile(r,'Registration to Atlas','Transformation.mat'), fullfile(r,'AtlasRegistration','Transformation.mat')};
-    for c = 1:numel(cand)
-        if exist(cand{c},'file')==2, tfFile = cand{c}; return; end
-    end
-end
-for i = 1:numel(cleanRoots)
-    try
-        d = dir(fullfile(cleanRoots{i},'**','Transformation.mat'));
-        if ~isempty(d)
-            tfFile = fullfile(d(1).folder,d(1).name);
-            return;
-        end
-    catch
-    end
-end
-end
-
-
-
-function Aout = fc_warp_label_volume_manual_20260622(Ain,tfFile,outSize,useInverse)
-Aout = [];
-if isempty(Ain), return; end
-S = load(tfFile);
-[A,tfType] = fc_extract_transform_matrix_manual_20260622(S);
-Ain = squeeze(round(double(Ain)));
-outSize = round(double(outSize(:)'));
-if numel(outSize) < 3, outSize(3) = max(1,size(Ain,3)); end
-
-if isequal(size(A),[4 4])
-    A = fc_to_matlab_affine_matrix_20260622(A,3);
-    if useInverse, Ause = inv(A); else, Ause = A; end
-    Ause = fc_to_matlab_affine_matrix_20260622(Ause,3);
-    tform = affine3d(Ause);
-    Rout = imref3d(outSize(1:3));
-    Aout = imwarp(double(Ain),tform,'nearest','OutputView',Rout,'FillValues',0);
-    Aout = int32(round(double(Aout)));
-    try, fprintf('[FC warp labels] Applied 3D %s transform: %s\n',tfType,tfFile); catch, end
-    return;
-end
-
-if isequal(size(A),[3 3])
-    Aout = zeros(outSize(1),outSize(2),outSize(3));
-    for zz = 1:outSize(3)
-        srcZ = min(zz,size(Ain,3));
-        Aout(:,:,zz) = fc_warp_label_slice_with_matrix_manual_20260622(Ain(:,:,srcZ),A,outSize(1:2),useInverse);
-    end
-    Aout = int32(round(double(Aout)));
-    try, fprintf('[FC warp labels] Applied 2D %s transform to all slices: %s\n',tfType,tfFile); catch, end
-    return;
-end
-
-error('Transform matrix must be 3x3 or 4x4.');
-end
-function A2 = fc_warp_label_slice_manual_20260622(sliceIn,tfFile,outSize2,useInverse)
-S = load(tfFile);
-[A,~] = fc_extract_transform_matrix_manual_20260622(S);
-if ~isequal(size(A),[3 3])
-    error('Step-motor slice warp expects 2D 3x3 transform matrices.');
-end
-A2 = fc_warp_label_slice_with_matrix_manual_20260622(sliceIn,A,outSize2,useInverse);
-end
-
-function A2 = fc_warp_label_slice_with_matrix_manual_20260622(sliceIn,A,outSize2,useInverse)
-A = fc_to_matlab_affine_matrix_20260622(A,2);
-if useInverse, A = inv(A); end
-A = fc_to_matlab_affine_matrix_20260622(A,2);
-tform = affine2d(A);
-Rout = imref2d(round(double(outSize2(1:2))));
-A2 = imwarp(double(sliceIn),tform,'nearest','OutputView',Rout,'FillValues',0);
-A2 = int32(round(double(A2)));
-end
-function [A,tfType] = fc_extract_transform_matrix_manual_20260622(S)
-tfType = 'unknown';
-T = S;
-if isfield(S,'Transf') && isstruct(S.Transf), T = S.Transf; tfType = 'Transf'; end
-if isfield(S,'Reg2D') && isstruct(S.Reg2D), T = S.Reg2D; tfType = 'Reg2D'; end
-if isfield(S,'RegOut') && isstruct(S.RegOut), T = S.RegOut; tfType = 'RegOut'; end
-if isfield(S,'Registration2D') && isstruct(S.Registration2D), T = S.Registration2D; tfType = 'Registration2D'; end
-A = [];
-if isstruct(T) && isfield(T,'A') && ~isempty(T.A), A = T.A; end
-if isempty(A) && isstruct(T) && isfield(T,'M') && ~isempty(T.M), A = T.M; end
-if isempty(A) && isstruct(T) && isfield(T,'T') && ~isempty(T.T), A = T.T; end
-if isempty(A) && isstruct(T) && isfield(T,'tform')
-    try, A = T.tform.T; catch, end
-end
-if isempty(A)
-    error('No transform matrix found. Expected A, M, T, or tform.T.');
-end
-A = double(A);
-end
-
-function files = fc_find_transform_files_manual_20260622(folder)
-files = {};
-try
-    d = dir(fullfile(folder,'*.mat'));
-    for i = 1:numel(d)
-        nm = lower(d(i).name);
-        if ~isempty(strfind(nm,'registration')) || ~isempty(strfind(nm,'transform')) || ~isempty(strfind(nm,'source')) || ~isempty(strfind(nm,'atlas'))
-            files{end+1,1} = fullfile(d(i).folder,d(i).name);
-        end
-    end
-    sub = dir(folder);
-    for i = 1:numel(sub)
-        if sub(i).isdir && ~strcmp(sub(i).name,'.') && ~strcmp(sub(i).name,'..')
-            more = fc_find_transform_files_manual_20260622(fullfile(folder,sub(i).name));
-            files = [files; more(:)]; %#ok<AGROW>
-        end
-    end
-    files = sort(files);
-catch
-    files = {};
-end
-end
-
-
-
-function A = fc_to_matlab_affine_matrix_20260622(A,dim)
-% Converts common image-transform convention to MATLAB affine2d/affine3d convention.
-% MATLAB affine2d wants final column [0;0;1].
-% MATLAB affine3d wants final column [0;0;0;1].
-A = double(A);
-tol = 1e-6;
-if dim == 3 && isequal(size(A),[4 4])
-    colOK = norm(A(:,4) - [0;0;0;1]) < tol;
-    rowOK = norm(A(4,:) - [0 0 0 1]) < tol;
-    if ~colOK && rowOK
-        A = A.';
-    end
-    if norm(A(1:3,4)) < 1e-4 && abs(A(4,4)-1) < 1e-4
-        A(1:3,4) = 0;
-        A(4,4) = 1;
-    end
-elseif dim == 2 && isequal(size(A),[3 3])
-    colOK = norm(A(:,3) - [0;0;1]) < tol;
-    rowOK = norm(A(3,:) - [0 0 1]) < tol;
-    if ~colOK && rowOK
-        A = A.';
-    end
-    if norm(A(1:2,3)) < 1e-4 && abs(A(3,3)-1) < 1e-4
-        A(1:2,3) = 0;
-        A(3,3) = 1;
-    end
-end
-end
-
-
-
-
-
-
-
-
-
-function fc_manual_align_labels_gui_20260622(mainFig)
-s = guidata(mainFig);
-cs = s.currentSubject;
-if cs < 1 || cs > numel(s.subjects), error('No current subject selected.'); end
-subj = s.subjects(cs);
-if ~isfield(subj,'roiAtlas') || isempty(subj.roiAtlas), error('No ROI label atlas is loaded.'); end
-A0 = fc_manual_build_label_volume_20260623(subj);
-if isempty(A0), error('Could not build ROI label volume from roiAtlas/sliceResults.'); end
-A0 = int32(round(double(A0)));
-Z = size(A0,3); Awork = A0;
-z = round(Z/2);
-try, if isfield(s,'currentZ') && ~isempty(s.currentZ), z = round(s.currentZ); end, catch, end
-try, if isfield(s,'hZ') && ishghandle(s.hZ), z = round(get(s.hZ,'Value')); end, catch, end
-z = max(1,min(z,Z));
-U = fc_manual_get_underlay_slice_20260622(subj,z,size(A0,1),size(A0,2));
-f = figure('Name','Manual ROI-label alignment', ...
-    'Color',[0.07 0.07 0.075],'NumberTitle','off', ...
-    'MenuBar','none','ToolBar','figure', ...
-    'Position',[60 40 1480 940]);
-ax = axes('Parent',f,'Units','normalized','Position',[0.035 0.070 0.705 0.885]);
-uicontrol(f,'Style','text','String','Manual ROI-label alignment', ...
-    'Units','normalized','Position',[0.765 0.920 0.22 0.040], ...
-    'BackgroundColor',[0.07 0.07 0.075],'ForegroundColor',[1 1 1], ...
-    'FontWeight','bold','FontSize',12,'HorizontalAlignment','left');
-uicontrol(f,'Style','text','String','Slice', ...
-    'Units','normalized','Position',[0.765 0.870 0.055 0.035], ...
-    'BackgroundColor',[0.07 0.07 0.075],'ForegroundColor',[1 1 1],'HorizontalAlignment','left');
-hSlice = uicontrol(f,'Style','popupmenu','String',arrayfun(@(k)sprintf('Slice %d',k),1:Z,'UniformOutput',false), ...
-    'Value',z,'Units','normalized','Position',[0.835 0.870 0.125 0.040], ...
-    'Callback',@(src,evt)fc_manual_align_update_20260622(f));
-lab = {'dx','dy','scale X','scale Y','rot deg'}; vals = {'0','0','1.000','1.000','0'};
-y0 = 0.815; hs = gobjects(5,1);
-for k=1:5
-    uicontrol(f,'Style','text','String',lab{k},'Units','normalized', ...
-        'Position',[0.765 y0-(k-1)*0.050 0.070 0.032], ...
-        'BackgroundColor',[0.07 0.07 0.075],'ForegroundColor',[1 1 1],'HorizontalAlignment','left');
-    hs(k)=uicontrol(f,'Style','edit','String',vals{k},'Units','normalized', ...
-        'Position',[0.835 y0-(k-1)*0.050 0.110 0.036], ...
-        'BackgroundColor',[0.14 0.14 0.16],'ForegroundColor',[1 1 1], ...
-        'Callback',@(src,evt)fc_manual_align_update_20260622(f));
-end
-hDx=hs(1); hDy=hs(2); hSx=hs(3); hSy=hs(4); hRot=hs(5);
-uicontrol(f,'Style','text','String','Line', ...
-    'Units','normalized','Position',[0.765 0.545 0.055 0.032], ...
-    'BackgroundColor',[0.07 0.07 0.075],'ForegroundColor',[1 1 1],'HorizontalAlignment','left');
-hLineColor = uicontrol(f,'Style','popupmenu','String',{'White lines','Black lines','Gray lines','White+black'}, ...
-    'Value',3,'Units','normalized','Position',[0.835 0.545 0.110 0.036],'Callback',@(src,evt)fc_manual_align_update_20260622(f));
-hLineSize = uicontrol(f,'Style','edit','String','15', ...
-    'Units','normalized','Position',[0.950 0.545 0.040 0.036], ...
-    'BackgroundColor',[0.14 0.14 0.16],'ForegroundColor',[1 1 1],'Callback',@(src,evt)fc_manual_align_update_20260622(f));
-uicontrol(f,'Style','pushbutton','String','Update preview','Units','normalized', ...
-    'Position',[0.765 0.485 0.225 0.050],'BackgroundColor',[0.10 0.45 0.95], ...
-    'ForegroundColor','w','FontWeight','bold','Callback',@(src,evt)fc_manual_align_update_20260622(f));
-uicontrol(f,'Style','pushbutton','String','←','Units','normalized','Position',[0.780 0.410 0.045 0.045],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'dx',-2));
-uicontrol(f,'Style','pushbutton','String','→','Units','normalized','Position',[0.890 0.410 0.045 0.045],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'dx',2));
-uicontrol(f,'Style','pushbutton','String','↑','Units','normalized','Position',[0.835 0.435 0.045 0.045],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'dy',-2));
-uicontrol(f,'Style','pushbutton','String','↓','Units','normalized','Position',[0.835 0.385 0.045 0.045],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'dy',2));
-uicontrol(f,'Style','pushbutton','String','Scale X -','Units','normalized','Position',[0.765 0.320 0.100 0.042],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'sx',-0.01));
-uicontrol(f,'Style','pushbutton','String','Scale X +','Units','normalized','Position',[0.875 0.320 0.100 0.042],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'sx',0.01));
-uicontrol(f,'Style','pushbutton','String','Scale Y -','Units','normalized','Position',[0.765 0.270 0.100 0.042],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'sy',-0.01));
-uicontrol(f,'Style','pushbutton','String','Scale Y +','Units','normalized','Position',[0.875 0.270 0.100 0.042],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'sy',0.01));
-uicontrol(f,'Style','pushbutton','String','Rot -','Units','normalized','Position',[0.765 0.220 0.100 0.042],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'rot',-1));
-uicontrol(f,'Style','pushbutton','String','Rot +','Units','normalized','Position',[0.875 0.220 0.100 0.042],'Callback',@(src,evt)fc_manual_align_nudge_20260622(f,'rot',1));
-uicontrol(f,'Style','pushbutton','String','Apply current slice','Units','normalized','Position',[0.765 0.155 0.120 0.050],'BackgroundColor',[0.15 0.50 0.20],'ForegroundColor','w','FontWeight','bold','Callback',@(src,evt)fc_manual_align_apply_current_20260622(f));
-uicontrol(f,'Style','pushbutton','String','Apply all slices','Units','normalized','Position',[0.895 0.155 0.115 0.050],'BackgroundColor',[0.10 0.60 0.25],'ForegroundColor','w','FontWeight','bold','Callback',@(src,evt)fc_manual_align_apply_20260622(f,true));
-uicontrol(f,'Style','pushbutton','String','Reset','Units','normalized','Position',[0.765 0.095 0.080 0.045],'BackgroundColor',[0.30 0.30 0.34],'ForegroundColor','w','Callback',@(src,evt)fc_manual_align_reset_20260622(f));
-uicontrol(f,'Style','pushbutton','String','Save && close','Units','normalized','Position',[0.855 0.095 0.100 0.045],'BackgroundColor',[0.10 0.45 0.95],'ForegroundColor','w','FontWeight','bold','Callback',@(src,evt)fc_manual_align_saveclose_20260622(f));
-uicontrol(f,'Style','pushbutton','String','Cancel','Units','normalized','Position',[0.765 0.035 0.190 0.045],'BackgroundColor',[0.65 0.10 0.10],'ForegroundColor','w','FontWeight','bold','Callback',@(src,evt)fc_manual_align_cancel_20260622(f));
-D = struct('mainFig',mainFig,'ax',ax,'Aorig',A0,'Awork',Awork,'z',z,'outSize',[size(U,1) size(U,2) size(A0,3)], ...
-    'hSlice',hSlice,'hDx',hDx,'hDy',hDy,'hSx',hSx,'hSy',hSy,'hRot',hRot,'hLineColor',hLineColor,'hLineSize',hLineSize);
-D.U = U;
-setappdata(f,'D',D);
-fc_manual_align_update_20260622(f);
-uiwait(f);
-end
-
-function A = fc_manual_build_label_volume_20260623(subj)
-A = [];
-try
-    if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
-        SR = subj.sliceResults;
-        fns = {'roiAtlas','labelMap','roiMap','labelMask','roiLabelMask','atlasLabels2D'};
-        tmp = {};
-        for zz = 1:numel(SR)
-            one = [];
-            for ff = 1:numel(fns)
-                if isfield(SR(zz),fns{ff}) && isnumeric(SR(zz).(fns{ff})) && ~isempty(SR(zz).(fns{ff}))
-                    one = squeeze(SR(zz).(fns{ff}));
-                    break;
-                end
-            end
-            if ~isempty(one), tmp{zz} = round(double(one)); end %#ok<AGROW>
-        end
-        good = find(~cellfun(@isempty,tmp));
-        if ~isempty(good)
-            Y = size(tmp{good(1)},1); X = size(tmp{good(1)},2); Z = numel(tmp);
-            A = zeros(Y,X,Z);
-            for zz = 1:Z
-                if zz <= numel(tmp) && ~isempty(tmp{zz})
-                    a = tmp{zz};
-                    if ~isequal(size(a),[Y X]), a = imresize(a,[Y X],'nearest'); end
-                    A(:,:,zz) = round(double(a));
-                elseif zz > 1
-                    A(:,:,zz) = A(:,:,zz-1);
-                end
-            end
-        end
-    end
-catch
-    A = [];
-end
-if isempty(A)
-    try, A = squeeze(round(double(subj.roiAtlas))); catch, A = []; end
-end
-if ~isempty(A) && ndims(A)==2
-    try
-        if isfield(subj,'nSlices') && ~isempty(subj.nSlices), Z = subj.nSlices; else, Z = 1; end
-        A = repmat(A,[1 1 max(1,Z)]);
-    catch
-        A = reshape(A,size(A,1),size(A,2),1);
-    end
-end
-end
-
-function U = fc_manual_get_underlay_slice_20260622(subj,z,Y,X)
-U = [];
-try
-    fns = fieldnames(subj); best = '';
-    for i=1:numel(fns)
-        nm = lower(fns{i});
-        if isnumeric(subj.(fns{i})) && (~isempty(strfind(nm,'scm')) || ~isempty(strfind(nm,'underlay')) || ~isempty(strfind(nm,'median')))
-            best = fns{i}; break;
-        end
-    end
-    if ~isempty(best)
-        A = double(subj.(best)); A = squeeze(A);
-        if ndims(A)==4, U=squeeze(median(A(:,:,min(z,size(A,3)),1:min(80,size(A,4))),4));
-        elseif ndims(A)==3, U=A(:,:,min(z,size(A,3)));
-        elseif ndims(A)==2, U=A;
-        end
-    end
-catch, U=[]; end
-if isempty(U)
-    try
-        I4 = double(subj.I4);
-        if ndims(I4)==4, U=squeeze(median(abs(I4(:,:,min(z,size(I4,3)),1:min(100,size(I4,4)))),4));
-        elseif ndims(I4)==3, U=abs(I4(:,:,min(z,size(I4,3))));
-        elseif ndims(I4)==2, U=abs(I4);
-        end
-    catch, U=zeros(Y,X); end
-end
-U = log1p(abs(double(U)));
-try, if ~isequal(size(U),[Y X]), U=imresize(U,[Y X]); end, catch, U=zeros(Y,X); end
-end
-
-function fc_manual_align_update_20260622(f)
-if ~ishghandle(f), return; end
-D=getappdata(f,'D');
-D.z=max(1,min(get(D.hSlice,'Value'),D.outSize(3)));
-s=guidata(D.mainFig); subj=s.subjects(s.currentSubject);
-D.U=fc_manual_get_underlay_slice_20260622(subj,D.z,D.outSize(1),D.outSize(2));
-setappdata(f,'D',D);
-[dx,dy,sx,sy,rot]=fc_manual_align_params_20260622(D);
-A2=fc_manual_align_transform_slice_20260622(D.Awork(:,:,min(D.z,size(D.Awork,3))),size(D.U),dx,dy,sx,sy,rot);
-Ushow=fc_manual_contrast_20260622(D.U); axes(D.ax); cla(D.ax);
-hImg=imagesc(D.ax,Ushow,[0 1]); colormap(D.ax,gray(256)); axis(D.ax,'image'); axis(D.ax,'ij');
-xlim(D.ax,[1 size(Ushow,2)]); ylim(D.ax,[1 size(Ushow,1)]); set(D.ax,'Color',[0 0 0],'XTick',[],'YTick',[]); hold(D.ax,'on');
-[x,y]=fc_manual_align_boundary_xy_20260622(A2);
-lineMode=get(D.hLineColor,'Value'); lw=str2double(get(D.hLineSize,'String')); if ~isfinite(lw)||lw<1, lw=15; end
-hPts=[]; hPts2=[];
-if lineMode==1, hPts=plot(D.ax,x,y,'.','Color',[1 1 1],'MarkerSize',lw); end
-if lineMode==2, hPts=plot(D.ax,x,y,'.','Color',[0 0 0],'MarkerSize',lw); end
-if lineMode==3, hPts=plot(D.ax,x,y,'.','Color',[0.65 0.65 0.65],'MarkerSize',lw); end
-if lineMode==4
-    hPts=plot(D.ax,x,y,'.','Color',[1 1 1],'MarkerSize',lw);
-    hPts2=plot(D.ax,x,y,'.','Color',[0 0 0],'MarkerSize',max(1,lw-5));
-end
-hold(D.ax,'off');
-title(D.ax,sprintf('Slice %d | dx %.1f dy %.1f sx %.3f sy %.3f rot %.1f°',D.z,dx,dy,sx,sy,rot),'Color',[1 1 1],'Interpreter','none','FontWeight','bold');
-setappdata(f,'Apreview',A2); setappdata(f,'dragStartPoint',[]); setappdata(f,'dragStartDxDy',[]);
-try, set(hImg,'ButtonDownFcn',@(src,evt)fc_manual_align_drag_start_20260622(f)); if ishghandle(hPts), set(hPts,'ButtonDownFcn',@(src,evt)fc_manual_align_drag_start_20260622(f)); end; if ishghandle(hPts2), set(hPts2,'ButtonDownFcn',@(src,evt)fc_manual_align_drag_start_20260622(f)); end; set(D.ax,'ButtonDownFcn',@(src,evt)fc_manual_align_drag_start_20260622(f)); set(f,'WindowButtonMotionFcn',@(src,evt)fc_manual_align_drag_move_20260622(f)); set(f,'WindowButtonUpFcn',@(src,evt)fc_manual_align_drag_stop_20260622(f)); catch, end
-end
-
-function Ushow = fc_manual_contrast_20260622(U)
-U=double(U); U(~isfinite(U))=0; v=sort(U(:)); v=v(isfinite(v));
-if isempty(v), Ushow=zeros(size(U)); return; end
-n=numel(v); lo=v(max(1,round(0.01*n))); hi=v(max(1,round(0.997*n)));
-if hi<=lo, lo=min(v); hi=max(v); end
-if hi<=lo, Ushow=zeros(size(U)); else, Ushow=max(0,min(1,(U-lo)./(hi-lo))).^0.70; end
-end
-
-function fc_manual_align_drag_start_20260622(f)
-try, D=getappdata(f,'D'); cp=get(D.ax,'CurrentPoint'); [dx,dy,~,~,~]=fc_manual_align_params_20260622(D); setappdata(f,'dragStartPoint',cp(1,1:2)); setappdata(f,'dragStartDxDy',[dx dy]); catch, end
-end
-function fc_manual_align_drag_move_20260622(f)
-try, D=getappdata(f,'D'); p0=getappdata(f,'dragStartPoint'); d0=getappdata(f,'dragStartDxDy'); if isempty(p0)||isempty(d0), return; end; cp=get(D.ax,'CurrentPoint'); dp=cp(1,1:2)-p0; set(D.hDx,'String',sprintf('%.1f',d0(1)+dp(1))); set(D.hDy,'String',sprintf('%.1f',d0(2)+dp(2))); fc_manual_align_update_20260622(f); catch, end
-end
-function fc_manual_align_drag_stop_20260622(f)
-try, setappdata(f,'dragStartPoint',[]); setappdata(f,'dragStartDxDy',[]); catch, end
-end
-function [dx,dy,sx,sy,rot] = fc_manual_align_params_20260622(D)
-dx=str2double(get(D.hDx,'String')); if ~isfinite(dx), dx=0; end
-dy=str2double(get(D.hDy,'String')); if ~isfinite(dy), dy=0; end
-sx=str2double(get(D.hSx,'String')); if ~isfinite(sx)||sx<=0, sx=1; end
-sy=str2double(get(D.hSy,'String')); if ~isfinite(sy)||sy<=0, sy=1; end
-rot=str2double(get(D.hRot,'String')); if ~isfinite(rot), rot=0; end
-end
-function fc_manual_align_nudge_20260622(f,what,delta)
-D=getappdata(f,'D');
-switch lower(what)
-case 'dx', h=D.hDx; v=str2double(get(h,'String')); if ~isfinite(v), v=0; end; set(h,'String',num2str(v+delta));
-case 'dy', h=D.hDy; v=str2double(get(h,'String')); if ~isfinite(v), v=0; end; set(h,'String',num2str(v+delta));
-case 'sx', h=D.hSx; v=str2double(get(h,'String')); if ~isfinite(v), v=1; end; set(h,'String',sprintf('%.3f',max(0.05,v+delta)));
-case 'sy', h=D.hSy; v=str2double(get(h,'String')); if ~isfinite(v), v=1; end; set(h,'String',sprintf('%.3f',max(0.05,v+delta)));
-case 'rot', h=D.hRot; v=str2double(get(h,'String')); if ~isfinite(v), v=0; end; set(h,'String',num2str(v+delta));
-end; fc_manual_align_update_20260622(f);
-end
-function fc_manual_align_reset_20260622(f)
-D=getappdata(f,'D'); set(D.hDx,'String','0'); set(D.hDy,'String','0'); set(D.hSx,'String','1.000'); set(D.hSy,'String','1.000'); set(D.hRot,'String','0'); fc_manual_align_update_20260622(f);
-end
-function fc_manual_align_apply_current_20260622(f)
-D=getappdata(f,'D'); [dx,dy,sx,sy,rot]=fc_manual_align_params_20260622(D); D.z=max(1,min(get(D.hSlice,'Value'),D.outSize(3)));
-D.Awork(:,:,D.z)=fc_manual_align_transform_slice_20260622(D.Awork(:,:,D.z),D.outSize(1:2),dx,dy,sx,sy,rot);
-setappdata(f,'D',D); fc_manual_align_save_to_subject_20260622(D); setappdata(D.mainFig,'FCManualAlignApplied_20260622',true); fc_manual_align_reset_20260622(f);
-end
-function fc_manual_align_apply_20260622(f,allSlices)
-D=getappdata(f,'D'); [dx,dy,sx,sy,rot]=fc_manual_align_params_20260622(D); A0=D.Awork; Aout=zeros(D.outSize,'int32');
-if allSlices, for zz=1:D.outSize(3), srcZ=min(zz,size(A0,3)); Aout(:,:,zz)=fc_manual_align_transform_slice_20260622(A0(:,:,srcZ),D.outSize(1:2),dx,dy,sx,sy,rot); end; else, Aout=A0; Aout(:,:,D.z)=fc_manual_align_transform_slice_20260622(A0(:,:,D.z),D.outSize(1:2),dx,dy,sx,sy,rot); end
-D.Awork=int32(Aout); setappdata(f,'D',D); fc_manual_align_save_to_subject_20260622(D); setappdata(D.mainFig,'FCManualAlignApplied_20260622',true); try, uiresume(f); catch, end; try, delete(f); catch, end
-end
-function fc_manual_align_saveclose_20260622(f)
-D=getappdata(f,'D'); fc_manual_align_save_to_subject_20260622(D); setappdata(D.mainFig,'FCManualAlignApplied_20260622',true); try, uiresume(f); catch, end; try, delete(f); catch, end
-end
-function fc_manual_align_save_to_subject_20260622(D)
-s=guidata(D.mainFig); cs=s.currentSubject; s.subjects(cs).roiAtlas=int32(D.Awork);
-try, s.subjects(cs).labelMap=int32(D.Awork); s.subjects(cs).roiMap=int32(D.Awork); catch, end
-try
-    for zz=1:size(D.Awork,3)
-        s.subjects(cs).sliceResults(zz).roiAtlas=int32(D.Awork(:,:,zz));
-        s.subjects(cs).sliceResults(zz).labelMap=int32(D.Awork(:,:,zz));
-        s.subjects(cs).sliceResults(zz).roiMap=int32(D.Awork(:,:,zz));
-    end
-catch
-end
-try, s.subjects(cs).roiAtlasManualAlign=struct('time',datestr(now),'mode','manual per-slice affine'); catch, end
-try, if iscell(s.roiResults), s.roiResults(cs,:)=cell(1,size(s.roiResults,2)); end, catch, end
-guidata(D.mainFig,s);
-end
-function fc_manual_align_cancel_20260622(f)
-try, uiresume(f); catch, end; try, delete(f); catch, end
-end
-function A2 = fc_manual_align_transform_slice_20260622(Ain,outSize2,dx,dy,sx,sy,rotDeg)
-Ain=round(double(Ain)); outSize2=round(double(outSize2(1:2))); cy=(size(Ain,1)+1)/2; cx=(size(Ain,2)+1)/2; th=rotDeg*pi/180;
-T1=[1 0 0;0 1 0;-cx -cy 1]; S=[sx 0 0;0 sy 0;0 0 1]; R=[cos(th) sin(th) 0;-sin(th) cos(th) 0;0 0 1]; T2=[1 0 0;0 1 0;cx+dx cy+dy 1];
-T=T1*S*R*T2; tform=affine2d(T); Rout=imref2d(outSize2); A2=imwarp(Ain,tform,'nearest','OutputView',Rout,'FillValues',0); A2=int32(round(double(A2)));
-end
-function [x,y] = fc_manual_align_boundary_xy_20260622(A)
-A=round(double(A)); B=false(size(A));
-try
-B(:,2:end)=B(:,2:end)|(A(:,2:end)~=A(:,1:end-1)); B(2:end,:)=B(2:end,:)|(A(2:end,:)~=A(1:end-1,:)); B=B&A~=0;
-B(1:4,:)=false; B(end-3:end,:)=false; B(:,1:4)=false; B(:,end-3:end)=false;
-[y,x]=find(B); if numel(x)>65000, step=ceil(numel(x)/65000); x=x(1:step:end); y=y(1:step:end); end
-catch, x=[]; y=[]; end
-end

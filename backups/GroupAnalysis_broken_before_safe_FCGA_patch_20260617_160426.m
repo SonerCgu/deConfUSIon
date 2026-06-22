@@ -920,8 +920,8 @@ try
     set(S.hFCDisplay,'Position',[0.570 0.725 0.110 0.185],'Callback',@updateFCTabPreview);
     set(findall(pFCTop,'Style','text','String','Threshold:'),'Position',[0.705 0.745 0.080 0.140]);
     set(S.hFCThreshold,'Position',[0.785 0.725 0.065 0.185],'Callback',@updateFCTabPreview);
-    set(S.hFCCompute,'Position',[0.865 0.705 0.060 0.215],'String','Recompute','FontSize',10);
-    set(S.hFCExport, 'Position',[0.930 0.705 0.055 0.215],'String','Export CSV','FontSize',10);
+    set(S.hFCCompute,'Position',[0.865 0.705 0.060 0.215],'String','Recomp','FontSize',10);
+    set(S.hFCExport, 'Position',[0.930 0.705 0.055 0.215],'String','CSV','FontSize',10);
 
     % Row 2
     set(findall(pFCTop,'Style','text','String','Subject:'),'Position',[0.020 0.455 0.065 0.130]);
@@ -943,13 +943,10 @@ try
         'Units','normalized','Position',[0.650 0.455 0.055 0.130], ...
         'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
     S.hFCColorMap = uicontrol(pFCTop,'Style','popupmenu', ...
-        'String',{'Blue-White-Red','Blue-White','Red-White-Blue','parula','hot','jet','gray','blackbody'}, ...
+        'String',{'Blue-White-Red','parula','hot','jet','gray','blackbody'}, ...
         'Units','normalized','Position',[0.705 0.440 0.105 0.175], ...
         'BackgroundColor',C.editBg,'ForegroundColor','w', ...
         'Callback',@updateFCTabPreview);
-
-    % TARGETED_FCGA_DEFAULT_BWR_20260622
-    try, set(S.hFCColorMap,'Value',1); catch, end
 
     uicontrol(pFCTop,'Style','text','String','Labels:', ...
         'Units','normalized','Position',[0.825 0.455 0.055 0.130], ...
@@ -975,28 +972,9 @@ try
         'BackgroundColor',C.editBg,'ForegroundColor','w', ...
         'Callback',@updateFCTabPreview);
 
-    S.hFCAnimals = mkBtn(pFCTop,'Animals...',[0.735 0.155 0.080 0.205],C.btnSecondary,@(~,~) selectFCAnimals_SAFE_20260617(hFig));
-    S.hFCNames   = mkBtn(pFCTop,'Names',[0.825 0.155 0.065 0.205],C.btnSecondary,@(~,~) showFCRegionNames_SAFE_20260617(hFig));
+    S.hFCAnimals = mkBtn(pFCTop,'Animals...',[0.735 0.155 0.080 0.205],C.btnSecondary,@(~,~) selectFCAnimals_CLEANUP_20260617(hFig));
+    S.hFCNames   = mkBtn(pFCTop,'Names',[0.825 0.155 0.065 0.205],C.btnSecondary,@(~,~) showFCRegionNames_CLEANUP_20260617(hFig));
     S.hFCExportPNG = mkBtn(pFCTop,'PNG',[0.900 0.155 0.065 0.205],C.btnAction,@(~,~) exportFCHighResPNG_ADV_20260617(hFig));
-    % TARGETED_FCGA_ZOOM_BUTTON_20260622
-    try
-        S.hFCZoom = mkBtn(pFCTop,'Large',[0.895 0.020 0.070 0.105],C.btnAction,@(~,~) showFCLargeView_GA_20260622(hFig));
-        set(S.hFCZoom,'TooltipString','Open current FC-GA view in a large exportable window');
-    catch
-        try, S.hFCZoom = mkBtn(pFCTop,'Large',[0.895 0.020 0.070 0.105],C.btnAction,@(~,~) showFCLargeView_GA_20260622(hFig)); catch, end
-    end
-    % TARGETED_FCGA_STYLE_UI_20260622: y-axis and plot-color controls for FC-GA pair plots.
-    try
-        uicontrol(pFCTop,'Style','text','String','Y:','Units','normalized','Position',[0.020 0.020 0.025 0.100],'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-        S.hFCYAuto = uicontrol(pFCTop,'Style','checkbox','String','Auto','Value',1,'Units','normalized','Position',[0.045 0.015 0.060 0.120],'BackgroundColor',bg2,'ForegroundColor','w','Callback',@updateFCTabPreview);
-        S.hFCYMin = uicontrol(pFCTop,'Style','edit','String','0','Units','normalized','Position',[0.110 0.020 0.050 0.105],'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@updateFCTabPreview);
-        S.hFCYMax = uicontrol(pFCTop,'Style','edit','String','1.5','Units','normalized','Position',[0.165 0.020 0.050 0.105],'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@updateFCTabPreview);
-        S.hFCYStep = uicontrol(pFCTop,'Style','edit','String','0.5','Units','normalized','Position',[0.220 0.020 0.050 0.105],'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@updateFCTabPreview);
-        uicontrol(pFCTop,'Style','text','String','Plot:','Units','normalized','Position',[0.285 0.020 0.045 0.100],'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-        S.hFCPlotColor = uicontrol(pFCTop,'Style','popupmenu','String',{'Auto','Blue','Red','Green','Orange','Purple','Black','White','Gray'},'Units','normalized','Position',[0.330 0.020 0.085 0.105],'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@updateFCTabPreview);
-    catch ME_fc_style_ui
-        try, disp(['FC style UI warning: ' ME_fc_style_ui.message]); catch, end
-    end
 catch ME_fcadv_ui
     try, disp(['FC advanced UI warning: ' ME_fcadv_ui.message]); catch, end
 end
@@ -2044,7 +2022,7 @@ drawnow;
             S0.mode = 'Functional Connectivity';
             guidata(hFig,S0);
             refreshFCGroupPopups();
-            try, refreshFCRegionPopups_SAFE_20260617(hFig); catch, end
+            try, refreshFCRegionPopups_CLEANUP_20260617(hFig); catch, end
             try, refreshFCSubjectPopup_ADV_20260617(hFig); catch, end
                 try, refreshFCSlicePopup_CLEAN_20260617(hFig); catch, end
             try, refreshFCRegionPopups_TARGETED(hFig); catch, end
@@ -2092,7 +2070,7 @@ drawnow;
             R = computeSingleGroupFC_SINGLE_20260616(S0);
             S0.lastFC = R;
             guidata(hFig,S0);
-            try, refreshFCRegionPopups_SAFE_20260617(hFig); catch, end
+            try, refreshFCRegionPopups_CLEANUP_20260617(hFig); catch, end
             updateFCTabPreview();
             S0 = guidata(hFig);
             set(S0.hFCInfo,'String',sprintf('Loaded %d FC subject(s). Showing %s, n=%d. No A-vs-B comparison.',numel(S0.FC.subjects),R.groupName,R.n));
@@ -2132,13 +2110,13 @@ drawnow;
                 try, S0 = syncFCGroupsFromTable_TARGETED(S0); catch, end
                 S0.lastFC = computeSingleGroupFC_ADV_20260617(S0);
                 guidata(hFig,S0);
-                try, refreshFCRegionPopups_SAFE_20260617(hFig); catch, end
+                try, refreshFCRegionPopups_CLEANUP_20260617(hFig); catch, end
                 try, refreshFCSubjectPopup_ADV_20260617(hFig); catch, end
                 try, refreshFCSlicePopup_CLEAN_20260617(hFig); catch, end
                 S0 = guidata(hFig);
             end
 
-            updateFCTabPreview_ADV_20260617(S0);
+            updateFCTabPreview_CLEANUP_20260617(S0);
         catch ME
             try, GA_printErrorLocal(ME,'caught error in FC auto-compute/preview'); catch, end
             try, set(S0.hFCInfo,'String',['FC ERROR: ' ME.message]); catch, end
@@ -9630,7 +9608,7 @@ R.sourceFiles = G.sourceFiles(idx);
 R.note = 'Single-group FC-GA: mean is computed in Fisher z space; Pearson r = tanh(mean z).';
 end
 
-function updateFCTabPreview_SINGLE_20260616(S)
+function updateFCTabPreview_CLEANUP_20260617(S)
 R = S.lastFC;
 setSingleFCAxis_SINGLE_20260616(S);
 viewMode = popupString_SINGLE_20260616(S,'hFCView','Heatmap');
@@ -9943,19 +9921,6 @@ if isempty(names)
         names{ii} = sprintf('ROI_%g',labs(ii));
     end
 end
-try
-    fn = {};
-    if isfield(subj,'fullNames') && ~isempty(subj.fullNames), fn = subj.fullNames(:); end
-    if ~isempty(fn)
-        for ii = 1:min(numel(names),numel(fn))
-            fni = strtrimSafe(fn{ii});
-            if ~isempty(fni) && isempty(strfind(char(names{ii}),'||'))
-                names{ii} = [strtrimSafe(names{ii}) ' || ' fni];
-            end
-        end
-    end
-catch
-end
 end
 
 function [Rmat,Zmat] = getFCMatrices_SINGLE_DIRECT_20260617(subj)
@@ -10039,54 +10004,54 @@ R.sliceMode = G.sliceMode;
 R.note = 'Single-group FC-GA: mean is computed in Fisher z space; Pearson r = tanh(mean z).';
 end
 
-function updateFCTabPreview_ADV_20260617(S)
-try, fcGACompactBottomLayout_20260623(S); catch, end
-try, fcGACompactLayout_20260623(S); catch, end
-Rfull = S.lastFC; R = Rfull;
+function updateFCTabPreview_CLEANUP_20260617(S)
+R = S.lastFC;
 setSingleFCAxis_SINGLE_20260616(S);
 viewMode = popupString_SINGLE_20260616(S,'hFCView','Heatmap');
 dispMode = popupString_SINGLE_20260616(S,'hFCDisplay','Pearson r');
 hemiMode = popupString_SINGLE_20260616(S,'hFCHemi','All');
 labelMode = popupString_SINGLE_20260616(S,'hFCLabelMode','Abbrev');
 cmapName = popupString_SINGLE_20260616(S,'hFCColorMap','Blue-White-Red');
-thr = 0; try, thr = safeNum(get(S.hFCThreshold,'String'),0); catch, end
-if strcmpi(dispMode,'Fisher z'), M0full=Rfull.meanZ; stack0full=Rfull.Zstack; clim=[-2.5 2.5]; valTxt='Fisher z'; else, M0full=Rfull.meanR; stack0full=Rfull.Rstack; clim=[-1 1]; valTxt='Pearson r'; end
-seedOrig = popupIndex_SINGLE_20260616(S,'hFCRegion1',1); roi2Orig = popupIndex_SINGLE_20260616(S,'hFCRegion2',min(2,size(M0full,1)));
-seedOrig=max(1,min(seedOrig,size(M0full,1))); roi2Orig=max(1,min(roi2Orig,size(M0full,1)));
-[selIdx,selNote] = fcGASelectedOrTopROIIdx_20260622(S,Rfull,M0full,seedOrig,roi2Orig,20);
-if ~isempty(selIdx) && numel(selIdx)<size(M0full,1)
-    M0=M0full(selIdx,selIdx); stack0=stack0full(selIdx,selIdx,:); R.names=Rfull.names(selIdx); R.labels=Rfull.labels(selIdx);
-    R.meanR=Rfull.meanR(selIdx,selIdx); R.meanZ=Rfull.meanZ(selIdx,selIdx);
-    seedIdx0=find(selIdx==seedOrig,1,'first'); if isempty(seedIdx0), seedIdx0=1; end
-    roi2Idx0=find(selIdx==roi2Orig,1,'first'); if isempty(roi2Idx0), roi2Idx0=min(2,numel(selIdx)); end
+thr = 0;
+try, thr = safeNum(get(S.hFCThreshold,'String'),0); catch, end
+if strcmpi(dispMode,'Fisher z')
+    M0 = R.meanZ; stack0 = R.Zstack; clim = [-2.5 2.5]; valTxt = 'Fisher z';
 else
-    M0=M0full; stack0=stack0full; seedIdx0=seedOrig; roi2Idx0=roi2Orig; selNote='all ROIs';
+    M0 = R.meanR; stack0 = R.Rstack; clim = [-1 1]; valTxt = 'Pearson r';
 end
-if thr>0, M0(abs(M0)<thr)=0; end
-[M,~,~,rowIdx,colIdx,hemiTitle]=applyHemisphereMode_ADV_20260617(M0,R.names,R.labels,hemiMode);
-namesY=R.names(rowIdx); labelsY=R.labels(rowIdx); namesX=R.names(colIdx); labelsX=R.labels(colIdx);
+if thr > 0, M0(abs(M0) < thr) = 0; end
+[M,names,labels,rowIdx,colIdx,hemiTitle] = applyHemisphereMode_ADV_20260617(M0,R.names,R.labels,hemiMode);
+seedIdx0 = popupIndex_SINGLE_20260616(S,'hFCRegion1',1);
+roi2Idx0 = popupIndex_SINGLE_20260616(S,'hFCRegion2',min(2,size(M0,1)));
+seedIdx0 = max(1,min(seedIdx0,size(M0,1)));
+roi2Idx0 = max(1,min(roi2Idx0,size(M0,1)));
 subjIdx = popupIndex_SINGLE_20260616(S,'hFCSubject',1);
 switch lower(viewMode)
-case 'heatmap'
-    plotFCMatrix_CLEAN_20260617(S.axFCA,M,clim,sprintf('%s FC heatmap | %s | %s | n=%d | %s',Rfull.groupName,hemiTitle,valTxt,Rfull.n,selNote),namesX,namesY,labelsX,labelsY,S.C,cmapName,labelMode,hemiTitle);
-case {'seed profile ± sd','seed profile +/- sd','seed profile'}
-    plotSeedProfile_ADV_20260617(S.axFCA,stack0,seedIdx0,1:size(stack0,2),R,valTxt,S.C,S);
-case {'animal pair values','roi trace'}
-    plotAnimalPairValues_ADV_20260617(S.axFCA,stack0,seedIdx0,roi2Idx0,R,valTxt,S.C,S);
-case {'roi pair summary','roi pair'}
-    plotROIPairSummary_ADV_20260617(S.axFCA,stack0,seedIdx0,roi2Idx0,R,valTxt,S.C,S);
-case 'subject matrix'
-    if subjIdx<=1
-        plotFCMatrix_CLEAN_20260617(S.axFCA,M,clim,sprintf('%s mean subject matrix | %s | n=%d | %s',Rfull.groupName,hemiTitle,Rfull.n,selNote),namesX,namesY,labelsX,labelsY,S.C,cmapName,labelMode,hemiTitle);
-    else
-        si=max(1,min(subjIdx-1,size(stack0,3))); Ms0=stack0(:,:,si); if thr>0, Ms0(abs(Ms0)<thr)=0; end
-        [Ms,~,~,rowS,colS,ht]=applyHemisphereMode_ADV_20260617(Ms0,R.names,R.labels,hemiMode);
-        plotFCMatrix_CLEAN_20260617(S.axFCA,Ms,clim,sprintf('Subject matrix: %s | %s | %s',strtrimSafe(Rfull.subjectNames{si}),ht,selNote),R.names(colS),R.names(rowS),R.labels(colS),R.labels(rowS),S.C,cmapName,labelMode,ht);
-    end
-otherwise
-    plotROIOverlay_ADV_20260617(S.axFCA,S,Rfull,cmapName);
+    case 'heatmap'
+        plotFCMatrix_CLEANUP_20260617(S.axFCA,M,clim,sprintf('%s FC heatmap | %s | %s | n=%d',R.groupName,hemiTitle,valTxt,R.n),names,S.C,cmapName,labelMode);
+    case {'seed profile ± sd','seed profile +/- sd','seed profile'}
+        plotSeedProfile_CLEANUP_20260617(S.axFCA,stack0,seedIdx0,R,valTxt,S.C);
+    case {'animal pair values','roi trace'}
+        plotAnimalPairValues_CLEANUP_20260617(S.axFCA,stack0,seedIdx0,roi2Idx0,R,valTxt,S.C);
+    case {'roi pair summary','roi pair'}
+        plotROIPairSummary_CLEANUP_20260617(S.axFCA,stack0,seedIdx0,roi2Idx0,R,valTxt,S.C);
+    case 'subject matrix'
+        if subjIdx <= 1
+            plotFCMatrix_CLEANUP_20260617(S.axFCA,M,clim,sprintf('%s mean subject matrix | %s | n=%d',R.groupName,hemiTitle,R.n),names,S.C,cmapName,labelMode);
+        else
+            si = max(1,min(subjIdx-1,size(stack0,3)));
+            Ms0 = stack0(:,:,si);
+            if thr > 0, Ms0(abs(Ms0) < thr) = 0; end
+            [Ms,nms,~,~,~,ht] = applyHemisphereMode_ADV_20260617(Ms0,R.names,R.labels,hemiMode);
+            plotFCMatrix_CLEANUP_20260617(S.axFCA,Ms,clim,sprintf('Subject matrix: %s | %s',strtrimSafe(R.subjectNames{si}),ht),nms,S.C,cmapName,labelMode);
+        end
+    otherwise
+        plotROIOverlay_ADV_20260617(S.axFCA,S,R,cmapName);
 end
-try, set(S.hFCInfo,'String',sprintf('Loaded %d FC subject(s). Showing %s, n=%d | %s | %s | Slice=%s | Seed=%s | ROI2=%s | %s',numel(S.FC.subjects),Rfull.groupName,Rfull.n,viewMode,hemiMode,Rfull.sliceMode,roiName_SINGLE_20260616(Rfull,seedOrig),roiName_SINGLE_20260616(Rfull,roi2Orig),selNote)); catch, end
+try
+    set(S.hFCInfo,'String',sprintf('Loaded %d FC subject(s). Showing %s, n=%d | %s | %s | Slice=%s | Seed=%s | ROI2=%s',numel(S.FC.subjects),R.groupName,R.n,viewMode,hemiMode,R.sliceMode,roiName_SINGLE_20260616(R,seedIdx0),roiName_SINGLE_20260616(R,roi2Idx0)));
+catch
+end
 end
 
 function G = alignFCSubjectsWithOptions_ADV_20260617(S)
@@ -10244,109 +10209,109 @@ s = regexprep(s,'\[-?\d+\]','');
 s = strtrim(regexprep(s,'\s+',' '));
 end
 
+function plotFCMatrix_CLEANUP_20260617(ax,M,clim,titleStr,names,C,cmapName,labelMode)
+cla(ax);
+if isempty(M), fcNoDataLocal(ax,titleStr,C); return; end
+imagesc(ax,M);
+try, caxis(ax,clim); catch, end
+colormap(ax,cmapFC_ADV_20260617(cmapName,256));
+cb=colorbar(ax); try, set(cb,'Color',[1 1 1]); ylabel(cb,'FC','Color',[1 1 1]); catch, end
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontName','Arial','FontSize',8,'TickLength',[0 0]);
+axis(ax,'tight');
+title(ax,titleStr,'Color',C.txt,'FontWeight','bold','Interpreter','none');
+nR=size(M,1); nC=size(M,2); ticksY=tickIdx_SINGLE_20260616(nR); ticksX=tickIdx_SINGLE_20260616(nC);
+if strcmpi(labelMode,'Full'), nchar=24; else, nchar=12; end
+set(ax,'YTick',ticksY,'YTickLabel',abbrev_SINGLE_20260616(names(ticksY),nchar));
+try, set(ax,'XTick',ticksX,'XTickLabel',abbrev_SINGLE_20260616(names(ticksX),nchar)); catch, set(ax,'XTick',ticksX); end
+try, xtickangle(ax,60); catch, end
+end
+
 function cm = cmapFC_ADV_20260617(name,n)
-if nargin < 2, n = 256; end
-name = lower(strtrimSafe(name));
+name = lower(strtrimSafe(name)); if nargin<2, n=256; end
 switch name
-    case {'blue-white','blue white','bluewhite','bw'}
-        cm = fcCmapBlueWhite_20260622(n);
-    case {'blue-white-red','blue white red','bwr'}
-        cm = fcCmapBlueWhiteRed_20260622(n);
-    case {'red-white-blue','red white blue','rwb'}
-        cm = flipud(fcCmapBlueWhiteRed_20260622(n));
-    case 'parula'
-        try, cm = parula(n); catch, cm = jet(n); end
-    case 'hot'
-        cm = hot(n);
-    case 'jet'
-        cm = jet(n);
-    case 'gray'
-        cm = gray(n);
-    case {'blackbody','blackbdy_iso'}
+    case {'blue-white-red','bwr'}, cm=bwr_SINGLE_20260616(n);
+    case 'parula', cm=parula(n);
+    case 'hot', cm=hot(n);
+    case 'jet', cm=jet(n);
+    case 'gray', cm=gray(n);
+    case 'blackbody'
         if exist('blackbdy_iso','file')==2, cm=blackbdy_iso(n); else, cm=hot(n); end
-    otherwise
-        cm = fcCmapBlueWhite_20260622(n);
+    otherwise, cm=bwr_SINGLE_20260616(n);
 end
 end
 
-function cm = fcCmapBlueWhite_20260622(n)
-t = linspace(0,1,n)';
-cm = [t t ones(n,1)];
-end
-
-function cm = fcCmapBlueWhiteRed_20260622(n)
-n1 = floor(n/2); n2 = n - n1;
-t1 = linspace(0,1,n1)';
-t2 = linspace(0,1,n2)';
-blueToWhite = [t1 t1 ones(n1,1)];
-whiteToRed  = [ones(n2,1) 1-t2 1-t2];
-cm = [blueToWhite; whiteToRed];
-end
-
-function plotAnimalPairValues_ADV_20260617(ax,stack,seedIdx,roi2Idx,R,valTxt,C,S)
-if nargin < 8, S = struct(); end
-try, delete(findall(ancestor(ax,'figure'),'Type','ColorBar')); catch, end
+function plotSeedProfile_CLEANUP_20260617(ax,stack,seedIdx,R,valTxt,C)
 cla(ax);
-vals = squeeze(stack(seedIdx,roi2Idx,:)); vals = vals(:);
-x = 1:numel(vals);
-lineCol = fcGetPlotColor_SAFE_20260622(S,[0.10 0.45 0.95]);
-plot(ax,x,vals,'o-','LineWidth',1.8,'MarkerSize',7,'Color',lineCol,'MarkerFaceColor',lineCol); hold(ax,'on');
-v = vals(isfinite(vals)); if ~isempty(v), plot(ax,[min(x) max(x)],[mean(v) mean(v)],'-','LineWidth',2.2,'Color',lineCol.*0.70); end
-hold(ax,'off');
-set(ax,'Color',C.axisBg,'XColor',C.txt,'YColor',C.txt); grid(ax,'on');
-title(ax,sprintf('Animal FC values: %s ↔ %s',fcNiceName_SAFE_20260617(R.names{seedIdx},R.labels(seedIdx),'Full',false),fcNiceName_SAFE_20260617(R.names{roi2Idx},R.labels(roi2Idx),'Full',false)),'Color',C.txt,'FontWeight','bold','Interpreter','none');
+Y=squeeze(stack(seedIdx,:,:));
+if isvector(Y), Y=Y(:); end
+mu=nanmean_local_ADV_20260617(Y,2); sd=nanstd_local_ADV_20260617(Y,0,2); x=1:numel(mu);
+patch(ax,[x fliplr(x)],[mu(:)'+sd(:)' fliplr(mu(:)'-sd(:)')],[0.6 0.6 0.6],'FaceAlpha',0.25,'EdgeColor','none'); hold(ax,'on');
+plot(ax,x,mu,'LineWidth',2.0); hold(ax,'off');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); grid(ax,'on');
+title(ax,sprintf('Seed profile mean ± SD: %s | n=%d',roiName_SINGLE_20260616(R,seedIdx),size(stack,3)),'Color',C.txt,'FontWeight','bold','Interpreter','none');
+xlabel(ax,'ROI index from FC bundle / atlas label order','Color',C.txt); ylabel(ax,valTxt,'Color',C.txt);
+end
+
+function plotAnimalPairValues_CLEANUP_20260617(ax,stack,seedIdx,roi2Idx,R,valTxt,C)
+cla(ax); vals=squeeze(stack(seedIdx,roi2Idx,:)); vals=vals(:); x=1:numel(vals);
+plot(ax,x,vals,'-o','LineWidth',1.8,'MarkerSize',6); hold(ax,'on');
+plot(ax,x,repmat(nanmean_local_ADV_20260617(vals,1),size(x)),'--','LineWidth',1.4); hold(ax,'off');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); grid(ax,'on');
+title(ax,sprintf('Animal-wise FC values: %s ↔ %s',roiName_SINGLE_20260616(R,seedIdx),roiName_SINGLE_20260616(R,roi2Idx)),'Color',C.txt,'FontWeight','bold','Interpreter','none');
 xlabel(ax,'Animal index','Color',C.txt); ylabel(ax,valTxt,'Color',C.txt);
-fcApplyY_SAFE_20260617(ax,S);
 end
 
-function plotROIPairSummary_ADV_20260617(ax,stack,seedIdx,roi2Idx,R,valTxt,C,S)
-if nargin < 8, S = struct(); end
-try, delete(findall(ancestor(ax,'figure'),'Type','ColorBar')); catch, end
-cla(ax);
-vals = squeeze(stack(seedIdx,roi2Idx,:)); vals = vals(:); vals = vals(isfinite(vals));
-if isempty(vals), vals = NaN; end
-n = numel(vals);
-mu = mean(vals(isfinite(vals))); if isempty(mu), mu = NaN; end
-sd = std(vals(isfinite(vals))); if isempty(sd), sd = NaN; end
-lineCol = fcGetPlotColor_SAFE_20260622(S,[0.10 0.45 0.95]);
-hold(ax,'on');
-if n == 1, xj = 1; else, xj = 1 + linspace(-0.08,0.08,n); end
-plot(ax,xj,vals,'o','MarkerSize',8,'LineWidth',1.6,'Color',lineCol,'MarkerFaceColor',lineCol);
-if isfinite(mu), plot(ax,[0.82 1.18],[mu mu],'-','LineWidth',3.0,'Color',lineCol.*0.70); end
-if n > 1 && isfinite(sd)
-    plot(ax,[1 1],[mu-sd mu+sd],'-','LineWidth',1.8,'Color',lineCol.*0.70);
-    plot(ax,[0.94 1.06],[mu-sd mu-sd],'-','LineWidth',1.8,'Color',lineCol.*0.70);
-    plot(ax,[0.94 1.06],[mu+sd mu+sd],'-','LineWidth',1.8,'Color',lineCol.*0.70);
-end
+function plotROIPairSummary_CLEANUP_20260617(ax,stack,seedIdx,roi2Idx,R,valTxt,C)
+cla(ax); vals=squeeze(stack(seedIdx,roi2Idx,:)); vals=vals(:); mu=nanmean_local_ADV_20260617(vals,1); sd=nanstd_local_ADV_20260617(vals,0,1);
+bar(ax,1,mu); hold(ax,'on'); errorbar(ax,1,mu,sd,'k','LineStyle','none','LineWidth',1.5);
+if numel(vals)>1, plot(ax,1+linspace(-0.08,0.08,numel(vals)),vals,'o','MarkerSize',7,'LineWidth',1.4); end
 hold(ax,'off');
-xlim(ax,[0.55 1.45]);
-set(ax,'XTick',1,'XTickLabel',{'FC value'},'Color',C.axisBg,'XColor',C.txt,'YColor',C.txt,'FontSize',11); grid(ax,'on');
-title(ax,sprintf('ROI pair summary: %s ↔ %s | n=%d',fcNiceName_SAFE_20260617(R.names{seedIdx},R.labels(seedIdx),'Full',false),fcNiceName_SAFE_20260617(R.names{roi2Idx},R.labels(roi2Idx),'Full',false),n),'Color',C.txt,'FontWeight','bold','Interpreter','none');
+set(ax,'XTick',1,'XTickLabel',{'Mean ± SD + animals'},'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); grid(ax,'on');
+title(ax,sprintf('ROI pair summary: %s ↔ %s | n=%d',roiName_SINGLE_20260616(R,seedIdx),roiName_SINGLE_20260616(R,roi2Idx),numel(vals)),'Color',C.txt,'FontWeight','bold','Interpreter','none');
 ylabel(ax,valTxt,'Color',C.txt);
-fcApplyY_SAFE_20260617(ax,S);
+end
+
+function plotROIOverlay_ADV_20260617(ax,S,R,cmapName)
+cla(ax);
+[map2,note] = findROIOverlayMap_ADV_20260617(S);
+if isempty(map2)
+    text(ax,0.5,0.55,'ROI overlay map not found in loaded FC bundle', 'Color',S.C.txt,'HorizontalAlignment','center','FontWeight','bold');
+    text(ax,0.5,0.45,'Export FC bundles with spatial parcel/label mask to enable this view.', 'Color',S.C.muted,'HorizontalAlignment','center');
+    set(ax,'Color',S.C.axisBg,'XTick',[],'YTick',[]); title(ax,'ROI overlay map', 'Color',S.C.txt); return;
+end
+imagesc(ax,map2); axis(ax,'image'); axis(ax,'off'); colormap(ax,cmapFC_ADV_20260617(cmapName,256)); colorbar(ax);
+title(ax,['ROI overlay map | ' note],'Color',S.C.txt,'FontWeight','bold','Interpreter','none');
 end
 
 function [map2,note] = findROIOverlayMap_ADV_20260617(S)
 map2=[]; note='';
 try
     if ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    fns={'roiMap','labelMap','parcelMap','labelMask','roiLabelMask','roiAtlas','atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};
+    fns={'roiMap','labelMap','parcelMap','labelMask','roiLabelMask','atlasLabels2D','maskLabels'};
     subj=S.FC.subjects(1);
-    for ii=1:numel(fns)
-        if isfield(subj,fns{ii}) && isnumeric(subj.(fns{ii})) && ~isempty(subj.(fns{ii}))
-            map2=subj.(fns{ii}); note=fns{ii}; return;
-        end
-    end
+    for ii=1:numel(fns), if isfield(subj,fns{ii}) && isnumeric(subj.(fns{ii})), map2=subj.(fns{ii}); note=fns{ii}; return; end, end
     if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
         SR=subj.sliceResults;
         for zz=1:numel(SR)
             for ii=1:numel(fns)
-                if isfield(SR(zz),fns{ii}) && isnumeric(SR(zz).(fns{ii})) && ~isempty(SR(zz).(fns{ii}))
+                if isfield(SR(zz),fns{ii}) && isnumeric(SR(zz).(fns{ii}))
                     map2=SR(zz).(fns{ii}); note=sprintf('%s slice %d',fns{ii},zz); return;
                 end
             end
         end
     end
+catch
+end
+end
+
+function refreshFCRegionPopups_CLEANUP_20260617(hFig)
+try
+    S=guidata(hFig); if isempty(S)||~isfield(S,'FC')||~isfield(S.FC,'subjects')||isempty(S.FC.subjects), return; end
+    subj=S.FC.subjects(1); labels=getFCLabels_SINGLE_DIRECT_20260617(subj); names=getFCNames_SINGLE_DIRECT_20260617(subj,labels);
+    items=cell(numel(labels),1); for ii=1:numel(labels), nm=strtrimSafe(names{ii}); if numel(nm)>54, nm=[nm(1:51) '...']; end; items{ii}=sprintf('%g | %s',labels(ii),nm); end
+    if isempty(items), items={'No ROI labels'}; end
+    if isfield(S,'hFCRegion1')&&ishghandle(S.hFCRegion1), set(S.hFCRegion1,'String',items,'Value',min(get(S.hFCRegion1,'Value'),numel(items))); end
+    if isfield(S,'hFCRegion2')&&ishghandle(S.hFCRegion2), set(S.hFCRegion2,'String',items,'Value',min(max(get(S.hFCRegion2,'Value'),2),numel(items))); end
 catch
 end
 end
@@ -10376,7 +10341,28 @@ catch
 end
 end
 
+function selectFCAnimals_CLEANUP_20260617(hFig)
+try
+    S=guidata(hFig); if isempty(S)||~isfield(S,'FC')||~isfield(S.FC,'subjects')||isempty(S.FC.subjects), return; end
+    names=cell(numel(S.FC.subjects),1); for ii=1:numel(S.FC.subjects), try,names{ii}=strtrimSafe(S.FC.subjects(ii).name);catch,names{ii}=sprintf('Subject %d',ii);end; if isempty(names{ii}),names{ii}=sprintf('Subject %d',ii);end; end
+    init=1:numel(names); try, if isfield(S,'fcSelectedSubjectIdx') && ~isempty(S.fcSelectedSubjectIdx), init=S.fcSelectedSubjectIdx; end, catch, end
+    [sel,ok]=listdlg('PromptString','Select animals included in FC-GA:','SelectionMode','multiple','ListString',names,'InitialValue',init,'ListSize',[420 320]);
+    if ok, S.fcSelectedSubjectIdx=sel(:); S.lastFC=struct(); guidata(hFig,S); updateFCTabPreview(); end
+catch ME, try,errordlg(ME.message,'FC animals');catch,end
+end
+end
 
+function showFCRegionNames_CLEANUP_20260617(hFig)
+try
+    S=guidata(hFig); if isempty(S)||~isfield(S,'FC')||~isfield(S.FC,'subjects')||isempty(S.FC.subjects), return; end
+    subj=S.FC.subjects(1); labels=getFCLabels_SINGLE_DIRECT_20260617(subj); names=getFCNames_SINGLE_DIRECT_20260617(subj,labels);
+    lines=cell(numel(labels),1); for ii=1:numel(labels), lines{ii}=sprintf('%g = %s',labels(ii),strtrimSafe(names{ii})); end
+    f=figure('Name','FC ROI labels','Color',[0.08 0.08 0.08],'MenuBar','none','ToolBar','none','NumberTitle','off','Position',[200 120 620 720]);
+    uicontrol(f,'Style','listbox','String',lines,'Units','normalized','Position',[0.03 0.08 0.94 0.89],'BackgroundColor',[0 0 0],'ForegroundColor',[1 1 1],'FontName','Consolas','FontSize',11);
+    uicontrol(f,'Style','pushbutton','String','Copy to clipboard','Units','normalized','Position',[0.33 0.015 0.34 0.045],'Callback',@(s,e) clipboard('copy',strjoin(lines,newline)));
+catch ME, try,errordlg(ME.message,'FC names');catch,end
+end
+end
 
 function exportFCHighResPNG_ADV_20260617(hFig)
 try
@@ -10407,822 +10393,585 @@ end
 
 
 
-
-% GA_FC_SAFE_VIEWER_20260617_START
-function refreshFCRegionPopups_SAFE_20260617(hFig)
+% GA_FC_VIEWER_CLEANUP_20260617_START
+function updateFCTabPreview_CLEANUP_20260617(S)
 try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    subj = S.FC.subjects(1);
-    labels = fcGetLabels_SAFE_20260617(subj);
-    names  = fcGetNames_SAFE_20260617(subj,labels);
-    items = cell(numel(labels),1);
-    for kk = 1:numel(labels)
-        items{kk} = fcNiceName_SAFE_20260617(names{kk},labels(kk),'Abbrev',false);
-    end
-    if isempty(items), items = {'No ROI labels'}; end
-    if isfield(S,'hFCRegion1') && ishghandle(S.hFCRegion1)
-        set(S.hFCRegion1,'String',items,'Value',min(get(S.hFCRegion1,'Value'),numel(items)));
-    end
-    if isfield(S,'hFCRegion2') && ishghandle(S.hFCRegion2)
-        set(S.hFCRegion2,'String',items,'Value',min(max(get(S.hFCRegion2,'Value'),2),numel(items)));
-    end
-catch
-end
-end
-
-function selectFCAnimals_SAFE_20260617(hFig)
-try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    names = cell(numel(S.FC.subjects),1);
-    for kk = 1:numel(S.FC.subjects)
-        try, names{kk} = strtrimSafe(S.FC.subjects(kk).name); catch, names{kk} = sprintf('Subject %d',kk); end
-        if isempty(names{kk}), names{kk} = sprintf('Subject %d',kk); end
-    end
-    init = 1:numel(names);
-    try, if isfield(S,'fcSelectedSubjectIdx') && ~isempty(S.fcSelectedSubjectIdx), init = S.fcSelectedSubjectIdx; end, catch, end
-    [sel,ok] = listdlg('PromptString','Select animals included in FC-GA:','SelectionMode','multiple','ListString',names,'InitialValue',init,'ListSize',[420 320]);
-    if ok
-        S.fcSelectedSubjectIdx = sel(:);
-        S.lastFC = struct();
-        guidata(hFig,S);
-        fcTriggerPreview_SAFE_20260617(hFig);
-    end
-catch ME
-    try, errordlg(ME.message,'FC animals'); catch, end
-end
-end
-
-function selectFCRegions_SAFE_20260617(hFig)
-try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    subj = S.FC.subjects(1);
-    labels = fcGetLabels_SAFE_20260617(subj);
-    names  = fcGetNames_SAFE_20260617(subj,labels);
-    items = cell(numel(labels),1);
-    for kk = 1:numel(labels)
-        items{kk} = sprintf('%g | %s',labels(kk),fcNiceName_SAFE_20260617(names{kk},labels(kk),'Full',false));
-    end
-    init = 1:numel(items);
-    try, if isfield(S,'fcSelectedROIIdx') && ~isempty(S.fcSelectedROIIdx), init = S.fcSelectedROIIdx; end, catch, end
-    [sel,ok] = listdlg('PromptString','Select regions shown in FC-GA plots:','SelectionMode','multiple','ListString',items,'InitialValue',init,'ListSize',[540 420]);
-    if ok
-        S.fcSelectedROIIdx = sel(:);
-        S.lastFC = struct();
-        guidata(hFig,S);
-        fcTriggerPreview_SAFE_20260617(hFig);
-    end
-catch ME
-    try, errordlg(ME.message,'FC regions'); catch, end
-end
-end
-
-function showFCRegionNames_SAFE_20260617(hFig)
-try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    subj = S.FC.subjects(1);
-    labels = fcGetLabels_SAFE_20260617(subj);
-    names  = fcGetNames_SAFE_20260617(subj,labels);
-    f = figure('Name','FC ROI names / select regions','Color',[0.08 0.08 0.08],'MenuBar','none','ToolBar','none','NumberTitle','off','Position',[160 80 1050 780]);
-    setappdata(f,'hFigGA',hFig);
-    setappdata(f,'fcLabels',labels(:));
-    setappdata(f,'fcNames',names(:));
-    uicontrol(f,'Style','text','String','Search:','Units','normalized','Position',[0.03 0.940 0.07 0.035],'BackgroundColor',[0.08 0.08 0.08],'ForegroundColor',[1 1 1],'FontWeight','bold','HorizontalAlignment','left');
-    hSearch = uicontrol(f,'Style','edit','String','','Units','normalized','Position',[0.10 0.940 0.28 0.040],'BackgroundColor',[0.12 0.12 0.14],'ForegroundColor',[1 1 1]);
-    uicontrol(f,'Style','text','String','Show:','Units','normalized','Position',[0.41 0.940 0.06 0.035],'BackgroundColor',[0.08 0.08 0.08],'ForegroundColor',[1 1 1],'FontWeight','bold','HorizontalAlignment','left');
-    hHemi = uicontrol(f,'Style','popupmenu','String',{'Merged L/R','Left only','Right only','Both separate'},'Units','normalized','Position',[0.47 0.940 0.17 0.040],'BackgroundColor',[0.12 0.12 0.14],'ForegroundColor',[1 1 1]);
-    hTable = uitable('Parent',f,'Units','normalized','Position',[0.03 0.095 0.94 0.825],'Data',{},'ColumnName',{'Include','Label','Abbrev','Full region name','Indices'},'ColumnEditable',[true false false false false],'RowName',[],'ColumnWidth',{70 90 180 560 110},'FontName','Arial','FontSize',12);
-    set(hSearch,'Callback',@(src,evt)fcGARefreshNameTable_20260622(f));
-    set(hHemi,'Callback',@(src,evt)fcGARefreshNameTable_20260622(f));
-    setappdata(f,'hSearch',hSearch); setappdata(f,'hHemi',hHemi); setappdata(f,'hTable',hTable);
-    uicontrol(f,'Style','pushbutton','String','Apply selection','Units','normalized','Position',[0.03 0.025 0.18 0.050],'BackgroundColor',[0.10 0.45 0.95],'ForegroundColor','w','FontWeight','bold','Callback',@(src,evt)fcGAApplyNameTableSelection_20260622(f));
-    uicontrol(f,'Style','pushbutton','String','All shown','Units','normalized','Position',[0.23 0.025 0.10 0.050],'Callback',@(src,evt)fcGASetShownInclude_20260622(f,true));
-    uicontrol(f,'Style','pushbutton','String','None shown','Units','normalized','Position',[0.35 0.025 0.12 0.050],'Callback',@(src,evt)fcGASetShownInclude_20260622(f,false));
-    uicontrol(f,'Style','pushbutton','String','Close','Units','normalized','Position',[0.82 0.025 0.15 0.050],'BackgroundColor',[0.7 0.1 0.1],'ForegroundColor','w','FontWeight','bold','Callback',@(src,evt)delete(f));
-    fcGARefreshNameTable_20260622(f);
-catch ME
-    try, errordlg(ME.message,'FC names'); catch, end
-end
-end
-
-function fcTriggerPreview_SAFE_20260617(hFig)
-try
-    S = guidata(hFig);
-    if isfield(S,'hFCView') && ishghandle(S.hFCView)
-        cb = get(S.hFCView,'Callback');
-        if isa(cb,'function_handle')
-            feval(cb,S.hFCView,[]);
+    if isempty(S) || ~isstruct(S), return; end
+    tidyFCGUI_CLEANUP_20260617(S);
+    if ~isfield(S,'lastFC') || isempty(fieldnames(S.lastFC))
+        try
+            S.lastFC = computeFCMean_CLEANUP_20260617(S);
+            try, guidata(ancestor(S.axFCA,'figure'),S); catch, end
+        catch ME0
+            try, showNoFC_CLEANUP_20260617(S.axFCA,S.C,['Load/compute FC first: ' ME0.message]); catch, end
+            return;
         end
     end
-catch ME
-    try, S = guidata(hFig); set(S.hFCInfo,'String',['FC refresh failed: ' ME.message]); catch, end
-end
-end
-
-function labs = fcMakeLabels_SAFE_20260617(names,labels,labelMode,hemiTitle)
-n = numel(names); labs = cell(n,1);
-stripSide = fcStripSideForHemi_SAFE_20260617(hemiTitle);
-for kk = 1:n
-    labs{kk} = fcNiceName_SAFE_20260617(names{kk},labels(kk),labelMode,stripSide);
-end
-end
-
-function s = fcSide_SAFE_20260617(raw,label)
-s = ''; r = lower(strtrimSafe(raw));
-if startsWith(r,'l_') || startsWith(r,'l-') || contains(r,'left'), s = 'L'; return; end
-if startsWith(r,'r_') || startsWith(r,'r-') || contains(r,'right'), s = 'R'; return; end
-try, if label < 0, s = 'L'; elseif label > 0, s = 'R'; end, catch, end
-end
-
-function tf = fcStripSideForHemi_SAFE_20260617(hemiTitle)
-h = lower(strtrimSafe(hemiTitle));
-tf = contains(h,'left only') || contains(h,'right only') || contains(h,'merged');
-end
-
-function [xl,yl] = fcHemiAxis_SAFE_20260617(hemiTitle)
-h = lower(strtrimSafe(hemiTitle));
-if contains(h,'left rows')
-    xl = 'Right hemisphere regions'; yl = 'Left hemisphere regions';
-elseif contains(h,'left only')
-    xl = 'Left hemisphere regions'; yl = 'Left hemisphere regions';
-elseif contains(h,'right only')
-    xl = 'Right hemisphere regions'; yl = 'Right hemisphere regions';
-elseif contains(h,'merged')
-    xl = 'Merged bilateral regions'; yl = 'Merged bilateral regions';
-else
-    xl = 'Regions'; yl = 'Regions';
-end
-end
-
-function full = fcFullName_SAFE_20260617(acr)
-a = lower(regexprep(strtrimSafe(acr),'[^a-z0-9]',''));
-switch a
-    case 'cpu', full = 'caudate putamen';
-    case 'alv', full = 'alveus';
-    case 'cc', full = 'corpus callosum';
-    case 'aca', full = 'anterior commissure anterior';
-    case 'acp', full = 'anterior commissure posterior';
-    case 'fi', full = 'fimbria';
-    case 'hip', full = 'hippocampus';
-    case 'ca1', full = 'cornu ammonis 1';
-    case 'ca2', full = 'cornu ammonis 2';
-    case 'ca3', full = 'cornu ammonis 3';
-    case 'dg', full = 'dentate gyrus';
-    case 'th', full = 'thalamus';
-    case 'hyp', full = 'hypothalamus';
-    case 'ctx', full = 'cortex';
-    case 'str', full = 'striatum';
-    case 'gp', full = 'globus pallidus';
-    case 'ic', full = 'internal capsule';
-    case 'ec', full = 'external capsule';
-    case 'ot', full = 'optic tract';
-    case 'amy', full = 'amygdala';
-    case 'sn', full = 'substantia nigra';
-    case 'pag', full = 'periaqueductal gray';
-    otherwise, full = acr;
-end
-end
-
-function idx = fcTickIdx_SAFE_20260617(n,maxTicks)
-if n <= maxTicks, idx = 1:n; else, step = ceil(n/maxTicks); idx = 1:step:n; if idx(end) ~= n, idx = [idx n]; end, end
-end
-
-function labels = fcGetLabels_SAFE_20260617(subj)
-labels = [];
-try, if isfield(subj,'labels') && ~isempty(subj.labels), labels = double(subj.labels(:)); end, catch, end
-try, if isempty(labels) && isfield(subj,'displayLabels') && ~isempty(subj.displayLabels), labels = double(subj.displayLabels(:)); end, catch, end
-if isempty(labels)
-    try, labels = (1:size(subj.R,1))'; catch, labels = []; end
-end
-end
-
-function names = fcGetNames_SAFE_20260617(subj,labels)
-names = {};
-try, if isfield(subj,'names') && ~isempty(subj.names), names = subj.names(:); end, catch, end
-try, if isempty(names) && isfield(subj,'displayNames') && ~isempty(subj.displayNames), names = subj.displayNames(:); end, catch, end
-if isempty(names), names = arrayfun(@(x)sprintf('ROI_%g',x),labels(:),'UniformOutput',false); end
-try
-    fn = {};
-    if isfield(subj,'fullNames') && ~isempty(subj.fullNames), fn = subj.fullNames(:); end
-    if ~isempty(fn)
-        for ii = 1:min(numel(names),numel(fn))
-            fni = strtrimSafe(fn{ii});
-            if ~isempty(fni) && isempty(strfind(char(names{ii}),'||'))
-                names{ii} = [strtrimSafe(names{ii}) ' || ' fni];
+    R = S.lastFC;
+    viewMode  = popupString_CLEANUP_20260617(S,'hFCView','Heatmap');
+    dispMode  = popupString_CLEANUP_20260617(S,'hFCDisplay','Pearson r');
+    hemiMode  = popupString_CLEANUP_20260617(S,'hFCHemi','All');
+    labelMode = popupString_CLEANUP_20260617(S,'hFCLabelMode','Abbrev');
+    cmapName  = popupString_CLEANUP_20260617(S,'hFCColorMap','Blue-White-Red');
+    sliceMode = popupString_CLEANUP_20260617(S,'hFCSlice','All slices');
+    thr = 0; try, thr = safeNum(get(S.hFCThreshold,'String'),0); catch, end
+    if strcmpi(dispMode,'Fisher z')
+        M0 = R.meanZ; stack0 = R.Zstack; clim = [-2.5 2.5]; valTxt = 'Fisher z';
+    else
+        M0 = R.meanR; stack0 = R.Rstack; clim = [-1 1]; valTxt = 'Pearson r';
+    end
+    if thr > 0, M0(abs(M0) < thr) = 0; end
+    roiKeep = selectedROIIdx_CLEANUP_20260617(S,R);
+    Msel = M0(roiKeep,roiKeep);
+    namesSel = R.names(roiKeep);
+    labelsSel = R.labels(roiKeep);
+    [M,namesX,namesY,labelsX,labelsY,hemiTitle] = applyHemi_CLEANUP_20260617(Msel,namesSel,labelsSel,hemiMode);
+    seedIdx = popupIndex_CLEANUP_20260617(S,'hFCRegion1',1);
+    roi2Idx = popupIndex_CLEANUP_20260617(S,'hFCRegion2',min(2,size(M0,1)));
+    seedIdx = max(1,min(seedIdx,size(M0,1)));
+    roi2Idx = max(1,min(roi2Idx,size(M0,1)));
+    subjIdx = popupIndex_CLEANUP_20260617(S,'hFCSubject',1);
+    setSingleFCAxis_CLEANUP_20260617(S);
+    switch lower(strtrimSafe(viewMode))
+        case 'heatmap'
+            titleStr = sprintf('%s FC heatmap | %s | %s | %s | n=%d',R.groupName,hemiTitle,valTxt,sliceMode,R.n);
+            plotFCMatrix_CLEANUP_20260617(S.axFCA,M,clim,titleStr,namesX,namesY,labelsX,labelsY,S.C,cmapName,labelMode,hemiTitle);
+        case {'seed profile ± sd','seed profile +/- sd','seed profile'}
+            plotSeedProfile_CLEANUP_20260617(S.axFCA,stack0,seedIdx,roiKeep,R,valTxt,S.C,S);
+        case {'animal pair values','roi trace'}
+            plotAnimalPairValues_CLEANUP_20260617(S.axFCA,stack0,seedIdx,roi2Idx,R,valTxt,S.C,S);
+        case {'roi pair summary','roi pair'}
+            plotROIPairSummary_CLEANUP_20260617(S.axFCA,stack0,seedIdx,roi2Idx,R,valTxt,S.C,S);
+        case 'subject matrix'
+            if subjIdx <= 1
+                titleStr = sprintf('%s mean matrix | %s | %s | %s | n=%d',R.groupName,hemiTitle,valTxt,sliceMode,R.n);
+                plotFCMatrix_CLEANUP_20260617(S.axFCA,M,clim,titleStr,namesX,namesY,labelsX,labelsY,S.C,cmapName,labelMode,hemiTitle);
+            else
+                si = max(1,min(subjIdx-1,size(stack0,3)));
+                Ms0 = stack0(:,:,si);
+                if thr > 0, Ms0(abs(Ms0) < thr) = 0; end
+                Ms0 = Ms0(roiKeep,roiKeep);
+                [Ms,nx,ny,lx,ly,ht] = applyHemi_CLEANUP_20260617(Ms0,namesSel,labelsSel,hemiMode);
+                titleStr = sprintf('Subject matrix: %s | %s | %s',strtrimSafe(R.subjectNames{si}),ht,sliceMode);
+                plotFCMatrix_CLEANUP_20260617(S.axFCA,Ms,clim,titleStr,nx,ny,lx,ly,S.C,cmapName,labelMode,ht);
             end
+        otherwise
+            plotROIOverlay_CLEANUP_20260617(S.axFCA,S,R,cmapName);
+    end
+    try
+        msg = sprintf('Loaded %d FC subject(s). Showing %s, n=%d | %s | %s | %s | ROIs=%d | Seed=%s | ROI2=%s',numel(S.FC.subjects),R.groupName,R.n,viewMode,hemiMode,sliceMode,numel(roiKeep),niceRegionName_CLEANUP_20260617(R.names{seedIdx},R.labels(seedIdx),'Abbrev'),niceRegionName_CLEANUP_20260617(R.names{roi2Idx},R.labels(roi2Idx),'Abbrev'));
+        set(S.hFCInfo,'String',msg);
+    catch
+    end
+catch ME
+    try, set(S.hFCInfo,'String',['FC preview failed: ' ME.message]); catch, end
+end
+end
+
+function R = computeFCMean_CLEANUP_20260617(S)
+% Direct single-group FC mean with slice support if the bundle actually contains sliceResults.
+FC = S.FC;
+if ~isfield(FC,'subjects') || isempty(FC.subjects), error('No FC subjects loaded.'); end
+sliceMode = popupString_CLEANUP_20260617(S,'hFCSlice','All slices');
+groupSel = popupString_CLEANUP_20260617(S,'hFCGroupA','All loaded');
+nSub = numel(FC.subjects);
+labels0 = getLabels_CLEANUP_20260617(FC.subjects(1));
+commonLabels = labels0(:);
+for ii = 2:nSub
+    commonLabels = intersect(commonLabels,getLabels_CLEANUP_20260617(FC.subjects(ii)));
+end
+commonLabels = sort(commonLabels(:));
+if isempty(commonLabels), error('No common ROI labels found across FC subjects.'); end
+nR = numel(commonLabels);
+ZstackAll = nan(nR,nR,nSub);
+RstackAll = nan(nR,nR,nSub);
+names = cell(nR,1);
+usedSliceSpecific = false;
+groups = cell(nSub,1);
+subjectNames = cell(nSub,1);
+sourceFiles = cell(nSub,1);
+for ii = 1:nSub
+    subj = FC.subjects(ii);
+    labs = getLabels_CLEANUP_20260617(subj);
+    [Rm,Zm,usedSlice] = getMatrixForSlice_CLEANUP_20260617(subj,sliceMode);
+    usedSliceSpecific = usedSliceSpecific || usedSlice;
+    idx = nan(nR,1);
+    for kk = 1:nR
+        h = find(double(labs)==double(commonLabels(kk)),1,'first');
+        if ~isempty(h), idx(kk)=h; end
+    end
+    if any(~isfinite(idx)), error('ROI alignment failed for FC subject.'); end
+    idx = double(idx(:));
+    RstackAll(:,:,ii) = Rm(idx,idx);
+    ZstackAll(:,:,ii) = Zm(idx,idx);
+    if ii == 1
+        nms = getNames_CLEANUP_20260617(subj,labs);
+        for kk = 1:nR
+            if idx(kk) <= numel(nms), names{kk}=strtrimSafe(nms{idx(kk)}); else, names{kk}=sprintf('ROI_%g',commonLabels(kk)); end
         end
     end
-catch
+    try, groups{ii}=strtrimSafe(subj.group); catch, groups{ii}='Unassigned'; end
+    if isempty(groups{ii}), groups{ii}='Unassigned'; end
+    try, subjectNames{ii}=strtrimSafe(subj.name); catch, subjectNames{ii}=sprintf('Subject_%02d',ii); end
+    try, sourceFiles{ii}=strtrimSafe(subj.sourceFile); catch, sourceFiles{ii}=''; end
 end
+useIdx = true(nSub,1);
+if ~isempty(groupSel) && ~strcmpi(groupSel,'All loaded') && ~strcmpi(groupSel,'All')
+    gidx = strcmpi(groups,groupSel);
+    if any(gidx), useIdx = gidx; end
 end
-
-function cm = cmapFC_SAFE_20260617(name,n)
-cm = cmapFC_ADV_20260617(name,n);
-end
-
-function v = fcNanMean_SAFE_20260617(X,dim)
-if nargin < 2, dim = 1; end
-X = double(X); ok = isfinite(X); X(~ok)=0; n=sum(ok,dim); v=sum(X,dim)./max(n,1); v(n==0)=NaN;
-end
-
-function s = fcNanStd_SAFE_20260617(X,dim)
-if nargin < 2, dim = 1; end
-mu = fcNanMean_SAFE_20260617(X,dim); sz = ones(1,ndims(X)); sz(dim)=size(X,dim); D=(X-repmat(mu,sz)).^2; s=sqrt(fcNanMean_SAFE_20260617(D,dim));
-end
-
-function fcApplyY_SAFE_20260617(ax,S)
 try
-    autoY = true; try, autoY = logical(get(S.hFCYAuto,'Value')); catch, end
-    y0 = NaN; y1 = NaN; ys = NaN;
-    try, y0 = str2double(strrep(get(S.hFCYMin,'String'),',','.')); catch, end
-    try, y1 = str2double(strrep(get(S.hFCYMax,'String'),',','.')); catch, end
-    try, ys = str2double(strrep(get(S.hFCYStep,'String'),',','.')); catch, end
-    if ~autoY && isfinite(y0) && isfinite(y1) && y1 > y0
-        ylim(ax,[y0 y1]);
-    end
-    if isfinite(ys) && ys > 0
-        yl = ylim(ax);
-        yt = yl(1):ys:yl(2);
-        if numel(yt) >= 2 && numel(yt) <= 40, set(ax,'YTick',yt); end
+    if isfield(S,'fcSelectedSubjectIdx') && ~isempty(S.fcSelectedSubjectIdx)
+        keep = false(nSub,1);
+        kk = S.fcSelectedSubjectIdx(:); kk = kk(kk>=1 & kk<=nSub);
+        keep(kk)=true; useIdx = useIdx & keep;
+        if ~any(useIdx), useIdx = keep; end
     end
 catch
 end
+if ~any(useIdx), error('No animals selected for FC-GA.'); end
+Zstack = ZstackAll(:,:,useIdx);
+Rstack = RstackAll(:,:,useIdx);
+meanZ = mean3_CLEANUP_20260617(Zstack);
+R = struct();
+R.groupName = groupSel;
+if strcmpi(groupSel,'All loaded'), R.groupName='All loaded'; end
+R.n = sum(useIdx);
+R.labels = commonLabels;
+R.names = names;
+R.Zstack = Zstack;
+R.Rstack = Rstack;
+R.meanZ = meanZ;
+R.meanR = tanh(meanZ);
+R.subjectNames = subjectNames(useIdx);
+R.groups = groups(useIdx);
+R.sourceFiles = sourceFiles(useIdx);
+R.sliceMode = sliceMode;
+if usedSliceSpecific, R.sliceNote=''; else, R.sliceNote=' (subject-level matrix; no true slice FC in bundle)'; end
 end
 
-function col = fcGetPlotColor_SAFE_20260622(S,defaultCol)
-col = defaultCol;
-try
-    if isfield(S,'hFCPlotColor') && ishghandle(S.hFCPlotColor)
-        items = get(S.hFCPlotColor,'String'); v = get(S.hFCPlotColor,'Value');
-        if iscell(items), nm = lower(strtrimSafe(items{max(1,min(v,numel(items)))})); else, cc = cellstr(items); nm = lower(strtrimSafe(cc{max(1,min(v,numel(cc)))})); end
-        switch nm
-            case 'blue',   col = [0.10 0.45 0.95];
-            case 'red',    col = [0.90 0.15 0.12];
-            case 'green',  col = [0.10 0.60 0.25];
-            case 'orange', col = [0.95 0.48 0.10];
-            case 'purple', col = [0.55 0.25 0.85];
-            case 'black',  col = [0.02 0.02 0.02];
-            case 'white',  col = [0.95 0.95 0.95];
-            case 'gray',   col = [0.45 0.45 0.45];
-        end
-    end
-catch
-    col = defaultCol;
-end
-end
-
-function s = popupStr_SAFE_20260617(S,field,fb)
-s = fb;
-try
-    if isfield(S,field) && ishghandle(S.(field))
-        items = get(S.(field),'String'); v = get(S.(field),'Value');
-        if iscell(items), v=max(1,min(v,numel(items))); s=strtrimSafe(items{v}); else, c=cellstr(items); v=max(1,min(v,numel(c))); s=strtrimSafe(c{v}); end
-    end
-catch
-end
-end
-% GA_FC_SAFE_VIEWER_20260617_END
-
-
-
-
-
-
-
-function fcDrawHeatmapGrid_GA_20260622(ax,nR,nC)
-try, for x=0.5:1:(nC+0.5), line(ax,[x x],[0.5 nR+0.5],'Color',[0 0 0],'LineWidth',0.55,'HitTest','off'); end; for y=0.5:1:(nR+0.5), line(ax,[0.5 nC+0.5],[y y],'Color',[0 0 0],'LineWidth',0.55,'HitTest','off'); end; for x=0.5:5:(nC+0.5), line(ax,[x x],[0.5 nR+0.5],'Color',[0 0 0],'LineWidth',1.50,'HitTest','off'); end; for y=0.5:5:(nR+0.5), line(ax,[0.5 nC+0.5],[y y],'Color',[0 0 0],'LineWidth',1.50,'HitTest','off'); end; catch, end
-end
-
-
-
-function [sel,note] = fcGASelectedOrTopROIIdx_20260622(S,R,M,seedIdx,roi2Idx,nTop)
-sel=[]; note='';
-try
-    n=size(M,1); if nargin<6||isempty(nTop), nTop=20; end; nHalf=max(5,min(10,round(nTop/2)));
-    if isfield(S,'fcSelectedROIIdx') && ~isempty(S.fcSelectedROIIdx)
-        sel=fc_region_keep_indices_GA_20260622(S.fcSelectedROIIdx,n); note=sprintf('manual %d ROI(s)',numel(sel)); return;
-    end
-    row=double(M(seedIdx,:)); row(seedIdx)=NaN;
-    [~,posOrd]=sort(row,'descend'); [~,negOrd]=sort(row,'ascend');
-    posOrd=posOrd(isfinite(row(posOrd))); negOrd=negOrd(isfinite(row(negOrd)));
-    posSel=posOrd(1:min(nHalf,numel(posOrd))); negSel=negOrd(1:min(nHalf,numel(negOrd)));
-    sel=unique([seedIdx;roi2Idx;posSel(:);negSel(:)],'stable'); sel=sel(sel>=1&sel<=n);
-    names = cell(numel(sel),1); for ii=1:numel(sel), names{ii}=fcNiceName_SAFE_20260617(R.names{sel(ii)},R.labels(sel(ii)),'Abbrev',true); end
-    [~,ord]=sort(lower(names)); sel=sel(ord);
-    note=sprintf('seed top +%d / -%d ROI(s), alphabetic',numel(posSel),numel(negSel));
-catch, sel=[]; note='all ROIs'; end
-end
-
-function keep = fc_region_keep_indices_GA_20260622(sel,n)
-keep=[]; try, if isempty(sel)||n<1, return; end; if islogical(sel), sel=find(sel(:)); end; sel=round(double(sel(:))); keep=unique(sel(sel>=1&sel<=n),'stable'); catch, keep=[]; end
-end
-
-function plotSeedProfile_ADV_20260617(ax,stack,seedIdx,roiKeep,R,valTxt,C,S)
-if nargin < 8, S = struct(); end
-try, delete(findall(ancestor(ax,'figure'),'Type','ColorBar')); catch, end
-cla(ax); roiKeep = roiKeep(:)';
-Y = squeeze(stack(seedIdx,roiKeep,:)); if isvector(Y), Y = reshape(Y,numel(roiKeep),[]); end
-mu = fcNanMean_SAFE_20260617(Y,2); sd = fcNanStd_SAFE_20260617(Y,2); x = 1:numel(mu);
-lineCol = fcGetPlotColor_SAFE_20260622(S,[0.10 0.45 0.95]);
-patch(ax,[x fliplr(x)],[mu(:)'+sd(:)' fliplr(mu(:)'-sd(:)')],[0.55 0.55 0.55],'FaceAlpha',0.20,'EdgeColor','none');
-hold(ax,'on'); plot(ax,x,mu,'LineWidth',2.2,'Color',lineCol); hold(ax,'off');
-set(ax,'Color',C.axisBg,'XColor',C.txt,'YColor',C.txt,'FontSize',9); grid(ax,'on'); xlim(ax,[0.5 max(1,numel(mu)+0.5)]);
-seedName = fcNiceName_SAFE_20260617(R.names{seedIdx},R.labels(seedIdx),'Full',false);
-title(ax,sprintf('Seed profile: %s → target ROIs | mean ± SD | n=%d',seedName,size(stack,3)),'Color',C.txt,'FontWeight','bold','Interpreter','none');
-xlabel(ax,'Target ROIs', 'Color',C.txt,'Interpreter','none'); ylabel(ax,valTxt,'Color',C.txt,'Interpreter','none');
-labs = fcMakeLabels_SAFE_20260617(R.names(roiKeep),R.labels(roiKeep),'Abbrev','All ROIs');
-if numel(roiKeep) <= 25, set(ax,'XTick',x,'XTickLabel',labs); try, xtickangle(ax,55); catch, end
-else, ticks=round(linspace(1,numel(roiKeep),25)); set(ax,'XTick',ticks,'XTickLabel',labs(ticks)); try, xtickangle(ax,55); catch, end, end
-fcApplyY_SAFE_20260617(ax,S);
-end
-
-function fcGARefreshNameTable_20260622(f)
-try, hFig=getappdata(f,'hFigGA'); S=guidata(hFig); labels=getappdata(f,'fcLabels'); names=getappdata(f,'fcNames'); hSearch=getappdata(f,'hSearch'); hHemi=getappdata(f,'hHemi'); hTable=getappdata(f,'hTable'); q=lower(strtrim(get(hSearch,'String'))); hemiItems=get(hHemi,'String'); mode=hemiItems{get(hHemi,'Value')}; rows={}; usedAbs=[]; for ii=1:numel(labels), lab=double(labels(ii)); side='R'; if lab<0, side='L'; end; if strcmpi(mode,'Left only')&&lab>0, continue; end; if strcmpi(mode,'Right only')&&lab<0, continue; end; if strcmpi(mode,'Merged L/R'), if any(usedAbs==abs(lab)), continue; end; usedAbs(end+1)=abs(lab); idxGroup=find(abs(double(labels(:)))==abs(lab)); showLab=abs(lab); else, idxGroup=ii; showLab=lab; end; abbr=fcNiceName_SAFE_20260617(names{ii},lab,'Abbrev',true); full=fcNiceName_SAFE_20260617(names{ii},lab,'Full',true); txtRow=lower(sprintf('%g %s %s',showLab,abbr,full)); if ~isempty(q)&&isempty(strfind(txtRow,q)), continue; end; inc=false; try, if isfield(S,'fcSelectedROIIdx')&&~isempty(S.fcSelectedROIIdx), inc=any(ismember(idxGroup,S.fcSelectedROIIdx)); end, catch, end; idxStr=sprintf('%d,',idxGroup); idxStr=regexprep(idxStr,',$',''); if strcmpi(mode,'Both separate'), abbr=[side '_' abbr]; end; rows(end+1,:)={inc,showLab,abbr,full,idxStr}; end; if ~isempty(rows), [~,ord]=sort(lower(rows(:,3))); rows=rows(ord,:); end; set(hTable,'Data',rows); catch ME, try, disp(['Names table refresh failed: ' ME.message]); catch, end, end
-end
-function fcGASetShownInclude_20260622(f,val)
-try, hTable=getappdata(f,'hTable'); D=get(hTable,'Data'); for ii=1:size(D,1), D{ii,1}=logical(val); end; set(hTable,'Data',D); catch, end
-end
-function fcGAApplyNameTableSelection_20260622(f)
-try, hFig=getappdata(f,'hFigGA'); S=guidata(hFig); hTable=getappdata(f,'hTable'); D=get(hTable,'Data'); sel=[]; for ii=1:size(D,1), if logical(D{ii,1}), parts=regexp(char(D{ii,5}),'\d+','match'); for jj=1:numel(parts), sel(end+1,1)=str2double(parts{jj}); end, end, end; sel=unique(sel(isfinite(sel)&sel>=1),'stable'); if isempty(sel), warndlg('At least one region must be selected.','FC names'); return; end; S.fcSelectedROIIdx=sel(:); guidata(hFig,S); try, delete(f); catch, end; updateFCTabPreview_ADV_20260617(S); catch ME, errordlg(ME.message,'Apply FC region selection'); end
-end
-
-
-function fcGACompactLayout_20260623(S)
-% Runtime layout cleanup for FC-GA top controls.
-try
-    if isfield(S,'hFCExportPNG') && ishghandle(S.hFCExportPNG), set(S.hFCExportPNG,'Units','normalized','Position',[0.820 0.020 0.065 0.105]); end
-    if isfield(S,'hFCZoom') && ishghandle(S.hFCZoom), set(S.hFCZoom,'Units','normalized','Position',[0.895 0.020 0.070 0.105],'String','Large'); end
-    if isfield(S,'hFCYAuto') && ishghandle(S.hFCYAuto), set(S.hFCYAuto,'Units','normalized','Position',[0.060 0.020 0.060 0.105]); end
-    if isfield(S,'hFCYMin') && ishghandle(S.hFCYMin), set(S.hFCYMin,'Units','normalized','Position',[0.125 0.020 0.045 0.105]); end
-    if isfield(S,'hFCYMax') && ishghandle(S.hFCYMax), set(S.hFCYMax,'Units','normalized','Position',[0.175 0.020 0.045 0.105]); end
-    if isfield(S,'hFCYStep') && ishghandle(S.hFCYStep), set(S.hFCYStep,'Units','normalized','Position',[0.225 0.020 0.045 0.105]); end
-    if isfield(S,'hFCPlotColor') && ishghandle(S.hFCPlotColor), set(S.hFCPlotColor,'Units','normalized','Position',[0.325 0.020 0.085 0.105]); end
-catch
-end
-end
-
-function nm = fcNiceName_SAFE_20260617(raw,label,labelMode,stripSide)
-if nargin < 4, stripSide = false; end
-[acr,full] = fcNameParts_SAFE_20260622(raw);
-if strcmpi(labelMode,'Full')
-    if isempty(full), base = acr; else, base = full; end
-elseif strcmpi(labelMode,'Label ID')
-    base = sprintf('%g',label);
-else
-    base = acr;
-end
-if ~strcmpi(labelMode,'Full'), base = upper(base); end
-side = fcSide_SAFE_20260617(raw,label);
-if ~stripSide && ~isempty(side)
-    base = [upper(side) '_' base];
-end
-base = regexprep(base,'\s+',' ');
-maxN = 12; if strcmpi(labelMode,'Full'), maxN = 34; end
-if numel(base) > maxN, base = [base(1:max(1,maxN-3)) '...']; end
-nm = base;
-end
-
-function acr = fcAcr_SAFE_20260617(raw)
-[acr,~] = fcNameParts_SAFE_20260622(raw);
-acr = upper(acr);
-end
-
-function [acr,full] = fcNameParts_SAFE_20260622(raw)
-s = strtrimSafe(raw); full = '';
-if isempty(s), acr = ''; return; end
-if ~isempty(strfind(s,'||'))
-    parts = regexp(s,'\|\|','split'); left = strtrimSafe(parts{1});
-    if numel(parts) >= 2, full = strtrimSafe(parts{2}); end
-else
-    left = s;
-end
-left = regexprep(left,'\[[^\]]*\]','');
-left = regexprep(left,'^\s*-?\d+\s*=?\s*','');
-left = regexprep(left,'(?i)^(L|R)[_\-\s]+','');
-left = regexprep(left,'(?i)\b(left|right)\b','');
-left = strtrim(regexprep(left,'[_\s]+',' '));
-tok = regexp(left,'^([A-Za-z][A-Za-z0-9\-]{0,12})\s+(.+)$','tokens','once');
-if ~isempty(tok)
-    acr = upper(strtrim(tok{1}));
-    if isempty(full), full = strtrim(tok{2}); end
-else
-    acr = upper(strtrim(left));
-end
-full = regexprep(full,'\[[^\]]*\]','');
-full = regexprep(full,'^\s*-?\d+\s*=?\s*','');
-full = regexprep(full,'(?i)^(L|R)[_\-\s]+','');
-full = regexprep(full,'(?i)\b(left|right)\b','');
-full = regexprep(full,'\s+\d+(\s+\d+)*\s*$','');
-full = strtrim(regexprep(full,'[_\s]+',' '));
-if isempty(acr), acr = upper(strtrimSafe(raw)); end
-end
-
-function plotFCMatrix_CLEAN_20260617(ax,M,clim,titleStr,namesX,namesY,labelsX,labelsY,C,cmapName,labelMode,hemiTitle)
-try, delete(findall(ancestor(ax,'figure'),'Type','ColorBar')); catch, end
-cla(ax);
-if isempty(M)
-    try, fcNoDataLocal(ax,titleStr,C); catch, text(ax,0.5,0.5,titleStr); end
-    return;
-end
+function plotFCMatrix_CLEANUP_20260617(ax,M,clim,titleStr,namesX,namesY,labelsX,labelsY,C,cmapName,labelMode,hemiTitle)
+clearFCPlot_CLEANUP_20260617(ax);
+if isempty(M), showNoFC_CLEANUP_20260617(ax,C,titleStr); return; end
 imagesc(ax,M);
-try, set(ax,'CLim',clim); catch, try, caxis(ax,clim); catch, end, end
-try, colormap(ax,cmapFC_ADV_20260617(cmapName,256)); catch, colormap(ax,jet(256)); end
-cb = colorbar(ax);
-try, set(cb,'Color',C.txt); ylabel(cb,'FC','Color',C.txt,'Interpreter','none'); catch, end
-set(ax,'Color',C.axisBg,'XColor',C.txt,'YColor',C.txt,'FontName','Arial','FontSize',9,'TickLength',[0 0]);
-try, set(ax,'TickLabelInterpreter','none'); catch, end
+try, caxis(ax,clim); catch, end
+colormap(ax,cmap_CLEANUP_20260617(cmapName,256));
+cb=colorbar(ax); try,set(cb,'Color',[1 1 1]); ylabel(cb,'FC','Color',[1 1 1]); catch,end
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontName','Arial','FontSize',9,'TickLength',[0 0]);
 title(ax,titleStr,'Color',C.txt,'FontWeight','bold','Interpreter','none');
 nR=size(M,1); nC=size(M,2);
-forceAllTicks=false; try, forceAllTicks=isappdata(ax,'FCGA_FORCE_ALL_TICKS'); catch, end
-maxTicks=32; if strcmpi(strtrimSafe(labelMode),'Full'), maxTicks=18; end; if forceAllTicks, maxTicks=max(size(M)); end
-ticksY=fcTickIdx_SAFE_20260617(nR,maxTicks); ticksX=fcTickIdx_SAFE_20260617(nC,maxTicks);
-xLabs=fcMakeLabels_SAFE_20260617(namesX,labelsX,labelMode,hemiTitle);
-yLabs=fcMakeLabels_SAFE_20260617(namesY,labelsY,labelMode,hemiTitle);
-set(ax,'YTick',ticksY,'YTickLabel',yLabs(ticksY),'XTick',ticksX,'XTickLabel',xLabs(ticksX));
-try, xtickangle(ax,45); catch, end
-axis(ax,'tight'); box(ax,'on'); hold(ax,'on');
-try, fcDrawHeatmapGrid_GA_20260622(ax,nR,nC); catch, end
+fullMode=strcmpi(labelMode,'Full');
+maxTicks=28; if fullMode, maxTicks=14; end
+ticksY=tickIdx_CLEANUP_20260617(nR,maxTicks);
+ticksX=tickIdx_CLEANUP_20260617(nC,maxTicks);
+xLabs=makeTickLabels_CLEANUP_20260617(namesX,labelsX,labelMode,hemiTitle);
+yLabs=makeTickLabels_CLEANUP_20260617(namesY,labelsY,labelMode,hemiTitle);
+set(ax,'YTick',ticksY,'YTickLabel',yLabs(ticksY));
+set(ax,'XTick',ticksX,'XTickLabel',xLabs(ticksX));
+try,xtickangle(ax,45);catch,end
+axis(ax,'tight'); box(ax,'on');
+[xl,yl]=hemiAxisText_CLEANUP_20260617(hemiTitle);
+xlabel(ax,xl,'Color',C.txt,'Interpreter','none');
+ylabel(ax,yl,'Color',C.txt,'Interpreter','none');
+end
+
+function plotSeedProfile_CLEANUP_20260617(ax,stack,seedIdx,roiKeep,R,valTxt,C,S)
+clearFCPlot_CLEANUP_20260617(ax);
+roiKeep = roiKeep(:)';
+Y = squeeze(stack(seedIdx,roiKeep,:));
+if isvector(Y), Y = reshape(Y,numel(roiKeep),[]); end
+mu = mean2_CLEANUP_20260617(Y,2);
+sd = std2_CLEANUP_20260617(Y,0,2);
+x = 1:numel(mu);
+patch(ax,[x fliplr(x)],[mu(:)'+sd(:)' fliplr(mu(:)'-sd(:)')],[0.55 0.55 0.55],'FaceAlpha',0.25,'EdgeColor','none');
+hold(ax,'on'); plot(ax,x,mu,'LineWidth',2.0); hold(ax,'off');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); grid(ax,'on');
+title(ax,sprintf('Seed profile mean ± SD: %s | n=%d',niceRegionName_CLEANUP_20260617(R.names{seedIdx},R.labels(seedIdx),'Abbrev'),size(stack,3)),'Color',C.txt,'FontWeight','bold','Interpreter','none');
+xlabel(ax,'Selected regions in atlas label order','Color',C.txt); ylabel(ax,valTxt,'Color',C.txt);
+if numel(roiKeep)<=35
+    labs=makeTickLabels_CLEANUP_20260617(R.names(roiKeep),R.labels(roiKeep),'Abbrev','All ROIs');
+    set(ax,'XTick',x,'XTickLabel',labs); try,xtickangle(ax,45);catch,end
+end
+applyY_CLEANUP_20260617(ax,S);
+end
+
+function plotAnimalPairValues_CLEANUP_20260617(ax,stack,seedIdx,roi2Idx,R,valTxt,C,S)
+clearFCPlot_CLEANUP_20260617(ax);
+vals=squeeze(stack(seedIdx,roi2Idx,:)); vals=vals(:);
+x=1:numel(vals);
+plot(ax,x,vals,'o-','LineWidth',1.8,'MarkerSize',7); hold(ax,'on');
+mu=mean(vals(isfinite(vals)));
+if isfinite(mu), plot(ax,[min(x) max(x)],[mu mu],'-','LineWidth',2.2); end
 hold(ax,'off');
-[xl,yl]=fcHemiAxis_SAFE_20260617(hemiTitle);
-xlabel(ax,xl,'Color',C.txt,'Interpreter','none'); ylabel(ax,yl,'Color',C.txt,'Interpreter','none');
+set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); grid(ax,'on');
+title(ax,sprintf('Animal FC values: %s ↔ %s',niceRegionName_CLEANUP_20260617(R.names{seedIdx},R.labels(seedIdx),'Abbrev'),niceRegionName_CLEANUP_20260617(R.names{roi2Idx},R.labels(roi2Idx),'Abbrev')),'Color',C.txt,'FontWeight','bold','Interpreter','none');
+xlabel(ax,'Animal index','Color',C.txt); ylabel(ax,valTxt,'Color',C.txt);
+applyY_CLEANUP_20260617(ax,S);
 end
 
-function plotROIOverlay_ADV_20260617(ax,S,R,cmapName)
-cla(ax); [map3,note]=findROIOverlayMap_ADV_20260617(S);
-if isempty(map3), text(ax,0.5,0.55,'ROI overlay map not found', 'Color',S.C.txt,'HorizontalAlignment','center','FontWeight','bold'); set(ax,'Color',S.C.axisBg,'XTick',[],'YTick',[]); title(ax,'ROI seed-correlation overlay','Color',S.C.txt); return; end
-map3=squeeze(map3); z=1;
-if ndims(map3)>2
-    try, sl=popupString_SINGLE_20260616(S,'hFCSlice','All slices'); tok=regexp(sl,'(\d+)','tokens','once'); if ~isempty(tok), z=str2double(tok{1}); else, z=round(size(map3,3)/2); end, catch, z=round(size(map3,3)/2); end
-    z=max(1,min(round(z),size(map3,3))); labelSlice=double(map3(:,:,z)); note=sprintf('%s | slice %d',note,z);
-else, labelSlice=double(map3); end
-seedIdx=popupIndex_SINGLE_20260616(S,'hFCRegion1',1); seedIdx=max(1,min(seedIdx,numel(R.labels))); M=R.meanR; valMap=NaN(size(labelSlice));
-for ii=1:numel(R.labels)
-    lab=double(R.labels(ii)); v=NaN; try, v=double(M(seedIdx,ii)); catch, end
-    if isfinite(v), mask=(labelSlice==lab); if ~any(mask(:)), mask=(abs(labelSlice)==abs(lab)); end; valMap(mask)=v; end
-end
-hIm=imagesc(ax,valMap,[-1 1]); set(hIm,'AlphaData',isfinite(valMap)); set(ax,'Color',S.C.axisBg); axis(ax,'image'); axis(ax,'ij'); axis(ax,'off'); xlim(ax,[1 size(valMap,2)]); ylim(ax,[1 size(valMap,1)]);
-try, colormap(ax,cmapFC_ADV_20260617('Blue-White-Red',256)); catch, colormap(ax,jet(256)); end
-cb=colorbar(ax); try, set(cb,'Color',S.C.txt); ylabel(cb,'Pearson r: selected seed → ROI','Color',S.C.txt,'Interpreter','none'); catch, end
-setappdata(ax,'fcGAOverlayLabelSlice',labelSlice); setappdata(ax,'fcGAOverlayLabels',double(R.labels(:)));
-title(ax,sprintf('ROI seed-correlation overlay | Seed: %s | %s',fcNiceName_SAFE_20260617(R.names{seedIdx},R.labels(seedIdx),'Full',false),note),'Color',S.C.txt,'FontWeight','bold','Interpreter','none');
-try, set(hIm,'ButtonDownFcn',@(src,evt)fcGAOverlayClick_20260622(src,evt)); catch, end
-try, fig=ancestor(ax,'figure'); set(fig,'WindowScrollWheelFcn',@(src,evt)fcGAScrollSlice_20260622(src,evt)); catch, end
-end
-
-function fcGAOverlayClick_20260622(src,evt)
-try, ax=ancestor(src,'axes'); fig=ancestor(ax,'figure'); S=guidata(fig); labelSlice=getappdata(ax,'fcGAOverlayLabelSlice'); labs=getappdata(ax,'fcGAOverlayLabels'); cp=get(ax,'CurrentPoint'); x=round(cp(1,1)); y=round(cp(1,2)); if y<1||x<1||y>size(labelSlice,1)||x>size(labelSlice,2), return; end; lab=double(labelSlice(y,x)); if lab==0||~isfinite(lab), return; end; idx=find(labs==lab,1,'first'); if isempty(idx), idx=find(abs(labs)==abs(lab),1,'first'); end; if isempty(idx), return; end; if isfield(S,'hFCRegion1')&&ishghandle(S.hFCRegion1), set(S.hFCRegion1,'Value',idx); guidata(fig,S); updateFCTabPreview_ADV_20260617(S); end; catch, end
-end
-function fcGAScrollSlice_20260622(fig,evt)
-try, S=guidata(fig); if isempty(S)||~isfield(S,'hFCSlice')||~ishghandle(S.hFCSlice), return; end; viewMode=popupString_SINGLE_20260616(S,'hFCView',''); if isempty(strfind(lower(viewMode),'overlay')), return; end; items=get(S.hFCSlice,'String'); if ischar(items), items=cellstr(items); end; if numel(items)<2, return; end; v=get(S.hFCSlice,'Value'); v=max(1,min(numel(items),v+sign(evt.VerticalScrollCount))); set(S.hFCSlice,'Value',v); guidata(fig,S); updateFCTabPreview_ADV_20260617(S); catch, end
-end
-
-
-
-function fcGACompactBottomLayout_20260623(S)
-% Move FC-GA secondary controls to the bottom row of the FC top panel.
-try
-    p = [];
-    flds = {'hFCRegion1','hFCView','hFCDisplay','hFCSubject'};
-    for ii = 1:numel(flds)
-        if isfield(S,flds{ii}) && ishghandle(S.(flds{ii}))
-            p = get(S.(flds{ii}),'Parent');
-            break;
-        end
-    end
-    if isempty(p) || ~ishghandle(p), return; end
-
-    % Bottom-left: Y scaling controls.
-    hYLab = fcGAFindControlText_20260623(p,'Y:','text');
-    if ishghandle(hYLab), set(hYLab,'Units','normalized','Position',[0.020 0.020 0.030 0.105]); end
-
-    if isfield(S,'hFCYAuto') && ishghandle(S.hFCYAuto)
-        set(S.hFCYAuto,'Units','normalized','Position',[0.055 0.020 0.065 0.105]);
+function plotROIPairSummary_CLEANUP_20260617(ax,stack,seedIdx,roi2Idx,R,valTxt,C,S)
+clearFCPlot_CLEANUP_20260617(ax);
+vals=squeeze(stack(seedIdx,roi2Idx,:)); vals=vals(:); vals=vals(isfinite(vals));
+if isempty(vals), vals=NaN; end
+mu=mean(vals,'omitnan');
+sd=std(vals,'omitnan');
+n=numel(vals);
+x0=1;
+hold(ax,'on');
+if n>0
+    if n==1
+        xj=x0;
     else
-        hAuto = fcGAFindControlText_20260623(p,'Auto','checkbox');
-        if ishghandle(hAuto), set(hAuto,'Units','normalized','Position',[0.055 0.020 0.065 0.105]); end
+        xj=x0 + linspace(-0.08,0.08,n);
     end
+    plot(ax,xj,vals,'o','MarkerSize',8,'LineWidth',1.5);
+end
+plot(ax,[0.82 1.18],[mu mu],'-','LineWidth',3.0);
+if n>1 && isfinite(sd)
+    plot(ax,[1 1],[mu-sd mu+sd],'-','LineWidth',1.8);
+    plot(ax,[0.94 1.06],[mu-sd mu-sd],'-','LineWidth',1.8);
+    plot(ax,[0.94 1.06],[mu+sd mu+sd],'-','LineWidth',1.8);
+end
+hold(ax,'off');
+xlim(ax,[0.55 1.45]);
+set(ax,'XTick',1,'XTickLabel',{'FC value'},'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontSize',11);
+grid(ax,'on');
+title(ax,sprintf('ROI pair summary: %s ↔ %s | n=%d',niceRegionName_CLEANUP_20260617(R.names{seedIdx},R.labels(seedIdx),'Abbrev'),niceRegionName_CLEANUP_20260617(R.names{roi2Idx},R.labels(roi2Idx),'Abbrev'),n),'Color',C.txt,'FontWeight','bold','Interpreter','none');
+ylabel(ax,valTxt,'Color',C.txt);
+applyY_CLEANUP_20260617(ax,S);
+end
 
-    if isfield(S,'hFCYMin') && ishghandle(S.hFCYMin), set(S.hFCYMin,'Units','normalized','Position',[0.125 0.020 0.045 0.105]); end
-    if isfield(S,'hFCYMax') && ishghandle(S.hFCYMax), set(S.hFCYMax,'Units','normalized','Position',[0.175 0.020 0.045 0.105]); end
-    if isfield(S,'hFCYStep') && ishghandle(S.hFCYStep), set(S.hFCYStep,'Units','normalized','Position',[0.225 0.020 0.045 0.105]); end
+function plotROIOverlay_CLEANUP_20260617(ax,S,R,cmapName)
+clearFCPlot_CLEANUP_20260617(ax);
+text(ax,0.5,0.56,'ROI overlay map not found in loaded FC bundle','Color',S.C.txt,'HorizontalAlignment','center','FontWeight','bold');
+text(ax,0.5,0.46,'This requires re-exporting FC GA bundles with spatial parcel/label maps.','Color',S.C.muted,'HorizontalAlignment','center');
+set(ax,'Color',S.C.axisBg,'XTick',[],'YTick',[]);
+title(ax,'ROI overlay map','Color',S.C.txt);
+end
 
-    % Bottom-middle: plot color.
-    hPlotLab = fcGAFindControlText_20260623(p,'Plot','text');
-    if ishghandle(hPlotLab), set(hPlotLab,'Units','normalized','Position',[0.295 0.020 0.045 0.105]); end
-    if isfield(S,'hFCPlotColor') && ishghandle(S.hFCPlotColor)
-        set(S.hFCPlotColor,'Units','normalized','Position',[0.345 0.020 0.085 0.105]);
-    end
-
-    % Bottom-right: action buttons.
-    hAnimals = fcGAFindControlText_20260623(p,'Animals','pushbutton');
-    if ishghandle(hAnimals), set(hAnimals,'Units','normalized','Position',[0.610 0.020 0.085 0.105]); end
-
-    hNames = fcGAFindControlText_20260623(p,'Names','pushbutton');
-    if ishghandle(hNames), set(hNames,'Units','normalized','Position',[0.705 0.020 0.075 0.105]); end
-
-    hPNG = fcGAFindControlText_20260623(p,'PNG','pushbutton');
-    if ishghandle(hPNG), set(hPNG,'Units','normalized','Position',[0.790 0.020 0.065 0.105]); end
-
-    hLarge = fcGAFindControlText_20260623(p,'Large','pushbutton');
-    if ishghandle(hLarge)
-        set(hLarge,'Units','normalized','Position',[0.865 0.020 0.085 0.105], ...
-            'String','Large','Callback',@(src,evt)showFCLargeView_GA_20260622(ancestor(src,'figure')));
-    else
-        % If the old weird square button exists, relabel it.
-        hSquare = fcGAFindControlText_20260623(p,'⛶','pushbutton');
-        if ishghandle(hSquare)
-            set(hSquare,'Units','normalized','Position',[0.865 0.020 0.085 0.105], ...
-                'String','Large','Callback',@(src,evt)showFCLargeView_GA_20260622(ancestor(src,'figure')));
-        end
-    end
-catch ME
-    try, fprintf('FC-GA bottom layout warning: %s\n',ME.message); catch, end
+function [M2,namesX,namesY,labelsX,labelsY,titleTxt] = applyHemi_CLEANUP_20260617(M,names,labels,mode)
+mode=lower(strtrimSafe(mode)); labels=double(labels(:));
+L=labels<0; R=labels>0;
+if ~any(L), L=startsWith(lower(names),'l_') | startsWith(lower(names),'l-') | contains(lower(names),'left'); end
+if ~any(R), R=startsWith(lower(names),'r_') | startsWith(lower(names),'r-') | contains(lower(names),'right'); end
+if contains(mode,'left vs right')
+    ri=find(L); ci=find(R); if isempty(ri)||isempty(ci), ri=1:size(M,1); ci=1:size(M,2); end
+    M2=M(ri,ci); namesY=names(ri); namesX=names(ci); labelsY=labels(ri); labelsX=labels(ci); titleTxt='Left rows × Right columns';
+elseif contains(mode,'left') && ~contains(mode,'right')
+    idx=find(L); if isempty(idx), idx=1:size(M,1); end
+    M2=M(idx,idx); namesX=names(idx); namesY=names(idx); labelsX=labels(idx); labelsY=labels(idx); titleTxt='Left only';
+elseif contains(mode,'right') && ~contains(mode,'left')
+    idx=find(R); if isempty(idx), idx=1:size(M,1); end
+    M2=M(idx,idx); namesX=names(idx); namesY=names(idx); labelsX=labels(idx); labelsY=labels(idx); titleTxt='Right only';
+elseif contains(mode,'merged')
+    [M2,namesX,labelsX]=mergeLR_CLEANUP_20260617(M,names,labels); namesY=namesX; labelsY=labelsX; titleTxt='Merged L+R homologs';
+else
+    M2=M; namesX=names; namesY=names; labelsX=labels; labelsY=labels; titleTxt='All ROIs';
 end
 end
 
-function h = fcGAFindControlText_20260623(parentHandle,pattern,styleWanted)
-h = [];
+function [Mm,namesM,labelsM]=mergeLR_CLEANUP_20260617(M,names,labels)
+labels=double(labels(:));
+if any(labels<0)&&any(labels>0), ids=unique(abs(labels)); ids=ids(ids>0); else, ids=(1:numel(labels))'; end
+n=numel(ids); Mm=nan(n,n); namesM=cell(n,1); labelsM=ids(:);
+for i=1:n
+    ii=find(abs(labels)==ids(i)); if isempty(ii), ii=i; end
+    namesM{i}=stripSide_CLEANUP_20260617(names{ii(1)});
+    for j=1:n
+        jj=find(abs(labels)==ids(j)); if isempty(jj), jj=j; end
+        v=M(ii,jj); v=v(isfinite(v)); if ~isempty(v), Mm(i,j)=mean(v); end
+    end
+end
+end
+
+function labs=makeTickLabels_CLEANUP_20260617(names,labels,labelMode,hemiTitle)
+n=numel(names); labs=cell(n,1); stripSide=shouldStripSide_CLEANUP_20260617(hemiTitle);
+for i=1:n
+    labs{i}=niceRegionName_CLEANUP_20260617(names{i},labels(i),labelMode);
+    if stripSide
+        labs{i}=regexprep(labs{i},'^(L|R)[\-_]','');
+    end
+end
+end
+
+function nm=niceRegionName_CLEANUP_20260617(raw,label,labelMode)
+acr=stripSide_CLEANUP_20260617(raw);
+if strcmpi(labelMode,'Full')
+    nm=fullNameFallback_CLEANMode)
+acr=stripSide_CLEANUP_20260617(raw);
+if strcmpi(labelMode,'UP_20260617(acr);
+else
+    nm=acr;
+end
+side=side_CLEANUP_20260617(raw,label);
+if ~isempty(side), nm=[side '_' nm]; end
+nm=strrep(nm,'_','_');
+nm=regexprep(nm,'\s+',' ');
+if strcmpi(labelMode,'Full'), maxN=22; else, maxN=10; end
+if numel(nm)>maxN, nm=[nm(1:max(1,maxN-3)) '...']; end
+end
+
+function acr=stripSide_CLEANUP_20260617(raw)
+acr=strtrimSafe(raw);
+acr=regexprep(acr,'\[[^\]]*\]','');
+acr=regexprep(acr,'(?i)^(L|R)[_\-\s]+','');
+acr=regexprep(acr,'(?i)\b(left|right)\b','');
+acr=strtrim(regexprep(acr,'\s+',' '));
+if isempty(acr), acr=strtrimSafe(raw); end
+end
+
+function s=side_CLEANUP_20260617(raw,label)
+s=''; r=lower(strtrimSafe(raw));
+if startsWith(r,'l_')||startsWith(r,'l-')||contains(r,'left'), s='L'; return; end
+if startsWith(r,'rcontains(r,'left'), s='L_')||startsWith(r,'r-')||contains(r,'right'), s='R'; return; end
+try, if label<0, s='L'; elseif label>0, s='R'; end, catch, end
+end
+
+function tf=shouldStripSide_CLEANUP_20260617(hemiTitle)
+h=lower(strtrimSafe(hemiTitle));
+tf=contains(h,'left only')||contains(h,'right only')||contains(h,'merged');
+end
+
+function [xl,yl]=hemiAxisText_CLEANUP_20260617(hemiTitle)
+h=lower(strtrimSafe(hemiTitle));
+if contains(h,'left rows')
+    xl='Right hemisphere regions'; yl='Left hemisphere regions';
+elseif contains(h,'left only')
+    xl='Left hemisphere regions'; yl='Left hemisphere regions';
+elseif contains(h,'right only')
+    xl='Right hemisphere regions'; yl='Right hemisphere regions';
+elseif contains(h,'merged')
+    xl='Merged bilateral';
+ regions'; yl='Merged bilateral regions';
+else
+    xl='Regions'; yl='Regions';
+end
+end
+
+function full=fullNameFallback_CLEANUP_20260617(acr)
+a=lower(regexprep(strtrimSafe(acr),'[^a-z0-9]',''));
+switch a
+    case 'cpu', full='caudate putamen';
+    case 'alv', full='alveus';
+    case 'cc', full='corpus callosum';
+    case 'aca', full='anterior commissure anterior';
+    case 'acp', full='anterior commissure posterior';
+    case 'fi', full='fimbria';
+    case 'hip', full='hippocampus';
+    case 'ca1', full='cornu ammonis 1';
+    case 'ca2', full='cornu ammonis 2';
+    case 'ca3', full='cornu ammonis 3';
+    case 'dg', full='dentate gyrus';
+    case 'th', full='thalamus';
+    case 'hyp', full='hypothalamus';
+    case 'ctx', full='cortex';
+    case 'str', full='striatum';
+    case 'gp', full='globus pallidus';
+    case 'ic', full='internal capsule';
+    case 'ec', full='external capsule';
+    case 'ot', full='optic tract';
+    case 'amy', full='amygdala';
+    case 'sn', full='substantia nigra';
+    case 'pag', full='periaqueductal gray';
+    otherwise, full=acr;
+end
+end
+
+function idx=tickIdx_CLEANUP_20260617(n,maxTicks)
+if n<=maxTicks, idx=1:n; else, step=ceil(n/maxTicks); idx=1:step:n; if idx(end)~=n, idx=[idx n]; end, end
+end
+
+function roiKeep=selectedROIIdx_CLEANUP_20260617(S,R)
+roiKeep=1:numel(R.labels);
 try
-    hs = findall(parentHandle,'Type','uicontrol');
-    pat = lower(pattern);
-    for kk = 1:numel(hs)
-        try
-            if nargin >= 3 && ~isempty(styleWanted)
-                st = get(hs(kk),'Style');
-                if ~strcmpi(st,styleWanted), continue; end
-            end
-            s = get(hs(kk),'String');
-            if iscell(s), s = strjoin(s,' '); end
-            if isempty(s), continue; end
-            if ~isempty(strfind(lower(char(s)),pat))
-                h = hs(kk);
-                return;
-            end
-        catch
-        end
+    if isfield(S,'fcSelectedROIIdx') && ~isempty(S.fcSelectedROIIdx)
+        k=unique(round(double(S.fcSelectedROIIdx(:)')),'stable');
+        k=k(k>=1 & k<=numel(R.labels));
+        if ~isempty(k), roiKeep=k; end
     end
-catch
-    h = [];
-end
-end
-
-function showFCLargeView_GA_20260622(hFig)
-try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'lastFC') || isempty(S.lastFC)
-        return;
-    end
-
-    f = figure('Name','FC-GA large interactive view', ...
-        'Color',[0.08 0.08 0.08],'NumberTitle','off', ...
-        'MenuBar','none','ToolBar','figure', ...
-        'Position',[40 35 1680 960]);
-    guidata(f,S);
-    setappdata(f,'mainFig',hFig);
-
-    ax = axes('Parent',f,'Units','normalized','Position',[0.055 0.105 0.750 0.820]);
-    setappdata(ax,'FCGA_FORCE_ALL_TICKS',true);
-
-    viewItems = get(S.hFCView,'String'); if ischar(viewItems), viewItems = cellstr(viewItems); end
-    seedItems = get(S.hFCRegion1,'String'); if ischar(seedItems), seedItems = cellstr(seedItems); end
-    roiItems  = get(S.hFCRegion2,'String'); if ischar(roiItems), roiItems = cellstr(roiItems); end
-    sliceItems = get(S.hFCSlice,'String'); if ischar(sliceItems), sliceItems = cellstr(sliceItems); end
-
-    labels = {'View','Display','Hemisphere','Color map','Labels','ROI subset','Seed','ROI 2','Slice'};
-    y = 0.895;
-    for k = 1:numel(labels)
-        uicontrol(f,'Style','text','String',labels{k}, ...
-            'Units','normalized','Position',[0.825 y 0.080 0.030], ...
-            'BackgroundColor',[0.08 0.08 0.08],'ForegroundColor',[1 1 1], ...
-            'FontWeight','bold','FontSize',10,'HorizontalAlignment','left');
-        y = y - 0.060;
-    end
-
-    y = 0.890;
-    hView  = uicontrol(f,'Style','popupmenu','String',viewItems,'Value',get(S.hFCView,'Value'),'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10); y = y - 0.060;
-    hDisp  = uicontrol(f,'Style','popupmenu','String',{'Pearson r','Fisher z'},'Value',max(1,min(2,get(S.hFCDisplay,'Value'))),'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10); y = y - 0.060;
-    hHemi  = uicontrol(f,'Style','popupmenu','String',{'All','Left only','Right only','Merged L/R','Left vs Right','Right vs Left'},'Value',max(1,min(6,get(S.hFCHemi,'Value'))),'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10); y = y - 0.060;
-    hColor = uicontrol(f,'Style','popupmenu','String',{'Blue-White-Red','Blue-White','Red-White-Blue','parula','hot','jet','gray'},'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10); y = y - 0.060;
-    hLab   = uicontrol(f,'Style','popupmenu','String',{'Abbrev','Full','Label ID'},'Value',max(1,min(3,get(S.hFCLabelMode,'Value'))),'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10); y = y - 0.060;
-    hROISet = uicontrol(f,'Style','popupmenu','String',{'Main selection/top','All ROIs','Seed +10/-10','Manual Names selection'},'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10); y = y - 0.060;
-    hSeed  = uicontrol(f,'Style','popupmenu','String',seedItems,'Value',get(S.hFCRegion1,'Value'),'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10); y = y - 0.060;
-    hROI2  = uicontrol(f,'Style','popupmenu','String',roiItems,'Value',get(S.hFCRegion2,'Value'),'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10); y = y - 0.060;
-    hSlice = uicontrol(f,'Style','popupmenu','String',sliceItems,'Value',get(S.hFCSlice,'Value'),'Units','normalized','Position',[0.910 y 0.080 0.040],'FontSize',10);
-
-    hAutoY = uicontrol(f,'Style','checkbox','String','Y auto','Value',1, ...
-        'Units','normalized','Position',[0.825 0.315 0.080 0.035], ...
-        'BackgroundColor',[0.08 0.08 0.08],'ForegroundColor',[1 1 1],'FontSize',10);
-    hY0 = uicontrol(f,'Style','edit','String','0','Units','normalized','Position',[0.910 0.315 0.035 0.035],'FontSize',10);
-    hY1 = uicontrol(f,'Style','edit','String','1.5','Units','normalized','Position',[0.955 0.315 0.035 0.035],'FontSize',10);
-
-    uicontrol(f,'Style','pushbutton','String','Update', ...
-        'Units','normalized','Position',[0.825 0.245 0.075 0.050], ...
-        'BackgroundColor',[0.10 0.45 0.95],'ForegroundColor','w', ...
-        'FontWeight','bold','FontSize',10, ...
-        'Callback',@(src,evt)fcGALargeReplot_20260622(f));
-    uicontrol(f,'Style','pushbutton','String','Export PNG', ...
-        'Units','normalized','Position',[0.915 0.245 0.075 0.050], ...
-        'BackgroundColor',[0.10 0.60 0.25],'ForegroundColor','w', ...
-        'FontWeight','bold','FontSize',10, ...
-        'Callback',@(src,evt)fcExportLargeView_GA_20260622(f));
-
-    D = struct('mainFig',hFig,'ax',ax,'hView',hView,'hDisp',hDisp, ...
-        'hHemi',hHemi,'hColor',hColor,'hLab',hLab,'hROISet',hROISet, ...
-        'hSeed',hSeed,'hROI2',hROI2,'hSlice',hSlice, ...
-        'hAutoY',hAutoY,'hY0',hY0,'hY1',hY1);
-    setappdata(f,'D',D);
-
-    set([hView hDisp hHemi hColor hLab hROISet hSeed hROI2 hSlice hAutoY hY0 hY1], ...
-        'Callback',@(src,evt)fcGALargeReplot_20260622(f));
-    set(f,'WindowScrollWheelFcn',@(src,evt)fcGALargeScrollSlice_20260622(f,evt));
-
-    fcGALargeReplot_20260622(f);
-catch ME
-    try, errordlg(ME.message,'FC-GA large view'); catch, end
-end
-end
-
-function fcGALargeReplot_20260622(f)
-try
-    D = getappdata(f,'D');
-    S = guidata(D.mainFig);
-    Rfull = S.lastFC;
-    if isempty(Rfull), return; end
-
-    vi = get(D.hView,'String');  viewMode = vi{get(D.hView,'Value')};
-    di = get(D.hDisp,'String');  dispMode = di{get(D.hDisp,'Value')};
-    hi = get(D.hHemi,'String');  hemiMode = hi{get(D.hHemi,'Value')};
-    ci = get(D.hColor,'String'); cmapName = ci{get(D.hColor,'Value')};
-    li = get(D.hLab,'String');   labelMode = li{get(D.hLab,'Value')};
-    ri = get(D.hROISet,'String'); roiMode = ri{get(D.hROISet,'Value')};
-
-    seedOrig = max(1,min(get(D.hSeed,'Value'),numel(Rfull.labels)));
-    roi2Orig = max(1,min(get(D.hROI2,'Value'),numel(Rfull.labels)));
-    sliceVal = get(D.hSlice,'Value');
-
-    try
-        set(S.hFCRegion1,'Value',seedOrig);
-        set(S.hFCRegion2,'Value',roi2Orig);
-        set(S.hFCSlice,'Value',sliceVal);
-        guidata(D.mainFig,S);
-    catch
-    end
-
-    if strcmpi(dispMode,'Fisher z')
-        M0full = Rfull.meanZ;
-        stack0full = Rfull.Zstack;
-        clim = [-2.5 2.5];
-        valTxt = 'Fisher z';
-    else
-        M0full = Rfull.meanR;
-        stack0full = Rfull.Rstack;
-        clim = [-1 1];
-        valTxt = 'Pearson r';
-    end
-
-    switch lower(roiMode)
-        case 'all rois'
-            selIdx = 1:numel(Rfull.labels);
-            selNote = sprintf('ALL ROIs: %d regions',numel(selIdx));
-        case 'manual names selection'
-            if isfield(S,'fcSelectedROIIdx') && ~isempty(S.fcSelectedROIIdx)
-                selIdx = round(double(S.fcSelectedROIIdx(:)))';
-                selIdx = selIdx(selIdx >= 1 & selIdx <= numel(Rfull.labels));
-            else
-                selIdx = 1:numel(Rfull.labels);
-            end
-            selNote = sprintf('manual/all: %d ROI(s)',numel(selIdx));
-        otherwise
-            [selIdx,selNote] = fcGASelectROIForLarge_20260623(S,Rfull,M0full,seedOrig,roi2Orig,20);
-            if isempty(selIdx), selIdx = 1:numel(Rfull.labels); end
-    end
-
-    R = Rfull;
-    M0 = M0full(selIdx,selIdx);
-    stack0 = stack0full(selIdx,selIdx,:);
-    R.names = Rfull.names(selIdx);
-    R.labels = Rfull.labels(selIdx);
-    R.meanR = Rfull.meanR(selIdx,selIdx);
-    R.meanZ = Rfull.meanZ(selIdx,selIdx);
-
-    seedIdx = find(selIdx == seedOrig,1,'first');
-    if isempty(seedIdx), seedIdx = 1; end
-    roi2Idx = find(selIdx == roi2Orig,1,'first');
-    if isempty(roi2Idx), roi2Idx = min(2,numel(selIdx)); end
-
-    cla(D.ax);
-    try, setappdata(D.ax,'FCGA_FORCE_ALL_TICKS',true); catch, end
-
-    switch lower(viewMode)
-        case 'heatmap'
-            [M,~,~,rowIdx,colIdx,hemiTitle] = applyHemisphereMode_ADV_20260617(M0,R.names,R.labels,hemiMode);
-            plotFCMatrix_CLEAN_20260617(D.ax,M,clim, ...
-                sprintf('%s FC heatmap LARGE | %s | %s',Rfull.groupName,hemiTitle,selNote), ...
-                R.names(colIdx),R.names(rowIdx),R.labels(colIdx),R.labels(rowIdx), ...
-                S.C,cmapName,labelMode,hemiTitle);
-        case {'seed profile ± sd','seed profile +/- sd','seed profile'}
-            plotSeedProfile_ADV_20260617(D.ax,stack0,seedIdx,1:size(stack0,2),R,valTxt,S.C,S);
-        case {'animal pair values','roi trace'}
-            plotAnimalPairValues_ADV_20260617(D.ax,stack0,seedIdx,roi2Idx,R,valTxt,S.C,S);
-        case {'roi pair summary','roi pair'}
-            plotROIPairSummary_ADV_20260617(D.ax,stack0,seedIdx,roi2Idx,R,valTxt,S.C,S);
-        case 'subject matrix'
-            [M,~,~,rowIdx,colIdx,hemiTitle] = applyHemisphereMode_ADV_20260617(M0,R.names,R.labels,hemiMode);
-            plotFCMatrix_CLEAN_20260617(D.ax,M,clim, ...
-                sprintf('%s subject matrix LARGE | %s | %s',Rfull.groupName,hemiTitle,selNote), ...
-                R.names(colIdx),R.names(rowIdx),R.labels(colIdx),R.labels(rowIdx), ...
-                S.C,cmapName,labelMode,hemiTitle);
-        otherwise
-            plotROIOverlay_ADV_20260617(D.ax,S,Rfull,cmapName);
-    end
-
-    try
-        if ~get(D.hAutoY,'Value')
-            y0 = str2double(get(D.hY0,'String'));
-            y1 = str2double(get(D.hY1,'String'));
-            if isfinite(y0) && isfinite(y1) && y1 > y0
-                ylim(D.ax,[y0 y1]);
-            end
-        end
-    catch
-    end
-catch ME
-    try
-        cla(D.ax);
-        text(D.ax,0.5,0.5,ME.message,'Color','w', ...
-            'HorizontalAlignment','center','Interpreter','none');
-    catch
-        warning('Large view replot failed: %s',ME.message);
-    end
-end
-end
-
-function [sel,note] = fcGASelectROIForLarge_20260623(S,R,M,seedIdx,roi2Idx,nTop)
-sel = [];
-note = '';
-try
-    n = size(M,1);
-    if nargin < 6 || isempty(nTop), nTop = 20; end
-    nHalf = max(5,min(10,round(nTop/2)));
-
-    row = double(M(seedIdx,:));
-    row(seedIdx) = NaN;
-    [~,posOrd] = sort(row,'descend');
-    [~,negOrd] = sort(row,'ascend');
-    posOrd = posOrd(isfinite(row(posOrd)));
-    negOrd = negOrd(isfinite(row(negOrd)));
-    posSel = posOrd(1:min(nHalf,numel(posOrd)));
-    negSel = negOrd(1:min(nHalf,numel(negOrd)));
-
-    sel = unique([seedIdx; roi2Idx; posSel(:); negSel(:)],'stable');
-    sel = sel(sel >= 1 & sel <= n);
-
-    try
-        nm = cell(numel(sel),1);
-        for ii = 1:numel(sel)
-            nm{ii} = fcNiceName_SAFE_20260617(R.names{sel(ii)},R.labels(sel(ii)),'Abbrev',true);
-        end
-        [~,ord] = sort(lower(nm));
-        sel = sel(ord);
-    catch
-    end
-
-    note = sprintf('seed top +%d / -%d ROI(s), alphabetic',numel(posSel),numel(negSel));
-catch
-    sel = [];
-    note = 'all ROIs';
-end
-end
-
-function fcGALargeScrollSlice_20260622(f,evt)
-try
-    D = getappdata(f,'D');
-    items = get(D.hSlice,'String');
-    if ischar(items), items = cellstr(items); end
-    if numel(items) < 2, return; end
-    v = get(D.hSlice,'Value');
-    v = max(1,min(numel(items),v + sign(evt.VerticalScrollCount)));
-    set(D.hSlice,'Value',v);
-    fcGALargeReplot_20260622(f);
 catch
 end
 end
 
-function fcExportLargeView_GA_20260622(f)
-try
-    [fn,pn] = uiputfile({'*.png','PNG image (*.png)'}, ...
-        'Export FC-GA large view',fullfile(pwd,'FCGA_large_view.png'));
-    if isequal(fn,0), return; end
-    out = fullfile(pn,fn);
-    try
-        exportgraphics(f,out,'Resolution',300);
-    catch
-        print(f,out,'-dpng','-r300');
+function [Rm,Zm,usedSlice]=getMatrixForSlice_CLEANUP_20260617(subj,sliceMode)
+usedSlice=false;
+useSlice=NaN; tok=regexp(sliceMode,'(\d+)','tokens','once'); if ~isempty(tok), useSlice=str2double(tok{1}); end
+if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
+    SR=subj.sliceResults;
+    if isfinite(useSlice)
+        z=max(1,min(round(useSlice),numel(SR)));
+        [Rm,Zm]=getMatrixStruct_CLEANUP_20260617(SR(z));
+        if ~isempty(Rm), usedSlice=true; return; end
+    else
+        Zs={};
+        for z=1:numel(SR)
+            [~,Zz]=getMatrixStruct_CLEANUP_20260617(SR(z));
+            if ~isempty(Zz), Zs{end+1}=Zz; end %#ok<AGROW>
+        end
+        if ~isempty(Zs)
+            Zm=mean3_CLEANUP_20260617(cat(3,Zs{:})); Rm=tanh(Zm); usedSlice=true; return;
+        end
     end
+end
+[Rm,Zm]=getMatrixStruct_CLEANUP_20260617(subj);
+end
+
+function [Rm,Zm]=getMatrixStruct_CLEANUP_20260617(S)
+Rm=[]; Zm=[];
+try, if isfield(S,'R') && ~isempty(S.R), Rm=double(S.R); end, catch, end
+try, if isempty(Rm) && isfield(S,'displayMatrix') && ~isempty(S.displayMatrix), Rm=double(S.displayMatrix); end, catch, end
+try, if isempty(Rm) && isfield(S,'corrMatrix') && ~isempty(S.corrMatrix), Rm=double(S.corrMatrix); end, catch, end
+try, if isempty(Rm) && isfield(S,'matrix') && ~isempty(S.matrix), Rm=double(S.matrix); end, catch, end
+try, if isfield(S,'Z') && ~isempty(S.Z), Zm=double(S.Z); end, catch, end
+try, if isempty(Zm) && isfield(S,'displayZ') && ~isempty(S.displayZ), Zm=double(S.displayZ); end, catch, end
+if isempty(Rm) && ~isempty(Zm), Rm=tanh(Zm); end
+if isempty(Zm) && ~isempty(Rm), Rc=max(-0.999999,min(0.999999,Rm)); Zm=atanh(Rc); try, Zm(1:size(Zm,1)+1:end)=0; catch, end, end
+if isempty(Rm) || isempty(Zm), error('FC subject does not contain R/Z matrix.'); end
+end
+
+function labs=getLabels_CLEANUP_20260617(subj)
+labs=[];
+try, if isfield(subj,'labels') && ~isempty(subj.labels), labs=double(subj.labels(:)); end, catch, end
+try, if isempty(labs) && isfield(subj,'displayLabels') && ~isempty(subj.displayLabels), labs=double(subj.displayLabels(:)); end, catch, end
+if isempty(labs), [R,~]=getMatrixStruct_CLEANUP_20260617(subj); labs=(1:size(R,1))'; end
+end
+
+function names=getNames_CLEANUP_20260617(subj,labs)
+names={};
+try, if isfield(subj,'names') && ~isempty(subj.names), names=subj.names(:); end, catch, end
+try, if isempty(names) && isfield(subj,'displayNames') && ~isempty(subj.displayNames), names=subj.displayNames(:); end, catch, end
+if isempty(names), names=arrayfun(@(x)sprintf('ROI_%g',x),labs(:),'UniformOutput',false); end
+end
+
+function selectFCRegions_CLEANUP_20260617(hFig)
+try
+    S=guidata(hFig); if isempty(S)||~isfield(S,'FC')||~isfield(S.FC,'subjects')||isempty(S.FC.subjects), return; end
+    subj=S.FC.subjects(1); labels=getLabels_CLEANUP_20260617(subj); names=getNames_CLEANUP_20260617(subj,labels);
+    items=cell(numel(labels),1);
+    for i=1:numel(labels), items{i}=sprintf('%g | %s',labels(i),niceRegionName_CLEANUP_20260617(names{i},labels(i),'Full')); end
+    init=1:numel(items); try, if isfield(S,'fcSelectedROIIdx')&&~isempty(S.fcSelectedROIIdx), init=S.fcSelectedROIIdx; end, catch, end
+    [sel,ok]=listdlg('PromptString','Select regions shown in FC-GA plots:','SelectionMode','multiple','ListString',items,'InitialValue',init,'ListSize',[540 420]);
+    if ok, S.fcSelectedROIIdx=sel(:); guidata(hFig,S); fcRefresh_CLEANUP_20260617(hFig); end
+catch ME, try,errordlg(ME.message,'FC regions');catch,end
+end
+end
+
+function selectFCAnimals_CLEANUP_20260617(hFig)
+try
+    S=guidata(hFig); if isempty(S)||~isfield(S,'FC')||~isfield(S.FC,'subjects')||isempty(S.FC.subjects), return; end
+    names=cell(numel(S.FC.subjects),1);
+    for ii=1:numel(S.FC.subjects), try,names{ii}=strtrimSafe(S.FC.subjects(ii).name);catch,names{ii}=sprintf('Subject %d',ii);end; if isempty(names{ii}), names{ii}=sprintf('Subject %d',ii); end, end
+    init=1:numel(names); try, if isfield(S,'fcSelectedSubjectIdx')&&~isempty(S.fcSelectedSubjectIdx), init=S.fcSelectedSubjectIdx; end, catch, end
+    [sel,ok]=listdlg('PromptString','Select animals included in FC-GA:','SelectionMode','multiple','ListString',names,'InitialValue',init,'ListSize',[420 320]);
+    if ok, S.fcSelectedSubjectIdx=sel(:); S.lastFC=struct(); guidata(hFig,S); fcRefresh_CLEANUP_20260617(hFig); end
+catch ME, try,errordlg(ME.message,'FC animals');catch,end
+end
+end
+
+function showFCRegionNames_CLEANUP_20260617(hFig)
+try
+    S=guidata(hFig); if isempty(S)||~isfield(S,'FC')||~isfield(S.FC,'subjects')||isempty(S.FC.subjects), return; end
+    subj=S.FC.subjects(1); labels=getLabels_CLEANUP_20260617(subj); names=getNames_CLEANUP_20260617(subj,labels);
+    lines=cell(numel(labels),1);
+    for i=1:numel(labels), lines{i}=sprintf('%g = %s',labels(i),niceRegionName_CLEANUP_20260617(names{i},labels(i),'Full')); end
+    f=figure('Name','FC ROI labels','Color',[0.08 0.08 0.08],'MenuBar','none','ToolBar','none','NumberTitle','off','Position',[200 120 760 760]);
+    uicontrol(f,'Style','listbox','String',lines,'Units','normalized','Position',[0.03 0.08 0.94 0.89],'BackgroundColor',[0 0 0],'ForegroundColor',[1 1 1],'FontName','Consolas','FontSize',11);
+    uicontrol(f,'Style','pushbutton','String','Copy to clipboard','Units','normalized','Position',[0.33 0.015 0.34 0.045],'Callback',@(s,e) clipboard('copy',strjoin(lines,newline)));
+catch ME, try,errordlg(ME.message,'FC names');catch,end
+end
+end
+
+function refreshFCRegionPopups_CLEANUP_20260617(hFig)
+try
+    S=guidata(hFig); if isempty(S)||~isfield(S,'FC')||~isfield(S.FC,'subjects')||isempty(S.FC.subjects), return; end
+    subj=S.FC.subjects(1); labels=getLabels_CLEANUP_20260617(subj); names=getNames_CLEANUP_20260617(subj,labels);
+    items=cell(numel(labels),1);
+    for i=1:numel(labels), items{i}=sprintf('%s',niceRegionName_CLEANUP_20260617(names{i},labels(i),'Abbrev')); end
+    if isfield(S,'hFCRegion1')&&ishghandle(S.hFCRegion1), set(S.hFCRegion1,'String',items,'Value',min(get(S.hFCRegion1,'Value'),numel(items))); end
+    if isfield(S,'hFCRegion2')&&ishghandle(S.hFCRegion2), set(S.hFCRegion2,'String',items,'Value',min(max(get(S.hFCRegion2,'Value'),2),numel(items))); end
+catch
+end
+end
+
+function fcRefresh_CLEANUP_20260617(hFig)
+try
+    S=guidata(hFig); if isempty(S), return; end
+    S.lastFC=computeFCMean_CLEANUP_20260617(S);
+    guidata(hFig,S);
+    S=guidata(hFig);
+    updateFCTabPreview_CLEANUP_20260617(S);
 catch ME
-    errordlg(ME.message,'Export large view');
+    try,S=guidata(hFig); set(S.hFCInfo,'String',['FC refresh failed: ' ME.message]);catch,end
 end
 end
+
+function tidyFCGUI_CLEANUP_20260617(S)
+try
+    if isfield(S,'hFCCompute'), set(S.hFCCompute,'String','Recompute','FontSize',10); end
+    if isfield(S,'hFCExport'),  set(S.hFCExport,'String','Export CSV','FontSize',10); end
+    if isfield(S,'hFCAnimals'), set(S.hFCAnimals,'String','Animals','FontSize',10); end
+    if isfield(S,'hFCNames'),   set(S.hFCNames,'String','Names','FontSize',10); end
+    if isfield(S,'hFCExportPNG'), set(S.hFCExportPNG,'String','PNG','FontSize',10); end
+catch
+end
+end
+
+function setSingleFCAxis_CLEANUP_20260617(S)
+try,set(S.axFCA,'Visible','on','Position',[0.070 0.110 0.840 0.800]);catch,end
+try,cla(S.axFCB);set(S.axFCB,'Visible','off');catch,end
+try,cla(S.axFCD);set(S.axFCD,'Visible','off');catch,end
+try,cla(S.axFCP);set(S.axFCP,'Visible','off');catch,end
+end
+
+function clearFCPlot_CLEANUP_20260617(ax)
+try, delete(findall(ancestor(ax,'figure'),'Type','ColorBar')); catch, end
+cla(ax); hold(ax,'off');
+end
+
+function showNoFC_CLEANUP_20260617(ax,C,msg)
+cla(ax); text(ax,0.5,0.5,msg,'HorizontalAlignment','center','Color',C.txt,'FontWeight','bold'); set(ax,'Color',C.axisBg,'XTick',[],'YTick',[]);
+end
+
+function applyY_CLEANUP_20260617(ax,S)
+try
+    autoY=true; try,autoY=logical(get(S.hFCYAuto,'Value'));catch,end
+    if ~autoY
+        y0=safeNum(get(S.hFCYMin,'String'),NaN); y1=safeNum(get(S.hFCYMax,'String'),NaN);
+        if isfinite(y0)&&isfinite(y1)&&y1>y0, ylim(ax,[y0 y1]); end
+    end
+catch
+end
+end
+
+function s=popupString_CLEANUP_20260617(S,field,fb)
+s=fb; try, if isfield(S,field)&&ishghandle(S.(field)), items=get(S.(field),'String'); v=get(S.(field),'Value'); if iscell(items), v=max(1,min(v,numel(items))); s=strtrimSafe(items{v}); else, c=cellstr(items); v=max(1,min(v,numel(c))); s=strtrimSafe(c{v}); end, end, catch, end
+end
+
+function idx=popupIndex_CLEANUP_20260617(S,field,fb)
+idx=fb; try, if isfield(S,field)&&ishghandle(S.(field)), idx=get(S.(field),'Value'); end, catch, end
+end
+
+function M=mean3_CLEANUP_20260617(X)
+[a,b,~]=size(X); M=nan(a,b); for i=1:a, for j=1:b, v=squeeze(X(i,j,:)); v=v(isfinite(v)); if ~isempty(v), M(i,j)=mean(v); end, end, end
+end
+
+function m=mean2_CLEANUP_20260617(X,dim)
+if nargin<2,dim=1;end; X=double(X); ok=isfinite(X); X(~ok)=0; n=sum(ok,dim); m=sum(X,dim)./max(n,1); m(n==0)=NaN;
+end
+
+function s=std2_CLEANUP_20260617(X,flag,dim)
+if nargin<2,flag=0;end; if nargin<3,dim=1;end; mu=mean2_CLEANUP_20260617(X,dim); sz=ones(1,ndims(X)); sz(dim)=size(X,dim); D=(X-repmat(mu,sz)).^2; s=sqrt(mean2_CLEANUP_20260617(D,dim));
+end
+
+function cm=cmap_CLEANUP_20260617(name,n)
+if nargin<2,n=256;end; name=lower(strtrimSafe(name));
+switch name
+    case {'blue-white-red','bwr'}, cm=bwr_SINGLE_20260616(n);
+    case 'parula', try,cm=parula(n);catch,cm=jet(n);end
+    case 'hot', cm=hot(n);
+    case 'jet', cm=jet(n);
+    case 'gray', cm=gray(n);
+    otherwise, cm=bwr_SINGLE_20260616(n);
+end
+end
+% GA_FC_VIEWER_CLEANUP_20260617_END
