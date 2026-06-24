@@ -289,8 +289,8 @@ end
 if ~isempty(stdStep)
     launchCfg = struct();
     launchCfg.cancelled = false;
-    launchCfg.baselineStart = deconfStdFieldVal(stdStep,'base1',30);
-    launchCfg.baselineEnd   = deconfStdFieldVal(stdStep,'base2',35);
+    launchCfg.baselineStart = getStdField(stdStep,'base1',30);
+    launchCfg.baselineEnd   = getStdField(stdStep,'base2',35);
     launchCfg.underlayChoice = 5;
     addLog(sprintf('[Standardized] SCM GUI: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
 else
@@ -303,48 +303,12 @@ catch
 end
 if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
     launchCfg = struct(); launchCfg.cancelled = false;
-    launchCfg.baselineStart = deconfStdFieldVal(stdStep,'base1',30);
-    launchCfg.baselineEnd = deconfStdFieldVal(stdStep,'base2',35);
+    launchCfg.baselineStart = getStdField(stdStep,'base1',30);
+    launchCfg.baselineEnd = getStdField(stdStep,'base2',35);
     launchCfg.underlayChoice = 5;
     addLog(sprintf('[Standardized] SCM GUI no-popup: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
 else
-    % DECONF_STD_SCM_LAUNCH_DIRECT_V10
-stdStep = [];
-try
-    if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-    if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-catch
-end
-if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-    launchCfg = struct();
-    launchCfg.cancelled = false;
-    launchCfg.baselineStart = 30;
-    launchCfg.baselineEnd = 35;
-    if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), launchCfg.baselineStart = double(stdStep.base1); end
-    if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), launchCfg.baselineEnd = double(stdStep.base2); end
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] SCM GUI direct settings: baseline %.3g-%.3g s, caxis -100..100, alpha mod -20..20',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
-    % DECONF_STD_SCM_LAUNCH_DIRECT_V11
-stdStep = [];
-try
-    if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-    if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-catch
-end
-if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-    launchCfg = struct();
-    launchCfg.cancelled = false;
-    launchCfg.baselineStart = 30;
-    launchCfg.baselineEnd = 35;
-    if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), launchCfg.baselineStart = double(stdStep.base1); end
-    if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), launchCfg.baselineEnd = double(stdStep.base2); end
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] SCM GUI direct settings: baseline %.3g-%.3g s, caxis -100..100, alpha mod -20..20',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
     launchCfg = showScmVideoSetupDialog('SCM GUI', 30, 240, 5, studio, data.I);
-end
-end
 end
 end
     if isempty(launchCfg) || ~isstruct(launchCfg) || ...
@@ -381,13 +345,13 @@ par.transformStartPath = par.registration2DPath;
 try
     if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'name')
         par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
+        par.standardCaxis = [getStdField(stdStep,'cmin',-100) getStdField(stdStep,'cmax',100)];
         par.previewCaxis = par.standardCaxis; par.caxis = par.standardCaxis;
         par.standardSignMode = 3;
         par.standardAlphaModEnable = true;
         par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
+        par.standardModMinAbs = getStdField(stdStep,'amin',20);
+        par.standardModMaxAbs = getStdField(stdStep,'amax',100);
     end
 catch
 end
@@ -395,14 +359,14 @@ end
 try
     if exist('stdStep','var') && ~isempty(stdStep)
         par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
+        par.standardCaxis = [getStdField(stdStep,'cmin',-100) getStdField(stdStep,'cmax',100)];
         par.previewCaxis = par.standardCaxis;
         par.caxis = par.standardCaxis;
         par.standardSignMode = 3;
         par.standardAlphaModEnable = true;
         par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
+        par.standardModMinAbs = getStdField(stdStep,'amin',20);
+        par.standardModMaxAbs = getStdField(stdStep,'amax',100);
     end
 catch
 end
@@ -598,8 +562,8 @@ end
 if ~isempty(stdStep)
     launchCfg = struct();
     launchCfg.cancelled = false;
-    launchCfg.baselineStart = deconfStdFieldVal(stdStep,'base1',30);
-    launchCfg.baselineEnd   = deconfStdFieldVal(stdStep,'base2',35);
+    launchCfg.baselineStart = getStdField(stdStep,'base1',30);
+    launchCfg.baselineEnd   = getStdField(stdStep,'base2',35);
     launchCfg.underlayChoice = 5;
     addLog(sprintf('[Standardized] Video GUI: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
 else
@@ -612,8 +576,8 @@ catch
 end
 if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'Video GUI')
     launchCfg = struct(); launchCfg.cancelled = false;
-    launchCfg.baselineStart = deconfStdFieldVal(stdStep,'base1',30);
-    launchCfg.baselineEnd = deconfStdFieldVal(stdStep,'base2',35);
+    launchCfg.baselineStart = getStdField(stdStep,'base1',30);
+    launchCfg.baselineEnd = getStdField(stdStep,'base2',35);
     launchCfg.underlayChoice = 5;
     addLog(sprintf('[Standardized] Video GUI no-popup: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
 else
@@ -656,13 +620,13 @@ par.transformStartPath = par.registration2DPath;
 try
     if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'name')
         par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
+        par.standardCaxis = [getStdField(stdStep,'cmin',-100) getStdField(stdStep,'cmax',100)];
         par.previewCaxis = par.standardCaxis; par.caxis = par.standardCaxis;
         par.standardSignMode = 3;
         par.standardAlphaModEnable = true;
         par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
+        par.standardModMinAbs = getStdField(stdStep,'amin',20);
+        par.standardModMaxAbs = getStdField(stdStep,'amax',100);
     end
 catch
 end
@@ -670,14 +634,14 @@ end
 try
     if exist('stdStep','var') && ~isempty(stdStep)
         par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
+        par.standardCaxis = [getStdField(stdStep,'cmin',-100) getStdField(stdStep,'cmax',100)];
         par.previewCaxis = par.standardCaxis;
         par.caxis = par.standardCaxis;
         par.standardSignMode = 3;
         par.standardAlphaModEnable = true;
         par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
+        par.standardModMinAbs = getStdField(stdStep,'amin',20);
+        par.standardModMaxAbs = getStdField(stdStep,'amax',100);
     end
 catch
 end
@@ -1612,18 +1576,28 @@ end
 %% =========================================================
 %  STATUS BAR HANDLER
 % =========================================================
-function v = deconfStdFieldVal(S,fieldName,defaultValue)
+function v = getStdField(S,fieldName,defaultValue)
 v = defaultValue;
 try
     if isstruct(S) && isfield(S,fieldName)
         tmp = double(S.(fieldName));
-        if isfinite(tmp)
-            v = tmp;
-        end
+        if isfinite(tmp), v = tmp; end
     end
 catch
 end
 end
+% DECONF_STD_GETFIELD_V61
+
+function v = getStdField(S,fieldName,defaultValue)
+v = defaultValue;
+try
+    if isstruct(S) && isfield(S,fieldName)
+        tmp = double(S.(fieldName)); if isfinite(tmp), v = tmp; end
+    end
+catch
+end
+end
+% DECONF_STD_GETFIELD_V71
 
 function setProgramStatus(isReady)
 

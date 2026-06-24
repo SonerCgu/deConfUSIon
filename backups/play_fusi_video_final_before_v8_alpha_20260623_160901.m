@@ -149,8 +149,8 @@ tmpThrMax = 100;
 
 alphaModEnable = true;
 alphaPct  = 100;
-modMinAbs = -20;
-modMaxAbs = 20;      % <- change from 100 to 30
+modMinAbs = 15;
+modMaxAbs = 30;      % <- change from 100 to 30
 
 % DECONF_STD_VIDEO_ALPHA_SIGN_V71
 try

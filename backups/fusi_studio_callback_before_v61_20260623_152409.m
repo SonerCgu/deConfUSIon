@@ -275,78 +275,7 @@ function scmCallback(~,~)
     % -----------------------------------------------------
     % Launch setup popup: baseline + underlay selection
     % -----------------------------------------------------
-  % DECONF_STD_SCM_LAUNCHCFG_V61
-stdStep = [];
-try
-    if isappdata(fig,'deconf_std_workflow_step')
-        tmpStd = getappdata(fig,'deconf_std_workflow_step');
-        if isstruct(tmpStd) && isfield(tmpStd,'name') && strcmpi(strtrim(tmpStd.name),'SCM GUI')
-            stdStep = tmpStd;
-        end
-    end
-catch
-end
-if ~isempty(stdStep)
-    launchCfg = struct();
-    launchCfg.cancelled = false;
-    launchCfg.baselineStart = deconfStdFieldVal(stdStep,'base1',30);
-    launchCfg.baselineEnd   = deconfStdFieldVal(stdStep,'base2',35);
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] SCM GUI: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
-    % DECONF_STD_SCM_LAUNCHCFG_V71
-stdStep = [];
-try
-    if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-    if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-catch
-end
-if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-    launchCfg = struct(); launchCfg.cancelled = false;
-    launchCfg.baselineStart = deconfStdFieldVal(stdStep,'base1',30);
-    launchCfg.baselineEnd = deconfStdFieldVal(stdStep,'base2',35);
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] SCM GUI no-popup: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
-    % DECONF_STD_SCM_LAUNCH_DIRECT_V10
-stdStep = [];
-try
-    if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-    if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-catch
-end
-if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-    launchCfg = struct();
-    launchCfg.cancelled = false;
-    launchCfg.baselineStart = 30;
-    launchCfg.baselineEnd = 35;
-    if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), launchCfg.baselineStart = double(stdStep.base1); end
-    if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), launchCfg.baselineEnd = double(stdStep.base2); end
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] SCM GUI direct settings: baseline %.3g-%.3g s, caxis -100..100, alpha mod -20..20',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
-    % DECONF_STD_SCM_LAUNCH_DIRECT_V11
-stdStep = [];
-try
-    if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-    if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-catch
-end
-if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-    launchCfg = struct();
-    launchCfg.cancelled = false;
-    launchCfg.baselineStart = 30;
-    launchCfg.baselineEnd = 35;
-    if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), launchCfg.baselineStart = double(stdStep.base1); end
-    if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), launchCfg.baselineEnd = double(stdStep.base2); end
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] SCM GUI direct settings: baseline %.3g-%.3g s, caxis -100..100, alpha mod -20..20',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
-    launchCfg = showScmVideoSetupDialog('SCM GUI', 30, 240, 5, studio, data.I);
-end
-end
-end
-end
+  launchCfg = showScmVideoSetupDialog('SCM GUI', 30, 240, 5, studio, data.I);
     if isempty(launchCfg) || ~isstruct(launchCfg) || ...
             ~isfield(launchCfg,'cancelled') || launchCfg.cancelled
         addLog('SCM cancelled.');
@@ -377,35 +306,6 @@ par.registration2DPath = fullfile(studio.exportPath,'Registration2D');
 par.maskStartPath      = par.visualizationPath;
 par.underlayStartPath  = par.registration2DPath;
 par.transformStartPath = par.registration2DPath;
-% DECONF_STD_VIDEO_SCM_PAR_V71
-try
-    if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'name')
-        par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
-        par.previewCaxis = par.standardCaxis; par.caxis = par.standardCaxis;
-        par.standardSignMode = 3;
-        par.standardAlphaModEnable = true;
-        par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
-    end
-catch
-end
-% DECONF_STD_VIDEO_SCM_PAR_V61
-try
-    if exist('stdStep','var') && ~isempty(stdStep)
-        par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
-        par.previewCaxis = par.standardCaxis;
-        par.caxis = par.standardCaxis;
-        par.standardSignMode = 3;
-        par.standardAlphaModEnable = true;
-        par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
-    end
-catch
-end
     if isfield(studio,'loadedPath') && ~isempty(studio.loadedPath)
         par.loadedPath = studio.loadedPath;
         par.rawPath = studio.loadedPath;
@@ -584,42 +484,7 @@ function videoGUICallback(~,~)
     data = getActiveData();
 
     addLog(['Opening Video GUI (Dataset: ' studio.activeDataset ')']);
-% DECONF_STD_VIDEO_LAUNCHCFG_V61
-stdStep = [];
-try
-    if isappdata(fig,'deconf_std_workflow_step')
-        tmpStd = getappdata(fig,'deconf_std_workflow_step');
-        if isstruct(tmpStd) && isfield(tmpStd,'name') && strcmpi(strtrim(tmpStd.name),'Video GUI')
-            stdStep = tmpStd;
-        end
-    end
-catch
-end
-if ~isempty(stdStep)
-    launchCfg = struct();
-    launchCfg.cancelled = false;
-    launchCfg.baselineStart = deconfStdFieldVal(stdStep,'base1',30);
-    launchCfg.baselineEnd   = deconfStdFieldVal(stdStep,'base2',35);
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] Video GUI: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
-    % DECONF_STD_VIDEO_LAUNCHCFG_V71
-stdStep = [];
-try
-    if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-    if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-catch
-end
-if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'Video GUI')
-    launchCfg = struct(); launchCfg.cancelled = false;
-    launchCfg.baselineStart = deconfStdFieldVal(stdStep,'base1',30);
-    launchCfg.baselineEnd = deconfStdFieldVal(stdStep,'base2',35);
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] Video GUI no-popup: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
-    launchCfg = showScmVideoSetupDialog('Video GUI', 30, 240, 5, studio, data.I);
-end
-end
+launchCfg = showScmVideoSetupDialog('Video GUI', 30, 240, 5, studio, data.I);
 
 if isempty(launchCfg) || ~isstruct(launchCfg) || ...
         ~isfield(launchCfg,'cancelled') || launchCfg.cancelled
@@ -652,35 +517,6 @@ par.registration2DPath = fullfile(studio.exportPath,'Registration2D');
 par.maskStartPath      = par.visualizationPath;
 par.underlayStartPath  = par.registration2DPath;
 par.transformStartPath = par.registration2DPath;
-% DECONF_STD_VIDEO_SCM_PAR_V71
-try
-    if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'name')
-        par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
-        par.previewCaxis = par.standardCaxis; par.caxis = par.standardCaxis;
-        par.standardSignMode = 3;
-        par.standardAlphaModEnable = true;
-        par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
-    end
-catch
-end
-% DECONF_STD_VIDEO_SCM_PAR_V61
-try
-    if exist('stdStep','var') && ~isempty(stdStep)
-        par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
-        par.previewCaxis = par.standardCaxis;
-        par.caxis = par.standardCaxis;
-        par.standardSignMode = 3;
-        par.standardAlphaModEnable = true;
-        par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
-    end
-catch
-end
     if isfield(studio,'loadedPath') && ~isempty(studio.loadedPath)
         par.loadedPath = studio.loadedPath;
         par.rawPath = studio.loadedPath;
@@ -1612,19 +1448,6 @@ end
 %% =========================================================
 %  STATUS BAR HANDLER
 % =========================================================
-function v = deconfStdFieldVal(S,fieldName,defaultValue)
-v = defaultValue;
-try
-    if isstruct(S) && isfield(S,fieldName)
-        tmp = double(S.(fieldName));
-        if isfinite(tmp)
-            v = tmp;
-        end
-    end
-catch
-end
-end
-
 function setProgramStatus(isReady)
 
     studio = guidata(fig);

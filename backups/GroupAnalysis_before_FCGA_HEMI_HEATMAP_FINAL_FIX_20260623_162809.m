@@ -10217,160 +10217,99 @@ cm = [blueToWhite; whiteToRed];
 end
 
 function [map2,note] = findROIOverlayMap_ADV_20260617(S)
-% ROI_SELECTED_SLICE_UNSQUASH_FIX_20260623
-% Prefer trusted subject-level 3D spatial maps. When Slice 1/2/3/4 is selected,
-% extract the selected plane from that 3D map instead of using possibly malformed
-% per-slice sliceResults maps.
+% ROI_OVERLAY_SLICE_TARGET_FIX_20260623
+% Selected-slice-aware ROI overlay map. Uses sliceResults(z).labelMap/roiMap
+% first, then falls back to subject-level 3D/2D map.
 map2=[]; note='';
 try
     if ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
+    fns = {'labelMap','roiMap','roiAtlas','overlaySliceMap','parcelMap','labelMask','roiLabelMask','atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};
 
-    subj = fcGAOverlaySelectedSubject_UNSQUASH_20260623(S);
+    subj = S.FC.subjects(1);
+    try
+        if isfield(S,'hFCSubject') && ishghandle(S.hFCSubject)
+            vSub = get(S.hFCSubject,'Value');
+            itemsSub = get(S.hFCSubject,'String');
+            if ischar(itemsSub), itemsSub = cellstr(itemsSub); end
+            idxSub = 1;
+            if numel(itemsSub) == numel(S.FC.subjects)
+                idxSub = vSub;
+            elseif vSub > 1
+                idxSub = vSub - 1;
+            end
+            idxSub = max(1,min(idxSub,numel(S.FC.subjects)));
+            subj = S.FC.subjects(idxSub);
+        end
+    catch
+        subj = S.FC.subjects(1);
+    end
+
     sliceMode = 'All slices';
     try, sliceMode = popupString_SINGLE_20260616(S,'hFCSlice','All slices'); catch, end
-    wantZ = fcGAWantedSlice_UNSQUASH_20260623(sliceMode);
+    tok = regexp(sliceMode,'(\d+)','tokens','once');
+    wantZ = NaN;
+    if ~isempty(tok), wantZ = str2double(tok{1}); end
 
-    fns = {'roiMap','labelMap','roiAtlas','overlaySliceMap','parcelMap', ...
-           'labelMask','roiLabelMask','atlasLabels','atlasLabelMap', ...
-           'atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};
-
-    % 1) Best case: subject-level 3D map. This is the source that usually looks
-    % correct in "All slices", so use it also for Slice 1/2/3/4.
-    for ii = 1:numel(fns)
-        fn = fns{ii};
-        if isfield(subj,fn) && isnumeric(subj.(fn)) && ~isempty(subj.(fn))
-            A = squeeze(subj.(fn));
-            if fcGAIsGoodSpatial3D_UNSQUASH_20260623(A)
-                if isfinite(wantZ)
-                    z2 = max(1,min(round(wantZ),size(A,3)));
-                    map2 = squeeze(A(:,:,z2));
-                    note = sprintf('%s | subject 3D map slice %d/%d',fn,z2,size(A,3));
-                else
-                    map2 = A;
-                    note = sprintf('%s | subject 3D map',fn);
+    % Specific selected slice: prefer matching sliceResults entry.
+    if isfinite(wantZ) && isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
+        SR = subj.sliceResults;
+        idx = [];
+        for zz = 1:numel(SR)
+            zVal = [];
+            try, if isfield(SR(zz),'sliceIndex') && ~isempty(SR(zz).sliceIndex), zVal = double(SR(zz).sliceIndex); end, catch, end
+            try, if isempty(zVal) && isfield(SR(zz),'z') && ~isempty(SR(zz).z), zVal = double(SR(zz).z); end, catch, end
+            if isempty(zVal), zVal = zz; end
+            if round(zVal) == round(wantZ)
+                idx = zz;
+                break;
+            end
+        end
+        if isempty(idx) && wantZ >= 1 && wantZ <= numel(SR)
+            idx = round(wantZ);
+        end
+        if ~isempty(idx)
+            for ii = 1:numel(fns)
+                if isfield(SR(idx),fns{ii}) && isnumeric(SR(idx).(fns{ii})) && ~isempty(SR(idx).(fns{ii}))
+                    map2 = squeeze(SR(idx).(fns{ii}));
+                    note = sprintf('%s | selected slice %d',fns{ii},round(wantZ));
+                    return;
                 end
-                return;
             end
         end
     end
 
-    % 2) If no 3D map exists, accept a subject-level 2D map.
+    % Subject-level map fallback. If a specific slice is selected and the map is 3D,
+    % return only that 2D slice so plotROIOverlay cannot accidentally show stale z.
     for ii = 1:numel(fns)
-        fn = fns{ii};
-        if isfield(subj,fn) && isnumeric(subj.(fn)) && ~isempty(subj.(fn))
-            A = squeeze(subj.(fn));
-            if fcGAIsGoodSpatial2D_UNSQUASH_20260623(A)
+        if isfield(subj,fns{ii}) && isnumeric(subj.(fns{ii})) && ~isempty(subj.(fns{ii}))
+            A = squeeze(subj.(fns{ii}));
+            if isfinite(wantZ) && ndims(A) >= 3
+                z2 = max(1,min(round(wantZ),size(A,3)));
+                map2 = squeeze(A(:,:,z2));
+                note = sprintf('%s | subject-level slice %d/%d',fns{ii},z2,size(A,3));
+            else
                 map2 = A;
-                note = sprintf('%s | subject 2D map',fn);
-                return;
+                note = fns{ii};
             end
+            return;
         end
     end
 
-    % 3) Fallback only: sliceResults. Reject vector/strip-like maps.
+    % Fallback for old bundles: first available slice map.
     if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
         SR = subj.sliceResults;
-        idxList = 1:numel(SR);
-        if isfinite(wantZ)
-            idxList = [];
-            for zz = 1:numel(SR)
-                zVal = [];
-                try, if isfield(SR(zz),'sliceIndex') && ~isempty(SR(zz).sliceIndex), zVal = double(SR(zz).sliceIndex); end, catch, end
-                try, if isempty(zVal) && isfield(SR(zz),'z') && ~isempty(SR(zz).z), zVal = double(SR(zz).z); end, catch, end
-                if isempty(zVal), zVal = zz; end
-                if isfinite(zVal) && round(zVal) == round(wantZ)
-                    idxList(end+1) = zz; %#ok<AGROW>
-                end
-            end
-            if isempty(idxList) && wantZ >= 1 && wantZ <= numel(SR)
-                idxList = round(wantZ);
-            end
-        end
-
-        for jj = 1:numel(idxList)
-            idx = idxList(jj);
-            if idx < 1 || idx > numel(SR), continue; end
+        for zz = 1:numel(SR)
             for ii = 1:numel(fns)
-                fn = fns{ii};
-                if isfield(SR(idx),fn) && isnumeric(SR(idx).(fn)) && ~isempty(SR(idx).(fn))
-                    A = squeeze(SR(idx).(fn));
-                    if fcGAIsGoodSpatial2D_UNSQUASH_20260623(A)
-                        map2 = A;
-                        note = sprintf('%s | sliceResults slice %d',fn,idx);
-                        return;
-                    elseif fcGAIsGoodSpatial3D_UNSQUASH_20260623(A)
-                        z2 = 1;
-                        if isfinite(wantZ), z2 = max(1,min(round(wantZ),size(A,3))); end
-                        map2 = squeeze(A(:,:,z2));
-                        note = sprintf('%s | sliceResults 3D slice %d/%d',fn,z2,size(A,3));
-                        return;
-                    end
+                if isfield(SR(zz),fns{ii}) && isnumeric(SR(zz).(fns{ii})) && ~isempty(SR(zz).(fns{ii}))
+                    map2 = squeeze(SR(zz).(fns{ii}));
+                    note = sprintf('%s slice %d',fns{ii},zz);
+                    return;
                 end
             end
         end
     end
 catch ME
     try, fprintf('FC-GA ROI overlay map warning: %s\n',ME.message); catch, end
-end
-end
-
-function subj = fcGAOverlaySelectedSubject_UNSQUASH_20260623(S)
-subj = S.FC.subjects(1);
-try
-    if isfield(S,'hFCSubject') && ishghandle(S.hFCSubject)
-        vSub = get(S.hFCSubject,'Value');
-        itemsSub = get(S.hFCSubject,'String');
-        if ischar(itemsSub), itemsSub = cellstr(itemsSub); end
-        idxSub = 1;
-        if numel(itemsSub) == numel(S.FC.subjects)
-            idxSub = vSub;
-        elseif vSub > 1
-            idxSub = vSub - 1;
-        end
-        idxSub = max(1,min(idxSub,numel(S.FC.subjects)));
-        subj = S.FC.subjects(idxSub);
-    end
-catch
-    subj = S.FC.subjects(1);
-end
-end
-
-function wantZ = fcGAWantedSlice_UNSQUASH_20260623(sliceMode)
-wantZ = NaN;
-try
-    tok = regexp(char(sliceMode),'(\d+)','tokens','once');
-    if ~isempty(tok), wantZ = str2double(tok{1}); end
-catch
-    wantZ = NaN;
-end
-end
-
-function tf = fcGAIsGoodSpatial2D_UNSQUASH_20260623(A)
-tf = false;
-try
-    A = squeeze(A);
-    if ~isnumeric(A) || isempty(A) || ndims(A) ~= 2, return; end
-    sz = size(A);
-    if sz(1) <= 10 || sz(2) <= 10 || numel(A) <= 200, return; end
-    ratio = max(sz(1),sz(2)) / max(1,min(sz(1),sz(2)));
-    % Reject extreme strip/vector maps; these cause the squashed display.
-    tf = ratio <= 4.0;
-catch
-    tf = false;
-end
-end
-
-function tf = fcGAIsGoodSpatial3D_UNSQUASH_20260623(A)
-tf = false;
-try
-    A = squeeze(A);
-    if ~isnumeric(A) || isempty(A) || ndims(A) < 3, return; end
-    sz = size(A);
-    if sz(1) <= 10 || sz(2) <= 10 || sz(3) < 1 || numel(A) <= 200, return; end
-    ratio = max(sz(1),sz(2)) / max(1,min(sz(1),sz(2)));
-    tf = ratio <= 4.0;
-catch
-    tf = false;
 end
 end
 
@@ -10829,7 +10768,6 @@ end
 left = regexprep(left,'\[[^\]]*\]','');
 left = regexprep(left,'^\s*-?\d+\s*=?\s*','');
 left = regexprep(left,'(?i)^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','');
-left = regexprep(left,'(?i)^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','');
 left = regexprep(left,'(?i)^(L|R)[_\-\s]+','');
 left = regexprep(left,'(?i)\b(left|right)\b','');
 left = strtrim(regexprep(left,'[_\s]+',' '));
@@ -10842,7 +10780,6 @@ else
 end
 full = regexprep(full,'\[[^\]]*\]','');
 full = regexprep(full,'^\s*-?\d+\s*=?\s*','');
-full = regexprep(full,'(?i)^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','');
 full = regexprep(full,'(?i)^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','');
 full = regexprep(full,'(?i)^(L|R)[_\-\s]+','');
 full = regexprep(full,'(?i)\b(left|right)\b','');
@@ -10889,7 +10826,6 @@ end
 end
 
 function plotROIOverlay_ADV_20260617(ax,S,R,cmapName)
-% ROI_SELECTED_SLICE_UNSQUASH_FIX_20260623
 cla(ax);
 [map3,note] = findROIOverlayMap_ADV_20260617(S);
 if isempty(map3)
@@ -10916,26 +10852,16 @@ if ndims(map3) > 2
         z = round(size(map3,3)/2);
     end
     z = max(1,min(round(z),size(map3,3)));
-    labelSlice = double(squeeze(map3(:,:,z)));
-    note = sprintf('%s | display slice %d/%d',note,z,size(map3,3));
+    labelSlice = double(map3(:,:,z));
+    note = sprintf('%s | slice %d/%d',note,z,size(map3,3));
 else
-    labelSlice = double(squeeze(map3));
-end
-
-if isempty(labelSlice) || ndims(labelSlice) ~= 2 || size(labelSlice,1) <= 10 || size(labelSlice,2) <= 10
-    text(ax,0.5,0.55,'ROI overlay map has invalid dimensions', ...
-        'Color',S.C.txt,'HorizontalAlignment','center', ...
-        'FontWeight','bold','Interpreter','none');
-    set(ax,'Color',S.C.axisBg,'XTick',[],'YTick',[]);
-    title(ax,'ROI seed-correlation overlay','Color',S.C.txt,'Interpreter','none');
-    return;
+    labelSlice = double(map3);
 end
 
 seedIdx = popupIndex_SINGLE_20260616(S,'hFCRegion1',1);
 seedIdx = max(1,min(seedIdx,numel(R.labels)));
 M = R.meanR;
 valMap = NaN(size(labelSlice));
-
 for ii = 1:numel(R.labels)
     lab = double(R.labels(ii));
     v = NaN;
@@ -10944,6 +10870,8 @@ for ii = 1:numel(R.labels)
         mask = (labelSlice == lab);
         if ~any(mask(:))
             baseMask = (abs(labelSlice) == abs(lab));
+            % ROI_OVERLAY_SLICE_TARGET_FIX_20260623
+            % If map is unsigned but current FC labels are signed, split by midline.
             try
                 if lab < 0 && ~any(labelSlice(:) < 0) && any(double(R.labels(:)) < 0)
                     [~,xgOverlayLR] = ndgrid(1:size(labelSlice,1),1:size(labelSlice,2));
@@ -10962,14 +10890,14 @@ for ii = 1:numel(R.labels)
     end
 end
 
-hIm = imagesc(ax,[1 size(valMap,2)],[1 size(valMap,1)],valMap,[-1 1]);
+hIm = imagesc(ax,valMap,[-1 1]);
 set(hIm,'AlphaData',isfinite(valMap),'HitTest','on','PickableParts','all');
 set(ax,'Color',S.C.axisBg,'ButtonDownFcn',@(src,evt)fcGAOverlayClickAny_20260623(src,evt));
+axis(ax,'image'); axis(ax,'ij'); axis(ax,'off');
+xlim(ax,[1 size(valMap,2)]); ylim(ax,[1 size(valMap,1)]);
 try, colormap(ax,cmapFC_ADV_20260617('Blue-White-Red',256)); catch, colormap(ax,jet(256)); end
-fcGAOverlayLockAspect_UNSQUASH_20260623(ax,valMap);
 cb = colorbar(ax);
-try, set(cb,'Color',S.C.txt); ylabel(cb,'Pearson r: selected seed -> ROI','Color',S.C.txt,'Interpreter','none'); catch, end
-fcGAOverlayLockAspect_UNSQUASH_20260623(ax,valMap);
+try, set(cb,'Color',S.C.txt); ylabel(cb,'Pearson r: selected seed → ROI','Color',S.C.txt,'Interpreter','none'); catch, end
 
 setappdata(ax,'fcGAOverlayLabelSlice',labelSlice);
 setappdata(ax,'fcGAOverlayLabels',double(R.labels(:)));
@@ -10985,22 +10913,6 @@ try
     fig = ancestor(ax,'figure');
     set(fig,'WindowScrollWheelFcn',@(src,evt)fcGAOverlayScrollAny_20260623(src,evt));
 catch
-end
-end
-
-function fcGAOverlayLockAspect_UNSQUASH_20260623(ax,A)
-try
-    nr = size(A,1);
-    nc = size(A,2);
-    set(ax,'YDir','reverse','XTick',[],'YTick',[],'Box','off');
-    xlim(ax,[0.5 nc+0.5]);
-    ylim(ax,[0.5 nr+0.5]);
-    axis(ax,'image');
-    axis(ax,'ij');
-    axis(ax,'off');
-    daspect(ax,[1 1 1]);
-catch
-    try, axis(ax,'image'); axis(ax,'ij'); axis(ax,'off'); catch, end
 end
 end
 

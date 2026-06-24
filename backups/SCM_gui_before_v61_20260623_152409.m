@@ -79,153 +79,15 @@ if isstruct(baseline)
     if isfield(baseline,'sigEnd')   && isfiniteScalar(baseline.sigEnd),   sigEnd0    = baseline.sigEnd;   end
 end
 
-% DECONF_STD_SCM_APPDATA_V10
-try
-    stdStep = [];
-    if isappdata(0,'deconf_std_workflow_step')
-        stdStep = getappdata(0,'deconf_std_workflow_step');
-    end
-    if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-        if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), baseStart0 = double(stdStep.base1); end
-        if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), baseEnd0   = double(stdStep.base2); end
-        if ~isstruct(par), par = struct(); end
-        par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
-        if isfield(stdStep,'cmin') && isfinite(double(stdStep.cmin)), par.standardCaxis(1) = double(stdStep.cmin); end
-        if isfield(stdStep,'cmax') && isfinite(double(stdStep.cmax)), par.standardCaxis(2) = double(stdStep.cmax); end
-        par.previewCaxis = par.standardCaxis;
-        par.caxis = par.standardCaxis;
-        par.standardSignMode = 3;
-        par.standardAlphaModEnable = true;
-        par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
-        if isfield(stdStep,'amin') && isfinite(double(stdStep.amin)), par.standardModMinAbs = double(stdStep.amin); end
-        if isfield(stdStep,'amax') && isfinite(double(stdStep.amax)), par.standardModMaxAbs = double(stdStep.amax); end
-    end
-catch
-end
-
-% DECONF_STD_SCM_APPDATA_V11
-try
-    stdStep = [];
-    if isappdata(0,'deconf_std_workflow_step')
-        stdStep = getappdata(0,'deconf_std_workflow_step');
-    end
-    if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-        if exist('baseStart0','var') && isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), baseStart0 = double(stdStep.base1); end
-        if exist('baseEnd0','var') && isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), baseEnd0 = double(stdStep.base2); end
-        if ~exist('par','var') || ~isstruct(par), par = struct(); end
-        par.standardizedWorkflow = true;
-        par.standardCaxis = [-100 100];
-        if isfield(stdStep,'cmin') && isfinite(double(stdStep.cmin)), par.standardCaxis(1) = double(stdStep.cmin); end
-        if isfield(stdStep,'cmax') && isfinite(double(stdStep.cmax)), par.standardCaxis(2) = double(stdStep.cmax); end
-        par.previewCaxis = par.standardCaxis;
-        par.caxis = par.standardCaxis;
-        par.standardSignMode = 3;
-        par.standardAlphaModEnable = true;
-        par.standardAlphaPct = 100;
-        par.standardModMinAbs = -20;
-        par.standardModMaxAbs = 20;
-        if isfield(stdStep,'amin') && isfinite(double(stdStep.amin)), par.standardModMinAbs = double(stdStep.amin); end
-        if isfield(stdStep,'amax') && isfinite(double(stdStep.amax)), par.standardModMaxAbs = double(stdStep.amax); end
-    end
-catch
-end
-
 %% ---------------- STATE ----------------
 state = struct();
 state.z   = max(1, round(nZ/2));
-state.cax = [-100 100];
+state.cax = [0 100];
 state.alphaModOn = true;
-state.modMin = -20;
-state.modMax = 20;
-state.signMode = 3;           % 1 positive, 2 negative magnitude, 3 signed
-state.prevSignMode = 3;
-% DECONF_STD_SCM_STATE_FORCE_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        state.signMode = 3;
-        state.prevSignMode = 3;
-        if isfield(par,'standardModMinAbs') && isfinite(double(par.standardModMinAbs)), state.modMin = double(par.standardModMinAbs); else, state.modMin = -20; end
-        if isfield(par,'standardModMaxAbs') && isfinite(double(par.standardModMaxAbs)), state.modMax = double(par.standardModMaxAbs); else, state.modMax = 20; end
-    end
-catch
-end
-% DECONF_STD_SCM_FORCE_ALPHA_V8
-try
-    if isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        if isfield(par,'standardModMinAbs') && ~isempty(par.standardModMinAbs)
-            state.modMin = double(par.standardModMinAbs);
-        else
-            state.modMin = -20;
-        end
-        if isfield(par,'standardModMaxAbs') && ~isempty(par.standardModMaxAbs)
-            state.modMax = double(par.standardModMaxAbs);
-        else
-            state.modMax = 20;
-        end
-        state.signMode = 3;
-        state.prevSignMode = 3;
-% DECONF_STD_SCM_STATE_FORCE_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        state.signMode = 3;
-        state.prevSignMode = 3;
-        if isfield(par,'standardModMinAbs') && isfinite(double(par.standardModMinAbs)), state.modMin = double(par.standardModMinAbs); else, state.modMin = -20; end
-        if isfield(par,'standardModMaxAbs') && isfinite(double(par.standardModMaxAbs)), state.modMax = double(par.standardModMaxAbs); else, state.modMax = 20; end
-    end
-catch
-end
-    end
-catch
-end
-% DECONF_STD_SCM_DISPLAY_V71
-try
-    if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2, state.cax = double(par.standardCaxis(:)).'; end
-    if isfield(par,'standardAlphaModEnable') && ~isempty(par.standardAlphaModEnable), state.alphaModOn = logical(par.standardAlphaModEnable); end
-    if isfield(par,'standardModMinAbs') && ~isempty(par.standardModMinAbs), state.modMin = double(par.standardModMinAbs); end
-    if isfield(par,'standardModMaxAbs') && ~isempty(par.standardModMaxAbs), state.modMax = double(par.standardModMaxAbs); end
-    if isfield(par,'standardSignMode') && ~isempty(par.standardSignMode)
-        state.signMode = max(1,min(3,round(double(par.standardSignMode))));
-        state.prevSignMode = state.signMode;
-    end
-catch
-end
-% DECONF_STD_SCM_DISPLAY_V61
-try
-    if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-        state.cax = double(par.standardCaxis(:)).';
-    elseif isfield(par,'previewCaxis') && numel(par.previewCaxis) == 2
-        state.cax = double(par.previewCaxis(:)).';
-    end
-    if isfield(par,'standardAlphaModEnable') && ~isempty(par.standardAlphaModEnable), state.alphaModOn = logical(par.standardAlphaModEnable); end
-    if isfield(par,'standardModMinAbs') && ~isempty(par.standardModMinAbs), state.modMin = double(par.standardModMinAbs); end
-    if isfield(par,'standardModMaxAbs') && ~isempty(par.standardModMaxAbs), state.modMax = double(par.standardModMaxAbs); end
-    if isfield(par,'standardSignMode') && ~isempty(par.standardSignMode)
-        state.signMode = max(1,min(3,round(double(par.standardSignMode))));
-        state.prevSignMode = state.signMode;
-    end
-catch
-end
+state.modMin = 15;
+state.modMax = 30;
+state.signMode = 1;           % 1 positive, 2 negative magnitude, 3 signed
+state.prevSignMode = 1;
 state.lastSignedMap = zeros(nY, nX);
 state.hoverMaxPts   = 1200;
 state.hoverStride   = max(1, ceil(nT / state.hoverMaxPts));
@@ -509,17 +371,17 @@ lblThr = mkLblImp(pOverlay, 'Threshold (abs %)');
 ebThr = mkEdit(pOverlay, '0', @updateView);
 set(ebThr, 'ForegroundColor', [1.00 0.35 0.35]);
 lblCax = mkLblImp(pOverlay, 'Display range (min max)');
-ebCax = mkEdit(pOverlay, sprintf('%g %g', state.cax(1), state.cax(2)), @updateView);
+ebCax = mkEdit(pOverlay, '0 100', @updateView);
 set(ebCax, 'ForegroundColor', [1.00 0.35 0.35]);
 lblSignMode = mkLblImp(pOverlay, 'Signal sign display');
 popSignMode = mkPopup(pOverlay, {'Positive only','Negative only','Positive + Negative'}, state.signMode, @updateView);
 lblAlphaMod = mkLblImp(pOverlay, 'Alpha modulation');
 cbAlphaMod = mkChk(pOverlay, 'Alpha modulate by |SCM|', double(state.alphaModOn), @alphaModToggled);
 lblModMin = mkLblImp(pOverlay, 'Mod Min (abs %)');
-ebModMin = mkEdit(pOverlay, sprintf('%g', state.modMin), @updateView);
+ebModMin = mkEdit(pOverlay, '15', @updateView);
 set(ebModMin, 'ForegroundColor', [1.00 0.35 0.35]);
 lblModMax = mkLblImp(pOverlay, 'Mod Max (abs %)');
-ebModMax = mkEdit(pOverlay, sprintf('%g', state.modMax), @updateView);
+ebModMax = mkEdit(pOverlay, '30', @updateView);
 set(ebModMax, 'ForegroundColor', [1.00 0.35 0.35]);
 lblMap = mkLbl(pOverlay, 'Colormap');
 popMap = mkPopup(pOverlay, cmapNames, 1, @updateView);
@@ -611,30 +473,6 @@ set(fig, 'WindowButtonDownFcn', @mouseClick);
 set(fig, 'WindowScrollWheelFcn', @mouseScroll);
 set(fig, 'ResizeFcn', @(~,~)layoutUI());
 
-% DECONF_STD_SCM_CONTROL_SYNC_V10
-try
-    set(ebCax,'String',sprintf('%g %g',state.cax(1),state.cax(2)));
-    set(cbAlphaMod,'Value',double(state.alphaModOn));
-    set(ebModMin,'String',sprintf('%g',state.modMin));
-    set(ebModMax,'String',sprintf('%g',state.modMax));
-    set(popSignMode,'Value',state.signMode);
-    set(slAlpha,'Value',100);
-    set(txtAlpha,'String','100');
-catch
-end
-% DECONF_STD_SCM_CONTROL_SYNC_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        set(ebCax,'String',sprintf('%g %g',state.cax(1),state.cax(2)));
-        set(cbAlphaMod,'Value',double(state.alphaModOn));
-        set(ebModMin,'String',sprintf('%g',state.modMin));
-        set(ebModMax,'String',sprintf('%g',state.modMax));
-        set(popSignMode,'Value',state.signMode);
-        set(slAlpha,'Value',100);
-        set(txtAlpha,'String','100');
-    end
-catch
-end
 alphaModToggled();
 updateUnderlayControlsEnable();
 updateInfoLines();
@@ -1299,35 +1137,7 @@ function loadNewUnderlayCB(~,~)
             bg = U; applyUnderlayMeta(meta, bg);
             set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
             set(info1, 'String', ['Loaded atlas-space underlay: ' shortenPath(fullf,85)], 'TooltipString', fullf);
-            % DECONF_STD_SCM_LATE_FORCE_V9
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        state.cax = [-100 100];
-        state.signMode = 3;
-        state.prevSignMode = 3;
-% DECONF_STD_SCM_STATE_FORCE_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        state.signMode = 3;
-        state.prevSignMode = 3;
-        if isfield(par,'standardModMinAbs') && isfinite(double(par.standardModMinAbs)), state.modMin = double(par.standardModMinAbs); else, state.modMin = -20; end
-        if isfield(par,'standardModMaxAbs') && isfinite(double(par.standardModMaxAbs)), state.modMax = double(par.standardModMaxAbs); else, state.modMax = 20; end
-    end
-catch
-end
-        state.alphaModOn = true;
-        state.modMin = -20;
-        state.modMax = 20;
-    end
-catch
-end
-drawnow;
+            drawnow;
             return;
         end
 
@@ -1377,35 +1187,7 @@ T0 = askAndApply2DWarpDirection(T0, 'Atlas/histology underlay warp');
                         'TooltipString', fullf);
 
                     didAtlasApply = true;
-                    % DECONF_STD_SCM_LATE_FORCE_V9
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        state.cax = [-100 100];
-        state.signMode = 3;
-        state.prevSignMode = 3;
-% DECONF_STD_SCM_STATE_FORCE_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        state.signMode = 3;
-        state.prevSignMode = 3;
-        if isfield(par,'standardModMinAbs') && isfinite(double(par.standardModMinAbs)), state.modMin = double(par.standardModMinAbs); else, state.modMin = -20; end
-        if isfield(par,'standardModMaxAbs') && isfinite(double(par.standardModMaxAbs)), state.modMax = double(par.standardModMaxAbs); else, state.modMax = 20; end
-    end
-catch
-end
-        state.alphaModOn = true;
-        state.modMin = -20;
-        state.modMax = 20;
-    end
-catch
-end
-drawnow;
+                    drawnow;
                     return;
                 end
 
@@ -1427,35 +1209,7 @@ drawnow;
         origBG = bg;
         set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
         set(info1, 'String', ['Loaded native underlay: ' shortenPath(fullf,85)], 'TooltipString', fullf);
-        % DECONF_STD_SCM_LATE_FORCE_V9
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        state.cax = [-100 100];
-        state.signMode = 3;
-        state.prevSignMode = 3;
-% DECONF_STD_SCM_STATE_FORCE_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        state.signMode = 3;
-        state.prevSignMode = 3;
-        if isfield(par,'standardModMinAbs') && isfinite(double(par.standardModMinAbs)), state.modMin = double(par.standardModMinAbs); else, state.modMin = -20; end
-        if isfield(par,'standardModMaxAbs') && isfinite(double(par.standardModMaxAbs)), state.modMax = double(par.standardModMaxAbs); else, state.modMax = 20; end
-    end
-catch
-end
-        state.alphaModOn = true;
-        state.modMin = -20;
-        state.modMax = 20;
-    end
-catch
-end
-drawnow;
+        drawnow;
         return;
     end
 end
@@ -1489,35 +1243,7 @@ T = askAndApply2DWarpDirection(T, 'Atlas/histology underlay warp');
         set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
         setTitleAtlas(T);
         set(info1, 'String', ['Loaded atlas underlay and warped functional: ' shortenPath(fullf,70)], 'TooltipString', fullf);
-        % DECONF_STD_SCM_LATE_FORCE_V9
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        state.cax = [-100 100];
-        state.signMode = 3;
-        state.prevSignMode = 3;
-% DECONF_STD_SCM_STATE_FORCE_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        state.signMode = 3;
-        state.prevSignMode = 3;
-        if isfield(par,'standardModMinAbs') && isfinite(double(par.standardModMinAbs)), state.modMin = double(par.standardModMinAbs); else, state.modMin = -20; end
-        if isfield(par,'standardModMaxAbs') && isfinite(double(par.standardModMaxAbs)), state.modMax = double(par.standardModMaxAbs); else, state.modMax = 20; end
-    end
-catch
-end
-        state.alphaModOn = true;
-        state.modMin = -20;
-        state.modMax = 20;
-    end
-catch
-end
-drawnow;
+        drawnow;
     catch ME
         errordlg(ME.message, 'Load underlay failed');
     end
@@ -1801,35 +1527,7 @@ function resetRoisAndRefreshAfterDataChange()
     set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
     set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
     set(hOV, 'CData', zeros(nY,nX), 'AlphaData', zeros(nY,nX));
-    updateInfoLines(); computeSCM(); redrawROIsForCurrentSlice(); % DECONF_STD_SCM_LATE_FORCE_V9
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        state.cax = [-100 100];
-        state.signMode = 3;
-        state.prevSignMode = 3;
-% DECONF_STD_SCM_STATE_FORCE_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        state.signMode = 3;
-        state.prevSignMode = 3;
-        if isfield(par,'standardModMinAbs') && isfinite(double(par.standardModMinAbs)), state.modMin = double(par.standardModMinAbs); else, state.modMin = -20; end
-        if isfield(par,'standardModMaxAbs') && isfinite(double(par.standardModMaxAbs)), state.modMax = double(par.standardModMaxAbs); else, state.modMax = 20; end
-    end
-catch
-end
-        state.alphaModOn = true;
-        state.modMin = -20;
-        state.modMax = 20;
-    end
-catch
-end
-drawnow;
+    updateInfoLines(); computeSCM(); redrawROIsForCurrentSlice(); drawnow;
 end
 
 function autoFixStartupAtlasUnderlayIfNeeded()
@@ -2142,35 +1840,7 @@ function exportScmSeries1minCB(~,~)
         try
             set(info1, 'String', {'Saving to:', shortenPath(outDir,120), 'Tip: hover here to see full path'});
             set(info1, 'TooltipString', outDir);
-            % DECONF_STD_SCM_LATE_FORCE_V9
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        state.cax = [-100 100];
-        state.signMode = 3;
-        state.prevSignMode = 3;
-% DECONF_STD_SCM_STATE_FORCE_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-            state.cax = double(par.standardCaxis(:)).';
-        else
-            state.cax = [-100 100];
-        end
-        state.alphaModOn = true;
-        state.signMode = 3;
-        state.prevSignMode = 3;
-        if isfield(par,'standardModMinAbs') && isfinite(double(par.standardModMinAbs)), state.modMin = double(par.standardModMinAbs); else, state.modMin = -20; end
-        if isfield(par,'standardModMaxAbs') && isfinite(double(par.standardModMaxAbs)), state.modMax = double(par.standardModMaxAbs); else, state.modMax = 20; end
-    end
-catch
-end
-        state.alphaModOn = true;
-        state.modMin = -20;
-        state.modMax = 20;
-    end
-catch
-end
-drawnow;
+            drawnow;
         catch
         end
 
@@ -3888,31 +3558,7 @@ function applyDisplaySettingsFromGroupBundleLocal(D)
     catch
     end
 
-    % DECONF_STD_SCM_CONTROL_SYNC_V10
-try
-    set(ebCax,'String',sprintf('%g %g',state.cax(1),state.cax(2)));
-    set(cbAlphaMod,'Value',double(state.alphaModOn));
-    set(ebModMin,'String',sprintf('%g',state.modMin));
-    set(ebModMax,'String',sprintf('%g',state.modMax));
-    set(popSignMode,'Value',state.signMode);
-    set(slAlpha,'Value',100);
-    set(txtAlpha,'String','100');
-catch
-end
-% DECONF_STD_SCM_CONTROL_SYNC_V11
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        set(ebCax,'String',sprintf('%g %g',state.cax(1),state.cax(2)));
-        set(cbAlphaMod,'Value',double(state.alphaModOn));
-        set(ebModMin,'String',sprintf('%g',state.modMin));
-        set(ebModMax,'String',sprintf('%g',state.modMax));
-        set(popSignMode,'Value',state.signMode);
-        set(slAlpha,'Value',100);
-        set(txtAlpha,'String','100');
-    end
-catch
-end
-alphaModToggled();
+    alphaModToggled();
 
     try
         if isfield(D,'cmapMatrix') && ~isempty(D.cmapMatrix) && size(D.cmapMatrix,2) == 3

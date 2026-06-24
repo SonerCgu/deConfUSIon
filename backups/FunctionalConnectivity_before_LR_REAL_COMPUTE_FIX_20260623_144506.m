@@ -8334,19 +8334,6 @@ try
         sliceResults(n).statSpace = 'Fisher z';
         sliceResults(n).displayMatrix = R;
         sliceResults(n).displaySpace = 'Pearson r';
-        % ROI_OVERLAY_SLICE_EXPORT_COPY_20260623
-        % Preserve the true 2D ROI/label map for this slice so GroupAnalysis
-        % ROI Overlay Map can update correctly when switching slices.
-        try
-            mapFields = {'labelMap','roiMap','roiAtlas','overlaySliceMap'};
-            for mf = 1:numel(mapFields)
-                f = mapFields{mf};
-                if isfield(rz,f) && isnumeric(rz.(f)) && ~isempty(rz.(f))
-                    sliceResults(n).(f) = int32(round(double(rz.(f))));
-                end
-            end
-        catch
-        end
         if isfield(rz,'timeIdx'), sliceResults(n).timeIdx = rz.timeIdx; else, sliceResults(n).timeIdx = []; end
     end
 catch

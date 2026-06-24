@@ -57,21 +57,6 @@ try
     atlasV = atlasS(:);
     maskV  = maskS(:);
 
-    % ROI_OVERLAY_SLICE_TARGET_FIX_20260623
-    % Coordinates used only when an unsigned slice atlas must be split
-    % into signed L/R display/export labels.
-    [~,xGridLR] = ndgrid(1:Y,1:X);
-    xVLR = xGridLR(:);
-    midXLR = (X + 1) / 2;
-
-    % FC_SLICE_UNSIGNED_ATLAS_MIDLINE_LR_FIX_20260623
-    % If atlas labels are unsigned but the ROI table has signed L/R labels,
-    % split each bilateral slice mask by image midline. This prevents L and R
-    % from being computed from the exact same pixels.
-    [~,xGridLR] = ndgrid(1:Y,1:X);
-    xVLR = xGridLR(:);
-    midXLR = (X + 1) / 2;
-
     minVox = 1;
     try
         if isfield(s,'opts') && isfield(s.opts,'roiMinVox')
@@ -135,25 +120,7 @@ try
                 pix = find(maskV & abs(atlasV) == abs(labOut));
             end
         else
-            basePixMaskLR = maskV & abs(atlasV) == abs(labOut);
-            if signedBase && ~signedAtlas
-                % Unsigned atlas + signed ROI table:
-                % assign negative labels to left half and positive labels to right half.
-                % If anatomical L/R appears swapped in your data, only labels are swapped;
-                % the important point is that L and R no longer use identical pixels.
-                if labOut < 0
-                    pix = find(basePixMaskLR & xVLR <= midXLR);
-                elseif labOut > 0
-                    pix = find(basePixMaskLR & xVLR > midXLR);
-                else
-                    pix = find(basePixMaskLR);
-                end
-                if isempty(pix)
-                    pix = find(basePixMaskLR);
-                end
-            else
-                pix = find(basePixMaskLR);
-            end
+            pix = find(maskV & abs(atlasV) == abs(labOut));
         end
         if numel(pix) < minVox, continue; end
 
@@ -182,43 +149,8 @@ try
     res.sliceOnly = true;
     res.sliceIndex = z;
     res.sliceLabel = sprintf('Z %d/%d',z,Z);
-
-    % ROI_OVERLAY_SLICE_TARGET_FIX_20260623
-    % Export a real 2D spatial label map for this slice.
-    % If atlas is unsigned but ROI labels are signed, create a signed
-    % midline-split map so GroupAnalysis can display L/R overlays.
-    labelMapSlice = int32(round(double(atlasS)));
-    try
-        if signedBase && ~signedAtlas
-            labelMapSigned = zeros(Y,X,'int32');
-            absLabsForMap = unique(abs(round(double(outLabels(:)))));
-            absLabsForMap = absLabsForMap(isfinite(absLabsForMap) & absLabsForMap > 0);
-            for mm = 1:numel(absLabsForMap)
-                aLab = absLabsForMap(mm);
-                baseMask2 = maskS & abs(round(double(atlasS))) == aLab;
-                lLabs = outLabels(abs(round(double(outLabels))) == aLab & outLabels < 0);
-                rLabs = outLabels(abs(round(double(outLabels))) == aLab & outLabels > 0);
-                if ~isempty(lLabs)
-                    labelMapSigned(baseMask2 & xGridLR <= midXLR) = int32(round(lLabs(1)));
-                end
-                if ~isempty(rLabs)
-                    labelMapSigned(baseMask2 & xGridLR > midXLR) = int32(round(rLabs(1)));
-                end
-                if isempty(lLabs) && isempty(rLabs)
-                    labelMapSigned(baseMask2) = int32(round(aLab));
-                end
-            end
-            labelMapSlice = labelMapSigned;
-        end
-    catch
-        labelMapSlice = int32(round(double(atlasS)));
-    end
-    res.labelMap = labelMapSlice;
-    res.roiMap = labelMapSlice;
-    res.roiAtlas = labelMapSlice;
-    res.overlaySliceMap = labelMapSlice;
     if signedBase && ~signedAtlas
-        res.sourceNote = sprintf('Slice-specific FC for Z %d/%d; unsigned atlas split by image midline for L/R ROI traces.',z,Z);
+        res.sourceNote = sprintf('Slice-specific FC for Z %d/%d; L/R labels preserved from full ROI table.',z,Z);
     else
         res.sourceNote = sprintf('True slice-specific FC: ROI time courses recomputed from selected Z slice only (Z %d/%d).',z,Z);
     end

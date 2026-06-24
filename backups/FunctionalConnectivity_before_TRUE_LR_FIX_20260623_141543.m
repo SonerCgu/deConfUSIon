@@ -7433,17 +7433,7 @@ end
 % Otherwise FC map and timecourse labels would not match.
 % ------------------------------------------------------------
 hasLR = isfield(Seg,'Left') && isstruct(Seg.Left) && isfield(Seg,'Right') && isstruct(Seg.Right);
-% TRUE_LR_SEGLEFT_RIGHT_FIX_20260623
-% Use true left/right region traces whenever Seg.Left and Seg.Right exist.
-% Do NOT require signed labelMap here. Some segmentation exports store unsigned spatial maps
-% but still correctly store separate Left/Right time traces.
-useLR = hasLR;
-if useLR && ~hasSignedMap
-    try
-        fprintf('FC TRUE-LR note: Seg.Left/Seg.Right traces found, but labelMap is unsigned. Using true L/R traces for heatmaps and exports; spatial overlay may remain unsigned/bilateral.\n');
-    catch
-    end
-end
+useLR = hasSignedMap && hasLR;
 
 Mregion = [];
 labels = [];
@@ -7700,9 +7690,7 @@ info.spaceName = spaceName;
 info.nRegions = numel(labels);
 info.nTime = size(meanTS,1);
 info.hasSignedMap = hasSignedMap;
-info.hasLRTraces = hasLR;
-info.usedLRTraces = useLR;
-info.note = 'True LR FC uses Seg.Left/Right traces whenever available. If labelMap is unsigned, heatmap/export can still be true L/R, but spatial overlay may remain bilateral/unsigned.';
+info.note = 'True LR FC uses Seg.Left/Right only when Seg.labelMap has signed labels.';
 end
 
 function A = fc_repair_signed_label_map(A)
@@ -8334,19 +8322,6 @@ try
         sliceResults(n).statSpace = 'Fisher z';
         sliceResults(n).displayMatrix = R;
         sliceResults(n).displaySpace = 'Pearson r';
-        % ROI_OVERLAY_SLICE_EXPORT_COPY_20260623
-        % Preserve the true 2D ROI/label map for this slice so GroupAnalysis
-        % ROI Overlay Map can update correctly when switching slices.
-        try
-            mapFields = {'labelMap','roiMap','roiAtlas','overlaySliceMap'};
-            for mf = 1:numel(mapFields)
-                f = mapFields{mf};
-                if isfield(rz,f) && isnumeric(rz.(f)) && ~isempty(rz.(f))
-                    sliceResults(n).(f) = int32(round(double(rz.(f))));
-                end
-            end
-        catch
-        end
         if isfield(rz,'timeIdx'), sliceResults(n).timeIdx = rz.timeIdx; else, sliceResults(n).timeIdx = []; end
     end
 catch

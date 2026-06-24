@@ -38,17 +38,7 @@ if ~isfield(par,'previewCaxis') || isempty(par.previewCaxis)
 end
 
 % Requested overlay start range
-% DECONF_STD_VIDEO_DISPLAY_V61
-if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-    par.previewCaxis = double(par.standardCaxis(:)).';
-else
-    % DECONF_STD_VIDEO_DISPLAY_V71
-if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-    par.previewCaxis = double(par.standardCaxis(:)).';
-else
-    par.previewCaxis = [0 100];
-end
-end
+par.previewCaxis = [0 100];
 
 % ---------------- DIMENSIONS (PSC) ----------------
 bgDefaultFull = bg;
@@ -149,39 +139,8 @@ tmpThrMax = 100;
 
 alphaModEnable = true;
 alphaPct  = 100;
-modMinAbs = -20;
-modMaxAbs = 20;      % <- change from 100 to 30
-
-% DECONF_STD_VIDEO_ALPHA_SIGN_V71
-try
-    if isfield(par,'standardSignMode') && ~isempty(par.standardSignMode)
-        overlaySignMode = max(1,min(3,round(double(par.standardSignMode))));
-        overlayPrevSignMode = overlaySignMode;
-        if overlaySignMode == 3, overlayCmapName = 'signed_blackbdy_winter'; mapA = getCmap(overlayCmapName, Nc); end
-    end
-    if isfield(par,'standardAlphaModEnable') && ~isempty(par.standardAlphaModEnable), alphaModEnable = logical(par.standardAlphaModEnable); end
-    if isfield(par,'standardAlphaPct') && ~isempty(par.standardAlphaPct), alphaPct = double(par.standardAlphaPct); end
-    if isfield(par,'standardModMinAbs') && ~isempty(par.standardModMinAbs), modMinAbs = double(par.standardModMinAbs); end
-    if isfield(par,'standardModMaxAbs') && ~isempty(par.standardModMaxAbs), modMaxAbs = double(par.standardModMaxAbs); end
-catch
-end
-
-% DECONF_STD_VIDEO_ALPHA_SIGN_V61
-try
-    if isfield(par,'standardSignMode') && ~isempty(par.standardSignMode)
-        overlaySignMode = max(1,min(3,round(double(par.standardSignMode))));
-        overlayPrevSignMode = overlaySignMode;
-        if overlaySignMode == 3
-            overlayCmapName = 'signed_blackbdy_winter';
-            mapA = getCmap(overlayCmapName, Nc);
-        end
-    end
-    if isfield(par,'standardAlphaModEnable') && ~isempty(par.standardAlphaModEnable), alphaModEnable = logical(par.standardAlphaModEnable); end
-    if isfield(par,'standardAlphaPct') && ~isempty(par.standardAlphaPct), alphaPct = double(par.standardAlphaPct); end
-    if isfield(par,'standardModMinAbs') && ~isempty(par.standardModMinAbs), modMinAbs = double(par.standardModMinAbs); end
-    if isfield(par,'standardModMaxAbs') && ~isempty(par.standardModMaxAbs), modMaxAbs = double(par.standardModMaxAbs); end
-catch
-end
+modMinAbs = 15;
+modMaxAbs = 30;      % <- change from 100 to 30
 
 maskThreshold = 0;
 

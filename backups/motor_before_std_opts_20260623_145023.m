@@ -82,40 +82,7 @@ catch ME_motor_default
     warning('HUMoR:MotorSplitDefault','Could not auto-default split motor mode: %s', ME_motor_default.message);
 end
 
-% DECONF_STD_MOTOR_OPTS_20260623
-% Optional programmatic overrides used by Standardized Analysis.
-try
-    if isfield(opts,'sourceMode') && ~isempty(opts.sourceMode) && isfinite(double(opts.sourceMode))
-        defaults.sourceMode = max(1,min(2,round(double(opts.sourceMode))));
-    end
-    if isfield(opts,'nSlices') && ~isempty(opts.nSlices) && isfinite(double(opts.nSlices))
-        defaults.nSlices = max(0,round(double(opts.nSlices)));
-    end
-    if isfield(opts,'correctionMode') && ~isempty(opts.correctionMode) && isfinite(double(opts.correctionMode))
-        defaults.correctionMode = max(1,min(3,round(double(opts.correctionMode))));
-    end
-    if isfield(opts,'doDespike') && ~isempty(opts.doDespike)
-        defaults.doDespike = logical(opts.doDespike);
-    end
-    if isfield(opts,'spikeThr') && ~isempty(opts.spikeThr) && isfinite(double(opts.spikeThr))
-        defaults.spikeThr = double(opts.spikeThr);
-    end
-    if isfield(opts,'trimFrames') && ~isempty(opts.trimFrames) && isfinite(double(opts.trimFrames))
-        defaults.trimFrames = max(0,round(double(opts.trimFrames)));
-    end
-    if isfield(opts,'splitBaselineBlocksPerSlice') && ~isempty(opts.splitBaselineBlocksPerSlice) && isfinite(double(opts.splitBaselineBlocksPerSlice))
-        defaults.splitBaselineBlocksPerSlice = max(0,round(double(opts.splitBaselineBlocksPerSlice)));
-    end
-catch ME_std_motor_opts
-    warning('HUMoR:MotorStandardizedOpts','Could not apply standardized motor opts: %s', ME_std_motor_opts.message);
-end
-
-if isfield(opts,'noDialog') && ~isempty(opts.noDialog) && logical(opts.noDialog)
-    P = defaults;
-else
-    P = localMotorDialog(defaults, TR, hasInputMovie);
-end
-
+P = localMotorDialog(defaults, TR, hasInputMovie);
 if isempty(P)
     error('Motor cancelled.');
 end
