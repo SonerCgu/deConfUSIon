@@ -86,8 +86,8 @@ try
         stdStep = getappdata(0,'deconf_std_workflow_step');
     end
     if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-        % DECONF_STD_SCM_POPUP_BASELINE: keep baselineStart from SCM popup
-        % DECONF_STD_SCM_POPUP_BASELINE: keep baselineEnd from SCM popup
+        if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), baseStart0 = double(stdStep.base1); end
+        if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), baseEnd0   = double(stdStep.base2); end
         if ~isstruct(par), par = struct(); end
         par.standardizedWorkflow = true;
         par.standardCaxis = [-100 100];
@@ -113,8 +113,8 @@ try
         stdStep = getappdata(0,'deconf_std_workflow_step');
     end
     if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-        % DECONF_STD_SCM_POPUP_BASELINE: keep baselineStart from SCM popup
-        % DECONF_STD_SCM_POPUP_BASELINE: keep baselineEnd from SCM popup
+        if exist('baseStart0','var') && isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), baseStart0 = double(stdStep.base1); end
+        if exist('baseEnd0','var') && isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), baseEnd0 = double(stdStep.base2); end
         if ~exist('par','var') || ~isstruct(par), par = struct(); end
         par.standardizedWorkflow = true;
         par.standardCaxis = [-100 100];
@@ -361,18 +361,7 @@ cmapNames = { ...
     'signed_blackbdy_winter', ...
     'hot', 'parula', 'turbo', 'jet', 'gray', 'bone', 'copper', 'pink', ...
     'viridis', 'plasma', 'magma', 'inferno'};
-% DECONF_STD_SCM_SIGNED_CMAP_INIT
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        setOverlayColormap('signed_blackbdy_winter');
-    elseif exist('state','var') && isstruct(state) && isfield(state,'signMode') && double(state.signMode) == 3
-        setOverlayColormap('signed_blackbdy_winter');
-    else
-        setOverlayColormap('blackbdy_iso');
-    end
-catch
-    setOverlayColormap('blackbdy_iso');
-end
+setOverlayColormap('blackbdy_iso');
 caxis(ax, state.cax);
 
 cb = colorbar(ax);
@@ -534,17 +523,6 @@ ebModMax = mkEdit(pOverlay, sprintf('%g', state.modMax), @updateView);
 set(ebModMax, 'ForegroundColor', [1.00 0.35 0.35]);
 lblMap = mkLbl(pOverlay, 'Colormap');
 popMap = mkPopup(pOverlay, cmapNames, 1, @updateView);
-% DECONF_STD_SCM_SIGNED_CMAP_POPUP
-try
-    if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        set(popMap,'Value',findPopupIndexByName(popMap,'signed_blackbdy_winter'));
-        setOverlayColormap('signed_blackbdy_winter');
-    elseif exist('state','var') && isstruct(state) && isfield(state,'signMode') && double(state.signMode) == 3
-        set(popMap,'Value',findPopupIndexByName(popMap,'signed_blackbdy_winter'));
-        setOverlayColormap('signed_blackbdy_winter');
-    end
-catch
-end
 lblSigma = mkLblImp(pOverlay, 'SCM smoothing sigma');
 ebSigma = mkEdit(pOverlay, '1', @computeSCM);
 set(ebSigma, 'ForegroundColor', [1.00 0.35 0.35]);
@@ -1090,17 +1068,6 @@ function updateView(~,~)
     end
     newSignMode = get(popSignMode, 'Value');
     state.signMode = newSignMode;
-    % DECONF_STD_SCM_SIGNED_CMAP_UPDATE
-    try
-        if newSignMode == 3
-            set(popMap, 'Value', findPopupIndexByName(popMap, 'signed_blackbdy_winter'));
-        elseif newSignMode == 2
-            set(popMap, 'Value', findPopupIndexByName(popMap, 'winter_brain_fsl'));
-        elseif newSignMode == 1
-            set(popMap, 'Value', findPopupIndexByName(popMap, 'blackbdy_iso'));
-        end
-    catch
-    end
     if newSignMode ~= state.prevSignMode
         if newSignMode == 3
             set(popMap, 'Value', findPopupIndexByName(popMap, 'signed_blackbdy_winter'));
