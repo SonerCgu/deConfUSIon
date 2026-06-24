@@ -342,29 +342,7 @@ if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name)
     launchCfg.underlayChoice = 5;
     addLog(sprintf('[Standardized] SCM GUI direct settings: baseline %.3g-%.3g s, caxis -100..100, alpha mod -20..20',launchCfg.baselineStart,launchCfg.baselineEnd));
 else
-    % DECONF_STD_SCM_MANUAL_POPUP_STD_NOPUP_V14
-stdStep = [];
-try
-    if isappdata(0,'deconf_std_workflow_step')
-        stdStep = getappdata(0,'deconf_std_workflow_step');
-    end
-    if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step')
-        stdStep = getappdata(fig,'deconf_std_workflow_step');
-    end
-catch
-end
-if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-    launchCfg = struct();
-    launchCfg.cancelled = false;
-    launchCfg.baselineStart = 30;
-    launchCfg.baselineEnd = 35;
-    if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), launchCfg.baselineStart = double(stdStep.base1); end
-    if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), launchCfg.baselineEnd = double(stdStep.base2); end
-    launchCfg.underlayChoice = 5;
-    addLog(sprintf('[Standardized] SCM GUI no-popup: baseline %.3g-%.3g s',launchCfg.baselineStart,launchCfg.baselineEnd));
-else
     launchCfg = showScmVideoSetupDialog('SCM GUI', 30, 240, 5, studio, data.I);
-end
 end
 end
 end

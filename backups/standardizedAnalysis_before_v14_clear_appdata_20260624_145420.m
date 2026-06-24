@@ -784,12 +784,10 @@ try
                         return;
                     end
                     ok = true;
-                    clearStdStepAppdata();
                     return;
                 catch ME_step
                     ok = false;
                     errMsg = ME_step.message;
-                    clearStdStepAppdata();
                     return;
                 end
             end
@@ -813,27 +811,6 @@ try
     figs = findall(0,'Type','figure');
     for ii = 1:numel(figs)
         setappdata(figs(ii),'deconf_std_workflow_step',stepStruct);
-    end
-catch
-end
-end
-
-function clearStdStepAppdata()
-try
-    if isappdata(0,'deconf_std_workflow_step')
-        rmappdata(0,'deconf_std_workflow_step');
-    end
-catch
-end
-try
-    figs = findall(0,'Type','figure');
-    for jj = 1:numel(figs)
-        try
-            if isappdata(figs(jj),'deconf_std_workflow_step')
-                rmappdata(figs(jj),'deconf_std_workflow_step');
-            end
-        catch
-        end
     end
 catch
 end

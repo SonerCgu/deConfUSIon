@@ -86,8 +86,8 @@ try
         stdStep = getappdata(0,'deconf_std_workflow_step');
     end
     if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-        % DECONF_STD_SCM_POPUP_BASELINE: keep baselineStart from SCM popup
-        % DECONF_STD_SCM_POPUP_BASELINE: keep baselineEnd from SCM popup
+        if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), baseStart0 = double(stdStep.base1); end
+        if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), baseEnd0   = double(stdStep.base2); end
         if ~isstruct(par), par = struct(); end
         par.standardizedWorkflow = true;
         par.standardCaxis = [-100 100];
@@ -113,8 +113,8 @@ try
         stdStep = getappdata(0,'deconf_std_workflow_step');
     end
     if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
-        % DECONF_STD_SCM_POPUP_BASELINE: keep baselineStart from SCM popup
-        % DECONF_STD_SCM_POPUP_BASELINE: keep baselineEnd from SCM popup
+        if exist('baseStart0','var') && isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), baseStart0 = double(stdStep.base1); end
+        if exist('baseEnd0','var') && isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), baseEnd0 = double(stdStep.base2); end
         if ~exist('par','var') || ~isstruct(par), par = struct(); end
         par.standardizedWorkflow = true;
         par.standardCaxis = [-100 100];
