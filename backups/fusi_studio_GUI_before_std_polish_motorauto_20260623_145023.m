@@ -280,7 +280,7 @@ buttons = { ...
     {'Full QC','Specific QC'}, ...
     {'Frame Rejection','Imregdemons','Scrubbing','Motor'}, ...
     {'Temporal Smoothing/Subsampling','Filtering','PCA / ICA','Despike'}, ...
-    {'Time-Course Viewer','SCM GUI','Video GUI','Mask Editor'}, ...
+    {'Time-Course Viewer','SCM','Video & SCM Mask','Mask Editor'}, ...
     {'Registration to Atlas','Segmentation'}, ...
     {'Functional connectivity','Group analysis'}, ...
     {'General Linear Models','Regression'}, ...
@@ -488,9 +488,9 @@ case 'pca / ica'
                 callback = @despikeCallback;
             case 'time-course viewer'
                 callback = @liveViewerCallback;
-            case {'scm','scm gui'}
+            case 'scm'
                 callback = @scmCallback;
-            case {'video & scm mask','video gui'}
+            case 'video & scm mask'
                 callback = @videoGUICallback;
             case 'mask editor'
                 callback = @maskEditorCallback;
@@ -1194,48 +1194,7 @@ function imregdemonsCallback(~,~)
     % One clean modern black setup popup
     % Default: MEDIAN, nsub = 100
     % -----------------------------------------------------
-    % DECONF_STD_IMREG_CFG_V61
-    stdStep = [];
-    try
-        if isappdata(fig,'deconf_std_workflow_step')
-            tmpStd = getappdata(fig,'deconf_std_workflow_step');
-            if isstruct(tmpStd) && isfield(tmpStd,'name') && strcmpi(strtrim(tmpStd.name),'Imregdemons')
-                stdStep = tmpStd;
-            end
-        end
-    catch
-    end
-    if ~isempty(stdStep)
-        cfg = struct();
-        cfg.cancelled = false;
-        cfg.blockMethod = 'median';
-        if isfield(stdStep,'nsub') && isfinite(double(stdStep.nsub))
-            cfg.nsub = max(2,round(double(stdStep.nsub)));
-        else
-            cfg.nsub = 25;
-        end
-        cfg.regSmooth = 1.3;
-        cfg.stepMotorMode = 'motor';
-        cfg.saveQC = true;
-        cfg.showQC = false;
-        addLog(sprintf('[Standardized] Imregdemons: median | nsub=%d | step-motor per-slice',cfg.nsub));
-    else
-        % DECONF_STD_IMREG_CFG_V71
-    stdStep = [];
-    try
-        if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-        if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-    catch
-    end
-    if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'Imregdemons')
-        cfg = struct(); cfg.cancelled = false; cfg.blockMethod = 'median';
-        if isfield(stdStep,'nsub') && isfinite(double(stdStep.nsub)), cfg.nsub = max(2,round(double(stdStep.nsub))); else, cfg.nsub = 25; end
-        cfg.regSmooth = 1.3; cfg.stepMotorMode = 'motor'; cfg.saveQC = true; cfg.showQC = false;
-        addLog(sprintf('[Standardized] Imregdemons no-dialog: median | nsub=%d',cfg.nsub));
-    else
-        cfg = showImregdemonsSetupDialog(data);
-    end
-    end
+    cfg = showImregdemonsSetupDialog(data);
 
     if isempty(cfg) || ~isstruct(cfg) || ...
             ~isfield(cfg,'cancelled') || cfg.cancelled
@@ -2199,63 +2158,6 @@ function stepMotorCallback(~,~)
             motorOpts.rawFolder = '';
         end
         motorOpts.preferSplitIfFolderLooksSplit = true;
-
-        % DECONF_STD_MOTOR_PRESET_20260623
-        % If Motor is launched from Standardized Analysis, run it with
-        % the selected standardized preset instead of opening the Motor dialog.
-        try
-            if isappdata(fig,'deconf_std_workflow_step')
-                stdStep = getappdata(fig,'deconf_std_workflow_step');
-                if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'Motor')
-                    motorOpts.standardizedWorkflow = true;
-                    motorOpts.noDialog = true;
-                    motorOpts.sourceMode = 2;                  % split MAT folder mode
-                    motorOpts.correctionMode = 1;              % 1 = None/raw
-                    motorOpts.doDespike = true;
-                    motorOpts.spikeThr = 4;
-                    motorOpts.trimFrames = 0;
-                    motorOpts.splitBaselineBlocksPerSlice = 0;
-
-                    if isfield(stdStep,'slices') && ~isempty(stdStep.slices) && isfinite(double(stdStep.slices))
-                        motorOpts.nSlices = max(1,round(double(stdStep.slices)));
-                    else
-                        motorOpts.nSlices = 4;
-                    end
-
-                    try
-                        if isfield(studio,'loadedPath') && ~isempty(studio.loadedPath) && exist(studio.loadedPath,'dir') == 7
-                            motorOpts.rawFolder = studio.loadedPath;
-                        end
-                    catch
-                    end
-
-                    addLog(sprintf('[Standardized] Motor auto preset: split folder | slices=%d | correction=None/raw | residual despike=4', motorOpts.nSlices));
-                end
-            end
-        catch ME_std_motor
-            addLog(['[Standardized] Motor preset warning: ' ME_std_motor.message]);
-        end
-
-        % DECONF_STD_MOTOR_OPTS_FROM_WORKFLOW_V71
-        try
-            stdStep = [];
-            if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-            if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-            if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'Motor')
-                motorOpts.noDialog = true;
-                motorOpts.sourceMode = 2;
-                motorOpts.correctionMode = 1;
-                motorOpts.doDespike = true;
-                motorOpts.spikeThr = 4;
-                motorOpts.trimFrames = 0;
-                motorOpts.splitBaselineBlocksPerSlice = 0;
-                if isfield(stdStep,'slices') && isfinite(double(stdStep.slices)), motorOpts.nSlices = max(1,round(double(stdStep.slices))); else, motorOpts.nSlices = 4; end
-                if exist('studio','var') && isfield(studio,'loadedPath') && ~isempty(studio.loadedPath) && exist(studio.loadedPath,'dir') == 7, motorOpts.rawFolder = studio.loadedPath; end
-                addLog(sprintf('[Standardized] Motor no-dialog: split folder | slices=%d | correction=None/raw | residual despike=4',motorOpts.nSlices));
-            end
-        catch ME_std_motor
-            addLog(['[Standardized] Motor preset warning: ' ME_std_motor.message]);
-        end
         [I3D, motorInfo] = motor(data.I, data.TR, qcFolder, motorOpts);
 
         newData = data;
@@ -2450,31 +2352,7 @@ function temporalSmoothingCallback(~,~)
     % -----------------------------------------------------
     % Single modern black setup popup
     % -----------------------------------------------------
-    % DECONF_STD_TEMPORAL_CFG_V71
-    stdStep = [];
-    try
-        if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-        if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-    catch
-    end
-    if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'Temporal Smoothing')
-        cfg = struct(); cfg.cancelled = false;
-        tm = 1; if isfield(stdStep,'tempMode') && isfinite(double(stdStep.tempMode)), tm = round(double(stdStep.tempMode)); end
-        if tm == 2
-            cfg.mode = 'block';
-            if isfield(stdStep,'tempNsub') && isfinite(double(stdStep.tempNsub)), cfg.nsub = max(1,round(double(stdStep.tempNsub))); else, cfg.nsub = 50; end
-            if isfield(stdStep,'tempMethod') && round(double(stdStep.tempMethod)) == 2, cfg.blockMethod = 'median'; else, cfg.blockMethod = 'mean'; end
-            cfg.winSec = cfg.nsub * double(data.TR);
-        else
-            cfg.mode = 'sliding';
-            if isfield(stdStep,'tempWinSec') && isfinite(double(stdStep.tempWinSec)), cfg.winSec = double(stdStep.tempWinSec); else, cfg.winSec = 60; end
-            cfg.nsub = []; cfg.blockMethod = 'mean';
-        end
-        cfg.chunkVoxels = 50000;
-        addLog(sprintf('[Standardized] Temporal no-dialog: mode=%s | win=%.6g s',cfg.mode,cfg.winSec));
-    else
-        cfg = showTemporalSmoothSubsampleDialog(data);
-    end
+    cfg = showTemporalSmoothSubsampleDialog(data);
 
     if isempty(cfg) || ~isstruct(cfg) || ...
             ~isfield(cfg,'cancelled') || cfg.cancelled
@@ -3135,23 +3013,7 @@ function pcaCallback(~,~)
         return;
     end
 
-    % DECONF_STD_PCAICA_METHOD_V71
-    stdStep = [];
-    try
-        if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-        if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-    catch
-    end
-    if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'PCA / ICA')
-        if isfield(stdStep,'pcaicaMethod') && round(double(stdStep.pcaicaMethod)) == 2
-            methodChoice = 'ICA';
-        else
-            methodChoice = 'PCA';
-        end
-        addLog(['[Standardized] PCA/ICA method selected without method popup: ' methodChoice]);
-    else
-        methodChoice = showPcaIcaMethodDialog();
-    end
+    methodChoice = showPcaIcaMethodDialog();
     if isempty(methodChoice) || strcmpi(methodChoice,'Cancel')
         addLog('PCA / ICA cancelled.');
         return;
@@ -3168,13 +3030,6 @@ function pcaCallback(~,~)
                 addLog('Running PCA denoising... (select PCs to remove)');
                 opts = struct();
                 opts.nCompMax = 50;
-% DECONF_STD_PCA_NCOMP_V71
-try
-    if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'pcaNcomp') && isfinite(double(stdStep.pcaNcomp))
-        opts.nCompMax = max(1,round(double(stdStep.pcaNcomp)));
-    end
-catch
-end
                 opts.maxDisplayPoints = 2000;
                 opts.chunkT = 250;
                 opts.centerMode = 'voxel';
@@ -3231,13 +3086,6 @@ end
                 addLog('Running ICA denoising... (compute ICs, then select ICs to remove)');
                 opts = struct();
                 opts.nCompMax = 30;
-% DECONF_STD_ICA_NCOMP_V71
-try
-    if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'icaNcomp') && isfinite(double(stdStep.icaNcomp))
-        opts.nCompMax = max(1,round(double(stdStep.icaNcomp)));
-    end
-catch
-end
                 opts.maxDisplayPoints = 2000;
                 opts.chunkT = 250;
                 opts.centerMode = 'voxel';
@@ -3421,60 +3269,7 @@ function filteringCallback(~,~)
     end
 
     % One clean dark setup window.
-    % DECONF_STD_FILTER_CFG_V61
-    stdStep = [];
-    try
-        if isappdata(fig,'deconf_std_workflow_step')
-            tmpStd = getappdata(fig,'deconf_std_workflow_step');
-            if isstruct(tmpStd) && isfield(tmpStd,'name') && strcmpi(strtrim(tmpStd.name),'Filtering')
-                stdStep = tmpStd;
-            end
-        end
-    catch
-    end
-    if ~isempty(stdStep)
-        opts = struct();
-        ft = 1;
-        if isfield(stdStep,'filterType') && isfinite(double(stdStep.filterType)), ft = round(double(stdStep.filterType)); end
-        if ft == 2
-            opts.type = 'low';
-        elseif ft == 3
-            opts.type = 'high';
-        else
-            opts.type = 'band';
-        end
-        opts.FcLow = 0.001; opts.FcHigh = 0.20; opts.order = 4;
-        if isfield(stdStep,'fcLow') && isfinite(double(stdStep.fcLow)), opts.FcLow = double(stdStep.fcLow); end
-        if isfield(stdStep,'fcHigh') && isfinite(double(stdStep.fcHigh)), opts.FcHigh = double(stdStep.fcHigh); end
-        if isfield(stdStep,'filterOrder') && isfinite(double(stdStep.filterOrder)), opts.order = round(double(stdStep.filterOrder)); end
-        opts.trimStart = 0; opts.trimEnd = 0; opts.useTaper = true; opts.saveQC = true; opts.chunkSize = 50000; opts.cancelled = false;
-        if strcmpi(opts.type,'low'), opts.FcLow = 0; end
-        if strcmpi(opts.type,'high'), opts.FcHigh = 0; end
-        addLog(sprintf('[Standardized] Filtering: %s | low=%.6g | high=%.6g | order=%d',opts.type,opts.FcLow,opts.FcHigh,opts.order));
-    else
-        % DECONF_STD_FILTER_CFG_V71
-    stdStep = [];
-    try
-        if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
-        if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step'), stdStep = getappdata(fig,'deconf_std_workflow_step'); end
-    catch
-    end
-    if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'Filtering')
-        opts = struct(); ft = 1;
-        if isfield(stdStep,'filterType') && isfinite(double(stdStep.filterType)), ft = round(double(stdStep.filterType)); end
-        if ft == 2, opts.type = 'low'; elseif ft == 3, opts.type = 'high'; else, opts.type = 'band'; end
-        opts.FcLow = 0.001; opts.FcHigh = 0.20; opts.order = 4;
-        if isfield(stdStep,'fcLow') && isfinite(double(stdStep.fcLow)), opts.FcLow = double(stdStep.fcLow); end
-        if isfield(stdStep,'fcHigh') && isfinite(double(stdStep.fcHigh)), opts.FcHigh = double(stdStep.fcHigh); end
-        if isfield(stdStep,'filterOrder') && isfinite(double(stdStep.filterOrder)), opts.order = round(double(stdStep.filterOrder)); end
-        opts.trimStart = 0; opts.trimEnd = 0; opts.useTaper = true; opts.saveQC = true; opts.chunkSize = 50000; opts.cancelled = false;
-        if strcmpi(opts.type,'low'), opts.FcLow = 0; end
-        if strcmpi(opts.type,'high'), opts.FcHigh = 0; end
-        addLog(sprintf('[Standardized] Filtering no-dialog: %s | low=%.6g | high=%.6g | order=%d',opts.type,opts.FcLow,opts.FcHigh,opts.order));
-    else
-        opts = showFilteringSetupDialog(data);
-    end
-    end
+    opts = showFilteringSetupDialog(data);
 
     if isempty(opts) || ...
             (isstruct(opts) && isfield(opts,'cancelled') && opts.cancelled)

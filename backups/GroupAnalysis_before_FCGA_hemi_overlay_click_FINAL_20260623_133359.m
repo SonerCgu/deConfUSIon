@@ -9653,10 +9653,6 @@ seedIdx = max(1,min(seedIdx,size(M,1)));
 roi2Idx = max(1,min(roi2Idx,size(M,1)));
 subjIdx = popupIndex_SINGLE_20260616(S,'hFCSubject',1);
 
-try
-    [namesX,namesY,labelsX,labelsY] = fcGAReconcileHemiLabels_20260625(hemiTitle,namesH,labelsH,namesX,namesY,labelsX,labelsY);
-catch
-end
 switch lower(viewMode)
     case 'heatmap'
         plotFCMatrix_SINGLE_20260616(S.axFCA,M,clim,sprintf('%s mean FC heatmap | n=%d | %s',R.groupName,R.n,valTxt),R.names,S.C);
@@ -10217,230 +10213,46 @@ cm = [blueToWhite; whiteToRed];
 end
 
 function [map2,note] = findROIOverlayMap_ADV_20260617(S)
-% ROI_SELECTED_SLICE_UNSQUASH_FIX_20260623
-% Prefer trusted subject-level 3D spatial maps. When Slice 1/2/3/4 is selected,
-% extract the selected plane from that 3D map instead of using possibly malformed
-% per-slice sliceResults maps.
 map2=[]; note='';
 try
     if ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-
-    subj = fcGAOverlaySelectedSubject_UNSQUASH_20260623(S);
-    sliceMode = 'All slices';
-    try, sliceMode = popupString_SINGLE_20260616(S,'hFCSlice','All slices'); catch, end
-    wantZ = fcGAWantedSlice_UNSQUASH_20260623(sliceMode);
-
-    fns = {'roiMap','labelMap','roiAtlas','overlaySliceMap','parcelMap', ...
-           'labelMask','roiLabelMask','atlasLabels','atlasLabelMap', ...
-           'atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};
-
-    % 1) Best case: subject-level 3D map. This is the source that usually looks
-    % correct in "All slices", so use it also for Slice 1/2/3/4.
-    for ii = 1:numel(fns)
-        fn = fns{ii};
-        if isfield(subj,fn) && isnumeric(subj.(fn)) && ~isempty(subj.(fn))
-            A = squeeze(subj.(fn));
-            if fcGAIsGoodSpatial3D_UNSQUASH_20260623(A)
-                if isfinite(wantZ)
-                    z2 = max(1,min(round(wantZ),size(A,3)));
-                    map2 = squeeze(A(:,:,z2));
-                    note = sprintf('%s | subject 3D map slice %d/%d',fn,z2,size(A,3));
-                else
-                    map2 = A;
-                    note = sprintf('%s | subject 3D map',fn);
-                end
-                return;
-            end
+    fns={'roiMap','labelMap','parcelMap','labelMask','roiLabelMask','roiAtlas','atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};
+    subj=S.FC.subjects(1);
+    for ii=1:numel(fns)
+        if isfield(subj,fns{ii}) && isnumeric(subj.(fns{ii})) && ~isempty(subj.(fns{ii}))
+            map2=subj.(fns{ii}); note=fns{ii}; return;
         end
     end
-
-    % 2) If no 3D map exists, accept a subject-level 2D map.
-    for ii = 1:numel(fns)
-        fn = fns{ii};
-        if isfield(subj,fn) && isnumeric(subj.(fn)) && ~isempty(subj.(fn))
-            A = squeeze(subj.(fn));
-            if fcGAIsGoodSpatial2D_UNSQUASH_20260623(A)
-                map2 = A;
-                note = sprintf('%s | subject 2D map',fn);
-                return;
-            end
-        end
-    end
-
-    % 3) Fallback only: sliceResults. Reject vector/strip-like maps.
     if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
-        SR = subj.sliceResults;
-        idxList = 1:numel(SR);
-        if isfinite(wantZ)
-            idxList = [];
-            for zz = 1:numel(SR)
-                zVal = [];
-                try, if isfield(SR(zz),'sliceIndex') && ~isempty(SR(zz).sliceIndex), zVal = double(SR(zz).sliceIndex); end, catch, end
-                try, if isempty(zVal) && isfield(SR(zz),'z') && ~isempty(SR(zz).z), zVal = double(SR(zz).z); end, catch, end
-                if isempty(zVal), zVal = zz; end
-                if isfinite(zVal) && round(zVal) == round(wantZ)
-                    idxList(end+1) = zz; %#ok<AGROW>
-                end
-            end
-            if isempty(idxList) && wantZ >= 1 && wantZ <= numel(SR)
-                idxList = round(wantZ);
-            end
-        end
-
-        for jj = 1:numel(idxList)
-            idx = idxList(jj);
-            if idx < 1 || idx > numel(SR), continue; end
-            for ii = 1:numel(fns)
-                fn = fns{ii};
-                if isfield(SR(idx),fn) && isnumeric(SR(idx).(fn)) && ~isempty(SR(idx).(fn))
-                    A = squeeze(SR(idx).(fn));
-                    if fcGAIsGoodSpatial2D_UNSQUASH_20260623(A)
-                        map2 = A;
-                        note = sprintf('%s | sliceResults slice %d',fn,idx);
-                        return;
-                    elseif fcGAIsGoodSpatial3D_UNSQUASH_20260623(A)
-                        z2 = 1;
-                        if isfinite(wantZ), z2 = max(1,min(round(wantZ),size(A,3))); end
-                        map2 = squeeze(A(:,:,z2));
-                        note = sprintf('%s | sliceResults 3D slice %d/%d',fn,z2,size(A,3));
-                        return;
-                    end
+        SR=subj.sliceResults;
+        for zz=1:numel(SR)
+            for ii=1:numel(fns)
+                if isfield(SR(zz),fns{ii}) && isnumeric(SR(zz).(fns{ii})) && ~isempty(SR(zz).(fns{ii}))
+                    map2=SR(zz).(fns{ii}); note=sprintf('%s slice %d',fns{ii},zz); return;
                 end
             end
         end
     end
-catch ME
-    try, fprintf('FC-GA ROI overlay map warning: %s\n',ME.message); catch, end
-end
-end
-
-function subj = fcGAOverlaySelectedSubject_UNSQUASH_20260623(S)
-subj = S.FC.subjects(1);
-try
-    if isfield(S,'hFCSubject') && ishghandle(S.hFCSubject)
-        vSub = get(S.hFCSubject,'Value');
-        itemsSub = get(S.hFCSubject,'String');
-        if ischar(itemsSub), itemsSub = cellstr(itemsSub); end
-        idxSub = 1;
-        if numel(itemsSub) == numel(S.FC.subjects)
-            idxSub = vSub;
-        elseif vSub > 1
-            idxSub = vSub - 1;
-        end
-        idxSub = max(1,min(idxSub,numel(S.FC.subjects)));
-        subj = S.FC.subjects(idxSub);
-    end
 catch
-    subj = S.FC.subjects(1);
-end
-end
-
-function wantZ = fcGAWantedSlice_UNSQUASH_20260623(sliceMode)
-wantZ = NaN;
-try
-    tok = regexp(char(sliceMode),'(\d+)','tokens','once');
-    if ~isempty(tok), wantZ = str2double(tok{1}); end
-catch
-    wantZ = NaN;
-end
-end
-
-function tf = fcGAIsGoodSpatial2D_UNSQUASH_20260623(A)
-tf = false;
-try
-    A = squeeze(A);
-    if ~isnumeric(A) || isempty(A) || ndims(A) ~= 2, return; end
-    sz = size(A);
-    if sz(1) <= 10 || sz(2) <= 10 || numel(A) <= 200, return; end
-    ratio = max(sz(1),sz(2)) / max(1,min(sz(1),sz(2)));
-    % Reject extreme strip/vector maps; these cause the squashed display.
-    tf = ratio <= 4.0;
-catch
-    tf = false;
-end
-end
-
-function tf = fcGAIsGoodSpatial3D_UNSQUASH_20260623(A)
-tf = false;
-try
-    A = squeeze(A);
-    if ~isnumeric(A) || isempty(A) || ndims(A) < 3, return; end
-    sz = size(A);
-    if sz(1) <= 10 || sz(2) <= 10 || sz(3) < 1 || numel(A) <= 200, return; end
-    ratio = max(sz(1),sz(2)) / max(1,min(sz(1),sz(2)));
-    tf = ratio <= 4.0;
-catch
-    tf = false;
 end
 end
 
 function refreshFCSlicePopup_CLEAN_20260617(hFig)
-% ROI_OVERLAY_SLICE_TARGET_FIX_20260623
-% Show true anatomical slices, not duplicated raw sliceResults count.
 try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    oldChoice = 'All slices';
-    try, oldChoice = popupString_SINGLE_20260616(S,'hFCSlice','All slices'); catch, end
-
-    zAll = [];
-    nZmax = 1;
-    for ii = 1:numel(S.FC.subjects)
-        subj = S.FC.subjects(ii);
-        try
-            if isfield(subj,'nSlices') && ~isempty(subj.nSlices)
-                nz = round(double(subj.nSlices));
-                if isfinite(nz) && nz > 0, nZmax = max(nZmax,nz); end
-            end
-        catch
-        end
-        try
-            if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults)
-                SR = subj.sliceResults;
-                localZ = [];
-                for kk = 1:numel(SR)
-                    z = [];
-                    try, if isfield(SR(kk),'sliceIndex') && ~isempty(SR(kk).sliceIndex), z = double(SR(kk).sliceIndex); end, catch, end
-                    try, if isempty(z) && isfield(SR(kk),'z') && ~isempty(SR(kk).z), z = double(SR(kk).z); end, catch, end
-                    if ~isempty(z) && isfinite(z) && z > 0, localZ(end+1) = round(z); end %#ok<AGROW>
-                end
-                if ~isempty(localZ)
-                    zAll = [zAll localZ(:)']; %#ok<AGROW>
-                else
-                    nZmax = max(nZmax,numel(SR));
-                end
-            end
-        catch
-        end
+    S=guidata(hFig); if isempty(S)||~isfield(S,'FC')||~isfield(S.FC,'subjects')||isempty(S.FC.subjects), return; end
+    nZ=1;
+    for ii=1:numel(S.FC.subjects)
+        subj=S.FC.subjects(ii);
+        try, if isfield(subj,'nSlices') && ~isempty(subj.nSlices), nZ=max(nZ,double(subj.nSlices)); end, catch, end
+        try, if isfield(subj,'sliceResults') && ~isempty(subj.sliceResults), nZ=max(nZ,numel(subj.sliceResults)); end, catch, end
     end
-    zAll = unique(zAll(isfinite(zAll) & zAll > 0));
-    if isempty(zAll)
-        zAll = 1:nZmax;
-    else
-        zAll = sort(zAll(:))';
-        if nZmax > 1 && numel(zAll) > nZmax
-            zAll = 1:nZmax;
-        end
-    end
-
-    items = cell(numel(zAll)+1,1);
-    items{1} = 'All slices';
-    for kk = 1:numel(zAll)
-        items{kk+1} = sprintf('Slice %d',zAll(kk));
-    end
-    if isfield(S,'hFCSlice') && ishghandle(S.hFCSlice)
-        newVal = 1;
-        try
-            hit = find(strcmp(items,oldChoice),1,'first');
-            if ~isempty(hit), newVal = hit; end
-        catch
-        end
-        set(S.hFCSlice,'String',items,'Value',max(1,min(newVal,numel(items))));
-    end
-catch ME
-    try, fprintf('FC-GA slice popup warning: %s\n',ME.message); catch, end
+    items=cell(nZ+1,1); items{1}='All slices'; for z=1:nZ, items{z+1}=sprintf('Slice %d',z); end
+    if isfield(S,'hFCSlice')&&ishghandle(S.hFCSlice), set(S.hFCSlice,'String',items,'Value',min(get(S.hFCSlice,'Value'),numel(items))); end
+catch
 end
 end
+
+
 
 function exportFCHighResPNG_ADV_20260617(hFig)
 try
@@ -10828,8 +10640,6 @@ else
 end
 left = regexprep(left,'\[[^\]]*\]','');
 left = regexprep(left,'^\s*-?\d+\s*=?\s*','');
-left = regexprep(left,'(?i)^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','');
-left = regexprep(left,'(?i)^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','');
 left = regexprep(left,'(?i)^(L|R)[_\-\s]+','');
 left = regexprep(left,'(?i)\b(left|right)\b','');
 left = strtrim(regexprep(left,'[_\s]+',' '));
@@ -10842,8 +10652,6 @@ else
 end
 full = regexprep(full,'\[[^\]]*\]','');
 full = regexprep(full,'^\s*-?\d+\s*=?\s*','');
-full = regexprep(full,'(?i)^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','');
-full = regexprep(full,'(?i)^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','');
 full = regexprep(full,'(?i)^(L|R)[_\-\s]+','');
 full = regexprep(full,'(?i)\b(left|right)\b','');
 full = regexprep(full,'\s+\d+(\s+\d+)*\s*$','');
@@ -10889,7 +10697,6 @@ end
 end
 
 function plotROIOverlay_ADV_20260617(ax,S,R,cmapName)
-% ROI_SELECTED_SLICE_UNSQUASH_FIX_20260623
 cla(ax);
 [map3,note] = findROIOverlayMap_ADV_20260617(S);
 if isempty(map3)
@@ -10916,60 +10723,35 @@ if ndims(map3) > 2
         z = round(size(map3,3)/2);
     end
     z = max(1,min(round(z),size(map3,3)));
-    labelSlice = double(squeeze(map3(:,:,z)));
-    note = sprintf('%s | display slice %d/%d',note,z,size(map3,3));
+    labelSlice = double(map3(:,:,z));
+    note = sprintf('%s | slice %d/%d',note,z,size(map3,3));
 else
-    labelSlice = double(squeeze(map3));
-end
-
-if isempty(labelSlice) || ndims(labelSlice) ~= 2 || size(labelSlice,1) <= 10 || size(labelSlice,2) <= 10
-    text(ax,0.5,0.55,'ROI overlay map has invalid dimensions', ...
-        'Color',S.C.txt,'HorizontalAlignment','center', ...
-        'FontWeight','bold','Interpreter','none');
-    set(ax,'Color',S.C.axisBg,'XTick',[],'YTick',[]);
-    title(ax,'ROI seed-correlation overlay','Color',S.C.txt,'Interpreter','none');
-    return;
+    labelSlice = double(map3);
 end
 
 seedIdx = popupIndex_SINGLE_20260616(S,'hFCRegion1',1);
 seedIdx = max(1,min(seedIdx,numel(R.labels)));
 M = R.meanR;
 valMap = NaN(size(labelSlice));
-
 for ii = 1:numel(R.labels)
     lab = double(R.labels(ii));
     v = NaN;
     try, v = double(M(seedIdx,ii)); catch, end
     if isfinite(v)
         mask = (labelSlice == lab);
-        if ~any(mask(:))
-            baseMask = (abs(labelSlice) == abs(lab));
-            try
-                if lab < 0 && ~any(labelSlice(:) < 0) && any(double(R.labels(:)) < 0)
-                    [~,xgOverlayLR] = ndgrid(1:size(labelSlice,1),1:size(labelSlice,2));
-                    mask = baseMask & xgOverlayLR <= ((size(labelSlice,2)+1)/2);
-                elseif lab > 0 && ~any(labelSlice(:) < 0) && any(double(R.labels(:)) < 0)
-                    [~,xgOverlayLR] = ndgrid(1:size(labelSlice,1),1:size(labelSlice,2));
-                    mask = baseMask & xgOverlayLR > ((size(labelSlice,2)+1)/2);
-                else
-                    mask = baseMask;
-                end
-            catch
-                mask = baseMask;
-            end
-        end
+        if ~any(mask(:)), mask = (abs(labelSlice) == abs(lab)); end
         valMap(mask) = v;
     end
 end
 
-hIm = imagesc(ax,[1 size(valMap,2)],[1 size(valMap,1)],valMap,[-1 1]);
+hIm = imagesc(ax,valMap,[-1 1]);
 set(hIm,'AlphaData',isfinite(valMap),'HitTest','on','PickableParts','all');
 set(ax,'Color',S.C.axisBg,'ButtonDownFcn',@(src,evt)fcGAOverlayClickAny_20260623(src,evt));
+axis(ax,'image'); axis(ax,'ij'); axis(ax,'off');
+xlim(ax,[1 size(valMap,2)]); ylim(ax,[1 size(valMap,1)]);
 try, colormap(ax,cmapFC_ADV_20260617('Blue-White-Red',256)); catch, colormap(ax,jet(256)); end
-fcGAOverlayLockAspect_UNSQUASH_20260623(ax,valMap);
 cb = colorbar(ax);
-try, set(cb,'Color',S.C.txt); ylabel(cb,'Pearson r: selected seed -> ROI','Color',S.C.txt,'Interpreter','none'); catch, end
-fcGAOverlayLockAspect_UNSQUASH_20260623(ax,valMap);
+try, set(cb,'Color',S.C.txt); ylabel(cb,'Pearson r: selected seed → ROI','Color',S.C.txt,'Interpreter','none'); catch, end
 
 setappdata(ax,'fcGAOverlayLabelSlice',labelSlice);
 setappdata(ax,'fcGAOverlayLabels',double(R.labels(:)));
@@ -10985,22 +10767,6 @@ try
     fig = ancestor(ax,'figure');
     set(fig,'WindowScrollWheelFcn',@(src,evt)fcGAOverlayScrollAny_20260623(src,evt));
 catch
-end
-end
-
-function fcGAOverlayLockAspect_UNSQUASH_20260623(ax,A)
-try
-    nr = size(A,1);
-    nc = size(A,2);
-    set(ax,'YDir','reverse','XTick',[],'YTick',[],'Box','off');
-    xlim(ax,[0.5 nc+0.5]);
-    ylim(ax,[0.5 nr+0.5]);
-    axis(ax,'image');
-    axis(ax,'ij');
-    axis(ax,'off');
-    daspect(ax,[1 1 1]);
-catch
-    try, axis(ax,'image'); axis(ax,'ij'); axis(ax,'off'); catch, end
 end
 end
 
@@ -11913,76 +11679,39 @@ end
 
 
 function refreshFCSubjectPopup_ADV_20260617(hFig)
-% SUBJECT_N0_FIX_20260623
-% If FC bundles are loaded but lastFC is an empty struct, do NOT display
-% Group mean (n=0). Use S.FC.subjects until a real compute result exists.
+% Detailed subject dropdown: group mean + animal/group/scan/file info.
 try
     S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects)
-        return;
-    end
-
-    useLastFC = false;
-    try
-        if isfield(S,'lastFC') && isstruct(S.lastFC) && ...
-                isfield(S.lastFC,'subjectNames') && ~isempty(S.lastFC.subjectNames)
-            useLastFC = true;
-        end
-    catch
-        useLastFC = false;
-    end
-
-    if useLastFC
+    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
+    if isfield(S,'lastFC') && ~isempty(S.lastFC) && isstruct(S.lastFC)
         fcGARefreshSubjectPopupDetailed_20260624(S,S.lastFC);
     else
         R = struct();
-        nSub = numel(S.FC.subjects);
-        R.subjectNames = cell(nSub,1);
-        R.groups       = cell(nSub,1);
-        R.sourceFiles  = cell(nSub,1);
-        for ii = 1:nSub
-            try, R.subjectNames{ii} = strtrimSafe(S.FC.subjects(ii).name); catch, R.subjectNames{ii} = sprintf('Subject_%02d',ii); end
-            try, R.groups{ii} = strtrimSafe(S.FC.subjects(ii).group); catch, R.groups{ii} = ''; end
-            try, R.sourceFiles{ii} = strtrimSafe(S.FC.subjects(ii).sourceFile); catch, R.sourceFiles{ii} = ''; end
+        R.subjectNames = cell(numel(S.FC.subjects),1);
+        R.groups = cell(numel(S.FC.subjects),1);
+        R.sourceFiles = cell(numel(S.FC.subjects),1);
+        for ii=1:numel(S.FC.subjects)
+            try, R.subjectNames{ii}=strtrimSafe(S.FC.subjects(ii).name); catch, R.subjectNames{ii}=sprintf('Subject_%02d',ii); end
+            try, R.groups{ii}=strtrimSafe(S.FC.subjects(ii).group); catch, R.groups{ii}=''; end
+            try, R.sourceFiles{ii}=strtrimSafe(S.FC.subjects(ii).sourceFile); catch, R.sourceFiles{ii}=''; end
         end
         fcGARefreshSubjectPopupDetailed_20260624(S,R);
     end
-catch ME
-    try, fprintf('FC-GA subject popup warning: %s\n',ME.message); catch, end
+catch
 end
 end
 
 function fcGARefreshSubjectPopupDetailed_20260624(S,R)
-% SUBJECT_N0_FIX_20260623
-% Self-healing subject popup: if R has no subjectNames but S.FC.subjects exists,
-% build the dropdown directly from the loaded FC bundle subjects.
 try
     if ~isfield(S,'hFCSubject') || ~ishghandle(S.hFCSubject), return; end
-
+    oldVal = get(S.hFCSubject,'Value');
     n = 0;
     try, n = numel(R.subjectNames); catch, n = 0; end
-
-    if n == 0 && isfield(S,'FC') && isfield(S.FC,'subjects') && ~isempty(S.FC.subjects)
-        nSub = numel(S.FC.subjects);
-        R = struct();
-        R.subjectNames = cell(nSub,1);
-        R.groups       = cell(nSub,1);
-        R.sourceFiles  = cell(nSub,1);
-        for ii = 1:nSub
-            try, R.subjectNames{ii} = strtrimSafe(S.FC.subjects(ii).name); catch, R.subjectNames{ii} = sprintf('Subject_%02d',ii); end
-            try, R.groups{ii} = strtrimSafe(S.FC.subjects(ii).group); catch, R.groups{ii} = ''; end
-            try, R.sourceFiles{ii} = strtrimSafe(S.FC.subjects(ii).sourceFile); catch, R.sourceFiles{ii} = ''; end
-        end
-        n = nSub;
-    end
-
-    oldVal = get(S.hFCSubject,'Value');
     items = cell(n+1,1);
     items{1} = sprintf('Group mean (n=%d)',max(0,n));
     for ii = 1:n
         items{ii+1} = fcGASubjectDisplayName_20260624(R,ii);
     end
-    if isempty(items), items = {'Group mean (n=0)'}; end
     set(S.hFCSubject,'String',items,'Value',max(1,min(oldVal,numel(items))));
 catch ME
     try, fprintf('FC-GA subject popup warning: %s\n',ME.message); catch, end
@@ -12185,10 +11914,8 @@ if ~isfield(S,'isLargeFCGA') || ~S.isLargeFCGA
 end
 
 Rfull = S.lastFC;
-if isempty(Rfull) || ~isstruct(Rfull) || ~isfield(Rfull,'Zstack') || ~isfield(Rfull,'Rstack') || ...
-        ~isfield(Rfull,'meanZ') || ~isfield(Rfull,'meanR')
-    try, refreshFCSubjectPopup_ADV_20260617(ancestor(S.axFCA,'figure')); catch, end
-    try, fcNoDataLocal(S.axFCA,'FC bundle loaded. Click Recompute FC Group.',S.C); catch, end
+if isempty(Rfull) || ~isstruct(Rfull)
+    try, fcNoDataLocal(S.axFCA,'No FC-GA result loaded/recomputed',S.C); catch, end
     return;
 end
 
@@ -12198,22 +11925,9 @@ if ~isfield(S,'isLargeFCGA') || ~S.isLargeFCGA
     try, setSingleFCAxis_SINGLE_20260616(S); catch, end
 end
 
-try, fcGAEnsureHemiCallbacks_20260625(S); catch, end
 viewMode  = popupString_SINGLE_20260616(S,'hFCView','Heatmap');
 dispMode  = popupString_SINGLE_20260616(S,'hFCDisplay','Fisher z');
 hemiMode  = popupString_SINGLE_20260616(S,'hFCHemi','All');
-try
-    % SMALL_HEMI_REFRESH_FIX_20260623
-    % In the normal/small FC-GA panel, the visible popup value can become
-    % disconnected from the cached S struct. Use the value captured by the
-    % Hemi callback so the small preview matches the Large view.
-    figHemiForce = ancestor(S.axFCA,'figure');
-    forcedHemiMode = getappdata(figHemiForce,'FCGA_FORCE_HEMI_MODE_20260623');
-    if ischar(forcedHemiMode) && ~isempty(strtrim(forcedHemiMode))
-        hemiMode = forcedHemiMode;
-    end
-catch
-end
 labelMode = popupString_SINGLE_20260616(S,'hFCLabelMode','Abbrev');
 cmapName  = popupString_SINGLE_20260616(S,'hFCColorMap','Blue-White-Red');
 
@@ -12274,34 +11988,10 @@ if ~isempty(selIdx) && numel(selIdx) < size(M0,1)
     roi2Small = find(selIdx == roi2Idx0,1,'first'); if isempty(roi2Small), roi2Small = min(2,numel(selIdx)); end
 end
 
-[Mhemi,namesH,labelsH,rowIdx,colIdx,hemiTitle] = applyHemisphereMode_ADV_20260617(Msmall,Rsmall.names,Rsmall.labels,hemiMode);
-try
-    if ~isempty(strfind(lower(hemiTitle),'merged')) && numel(namesH)==size(Mhemi,1) && size(Mhemi,1)==size(Mhemi,2)
-        namesY = namesH; labelsY = labelsH;
-        namesX = namesH; labelsX = labelsH;
-    else
-        if ~isempty(strfind(lower(hemiTitle),'merged')) && exist('namesH','var') && numel(namesH)==size(Mhemi,1) && size(Mhemi,1)==size(Mhemi,2)
-    namesY = namesH; labelsY = labelsH;
-    namesX = namesH; labelsX = labelsH;
-else
-    namesY = Rsmall.names(rowIdx); labelsY = Rsmall.labels(rowIdx);
-    namesX = Rsmall.names(colIdx); labelsX = Rsmall.labels(colIdx);
-end
-    end
-catch
-    if ~isempty(strfind(lower(hemiTitle),'merged')) && exist('namesH','var') && numel(namesH)==size(Mhemi,1) && size(Mhemi,1)==size(Mhemi,2)
-    namesY = namesH; labelsY = labelsH;
-    namesX = namesH; labelsX = labelsH;
-else
-    namesY = Rsmall.names(rowIdx); labelsY = Rsmall.labels(rowIdx);
-    namesX = Rsmall.names(colIdx); labelsX = Rsmall.labels(colIdx);
-end
-end
+[Mhemi,~,~,rowIdx,colIdx,hemiTitle] = applyHemisphereMode_ADV_20260617(Msmall,Rsmall.names,Rsmall.labels,hemiMode);
+namesY = Rsmall.names(rowIdx); labelsY = Rsmall.labels(rowIdx);
+namesX = Rsmall.names(colIdx); labelsX = Rsmall.labels(colIdx);
 
-try
-    [namesX,namesY,labelsX,labelsY] = fcGAReconcileHemiLabels_20260625(hemiTitle,namesH,labelsH,namesX,namesY,labelsX,labelsY);
-catch
-end
 switch lower(viewMode)
     case 'heatmap'
         plotFCMatrix_CLEAN_20260617(S.axFCA,Mhemi,clim, ...
@@ -12685,6 +12375,96 @@ end
 
 
 
+function [M2,names2,labels2,rowIdx,colIdx,hemiTitle] = applyHemisphereMode_ADV_20260617(M,names,labels,hemiMode)
+% Robust hemisphere filtering after ROI selection/sorting.
+try
+    n = size(M,1);
+    if nargin < 2 || isempty(names), names = cell(n,1); for ii=1:n, names{ii}=sprintf('ROI_%03d',ii); end, end
+    if nargin < 3 || isempty(labels), labels = (1:n)'; end
+    if nargin < 4 || isempty(hemiMode), hemiMode = 'All'; end
+    labels = labels(:);
+    mode = lower(strtrim(hemiMode));
+    [isL,isR] = fcGAHemiMask_20260624(names,labels);
+    allIdx = 1:n;
+    rowIdx = allIdx;
+    colIdx = allIdx;
+    hemiTitle = 'All hemispheres';
+
+    if ~isempty(strfind(mode,'left vs right')) || ~isempty(strfind(mode,'l/r'))
+        if any(isL) && any(isR)
+            rowIdx = find(isL);
+            colIdx = find(isR);
+            hemiTitle = 'Left vs Right';
+        end
+    elseif ~isempty(strfind(mode,'left')) || strcmpi(mode,'L')
+        if any(isL)
+            rowIdx = find(isL);
+            colIdx = find(isL);
+            hemiTitle = 'Left hemisphere';
+        end
+    elseif ~isempty(strfind(mode,'right')) || strcmpi(mode,'R')
+        if any(isR)
+            rowIdx = find(isR);
+            colIdx = find(isR);
+            hemiTitle = 'Right hemisphere';
+        end
+    elseif ~isempty(strfind(mode,'merged')) || ~isempty(strfind(mode,'bilateral'))
+        rowIdx = allIdx;
+        colIdx = allIdx;
+        hemiTitle = 'Merged/Bilateral view';
+    end
+
+    if isempty(rowIdx), rowIdx = allIdx; end
+    if isempty(colIdx), colIdx = allIdx; end
+    M2 = M(rowIdx,colIdx);
+    names2 = names(rowIdx);
+    labels2 = labels(rowIdx);
+catch ME
+    try, fprintf('FC-GA hemisphere filter warning: %s\n',ME.message); catch, end
+    M2 = M;
+    rowIdx = 1:size(M,1);
+    colIdx = 1:size(M,2);
+    names2 = names;
+    labels2 = labels;
+    hemiTitle = 'All hemispheres';
+end
+end
+
+function [isL,isR] = fcGAHemiMask_20260624(names,labels)
+% Infer hemisphere from region name first, then signed label if available.
+n = numel(labels);
+isL = false(n,1);
+isR = false(n,1);
+for ii = 1:n
+    s = '';
+    try, s = char(names{ii}); catch, end
+    sl = lower(strtrim(s));
+    sl = strrep(sl,'-','_');
+    sl = strrep(sl,' ','_');
+    if ~isempty(regexp(sl,'(^|_)l(_|$)','once')) || ~isempty(regexp(sl,'(^|_)left(_|$)','once'))
+        isL(ii) = true;
+    end
+    if ~isempty(regexp(sl,'(^|_)r(_|$)','once')) || ~isempty(regexp(sl,'(^|_)right(_|$)','once'))
+        isR(ii) = true;
+    end
+end
+if ~any(isL) && ~any(isR)
+    try
+        if any(labels < 0)
+            isL = labels < 0;
+            isR = labels > 0;
+        end
+    catch
+    end
+end
+if any(isL) && ~any(isR)
+    isR = ~isL;
+end
+if any(isR) && ~any(isL)
+    isL = ~isR;
+end
+end
+
 function fcGAEnsureROISelector_20260624(S,R)
 % Adds/restores ROI selector in the normal FC-GA GUI.
 try
@@ -12973,6 +12753,67 @@ out = ord(1:min(k,numel(ord)));
 out = out(out >= 1 & out <= n);
 end
 
+function plotFCMatrix_CLEAN_20260617(ax,M,clim,ttl,namesX,namesY,labelsX,labelsY,C,cmapName,labelMode,hemiTitle)
+% Scientific FC heatmap: selected ROIs labeled; title/colorbar remain readable.
+try, cla(ax,'reset'); catch, cla(ax); end
+imagesc(ax,M);
+set(ax,'YDir','reverse');
+axis(ax,'tight');
+try, colormap(ax,fcGAColormap_LOCAL_20260624(cmapName)); catch, colormap(ax,parula(256)); end
+try, caxis(ax,clim); catch, end
+cb = [];
+try
+    cb = colorbar(ax);
+    set(cb,'Color',C.txt,'FontSize',9);
+catch
+end
+labsX = fcGAHeatLabels_20260624(namesX,labelsX,labelMode);
+labsY = fcGAHeatLabels_20260624(namesY,labelsY,labelMode);
+nx = numel(labsX); ny = numel(labsY);
+nMax = max(nx,ny);
+fig = ancestor(ax,'figure');
+isLarge = false;
+try, isLarge = ~isempty(strfind(lower(get(fig,'Name')),'large')); catch, end
+if isLarge
+    if nMax > 120, fs = 5.0; elseif nMax > 90, fs = 5.5; elseif nMax > 60, fs = 6.0; elseif nMax > 35, fs = 7.0; else, fs = 9.0; end
+else
+    if nMax > 120, fs = 4.5; elseif nMax > 90, fs = 5.0; elseif nMax > 60, fs = 5.5; elseif nMax > 35, fs = 6.5; else, fs = 8.5; end
+end
+set(ax,'XTick',1:nx,'XTickLabel',labsX, ...
+    'YTick',1:ny,'YTickLabel',labsY, ...
+    'TickLabelInterpreter','none', ...
+    'FontSize',fs, ...
+    'Color',C.axisBg, ...
+    'XColor',C.txt, ...
+    'YColor',C.txt, ...
+    'Layer','top');
+try
+    if nMax > 35, xtickangle(ax,90); else, xtickangle(ax,55); end
+catch
+end
+try, fcGADrawHeatmapGrid_LOCAL_20260624(ax,nx,ny); catch, end
+ht = title(ax,ttl,'Color',C.txt,'FontWeight','bold','Interpreter','none');
+hx = xlabel(ax,'Regions', 'Color',C.txt,'Interpreter','none');
+hy = ylabel(ax,'Regions', 'Color',C.txt,'Interpreter','none');
+try, set(ht,'FontSize',12); catch, end
+try, set(hx,'FontSize',10); catch, end
+try, set(hy,'FontSize',10); catch, end
+try, if ~isempty(cb), ylabel(cb,'FC value','Color',C.txt,'FontSize',9); end, catch, end
+box(ax,'on');
+end
+
+function labs = fcGAHeatLabels_20260624(names,labels,labelMode)
+n = numel(labels);
+labs = cell(n,1);
+for ii = 1:n
+    try
+        labs{ii} = fcNiceName_SAFE_20260617(names{ii},labels(ii),labelMode,false);
+    catch
+        labs{ii} = sprintf('%g',labels(ii));
+    end
+end
+end
+
 function cmap = fcGAColormap_LOCAL_20260624(cmapName)
 name = lower(strtrim(cmapName));
 n = 256;
@@ -13128,10 +12969,8 @@ catch ME
 end
 end
 
-
-
 function fcGAInstallOverlayClickAnyMode_20260624(ax,S,R)
-% Robust click-to-set-seed for ROI overlay in normal and large view.
+% Robust click-to-seed installer for ROI overlay in normal and large mode.
 try
     if isempty(ax) || ~ishghandle(ax), return; end
     fig = ancestor(ax,'figure');
@@ -13152,207 +12991,60 @@ end
 function fcGAOverlayClickAnyMode_20260624(src,evt,S,R)
 try
     ax = src;
-    try
-        if ~strcmpi(get(ax,'Type'),'axes'), ax = ancestor(src,'axes'); end
-    catch
-        ax = [];
-    end
-    if isempty(ax) || ~ishghandle(ax)
-        try, ax = get(ancestor(src,'figure'),'CurrentAxes'); catch, end
+    if ~strcmpi(get(ax,'Type'),'axes')
+        ax = ancestor(src,'axes');
     end
     if isempty(ax) || ~ishghandle(ax), return; end
-
-    L = fcGAGetOverlayLabelMap_20260624(S,R,ax);
-    if isempty(L)
-        try, set(S.hFCInfo,'String','ROI overlay click: no label map found in FC-GA bundle.'); catch, end
-        return;
-    end
+    L = fcGAGetOverlayLabelMap_20260624(S,R);
+    if isempty(L), return; end
     z = fcGACurrentSliceIndex_20260624(S,L);
     if ndims(L) == 3, L2 = L(:,:,z); else, L2 = L; end
     lab = fcGAFindClickedLabel_20260624(ax,L2);
-    if isempty(lab) || lab == 0 || ~isfinite(lab)
-        try, set(S.hFCInfo,'String','ROI overlay click: clicked outside labelled ROI.'); catch, end
-        return;
-    end
+    if isempty(lab) || lab == 0 || isnan(lab), return; end
     ok = fcGASetSeedByLabel_20260624(S,R,lab);
-    if ~ok
-        try, set(S.hFCInfo,'String',sprintf('ROI overlay click: label %.0f not found in region list.',lab)); catch, end
-        return;
-    end
-
+    if ~ok, return; end
     fig = ancestor(ax,'figure');
     D = guidata(fig);
     if isstruct(D) && isfield(D,'S') && isfield(D,'ax')
         fcGALargeReplot_20260622(fig);
     else
-        updateFCTabPreview_ADV_20260617(S);
+        try, updateFCTabPreview_ADV_20260617(S); catch, end
     end
 catch ME
     try, fprintf('FC-GA overlay click warning: %s\n',ME.message); catch, end
 end
 end
 
-function L = fcGAGetOverlayLabelMap_20260624(S,R,ax)
-% Find the best atlas/ROI label volume available in R, S.lastFC, or S.FC.subjects.
+function L = fcGAGetOverlayLabelMap_20260624(S,R)
 L = [];
-cands = {};
-try, cands = fcGACollectLabelCandidates_20260624(R,cands,0); catch, end
-try, if isfield(S,'lastFC'), cands = fcGACollectLabelCandidates_20260624(S.lastFC,cands,0); end, catch, end
-try, if isfield(S,'FC'), cands = fcGACollectLabelCandidates_20260624(S.FC,cands,0); end, catch, end
-if isempty(cands), return; end
-[imgH,imgW] = fcGAGetImageSizeFromAxes_20260624(ax);
-bestScore = -Inf;
-bestIdx = 1;
-for ii = 1:numel(cands)
-    sc = fcGALabelCandidateScore_20260624(cands{ii},imgH,imgW);
-    if sc > bestScore
-        bestScore = sc;
-        bestIdx = ii;
-    end
-end
-L = cands{bestIdx};
-end
-
-function cands = fcGACollectLabelCandidates_20260624(obj,cands,depth)
-if depth > 3, return; end
-try
-    if isnumeric(obj)
-        cands = fcGAAddLabelCandidate_20260624(cands,obj);
-        return;
-    end
-    if iscell(obj)
-        for ii = 1:min(numel(obj),20)
-            cands = fcGACollectLabelCandidates_20260624(obj{ii},cands,depth+1);
-        end
-        return;
-    end
-    if isstruct(obj)
-        f = fieldnames(obj);
-        preferred = {'roiMap','labelMap','roiAtlas','atlasLabels','atlasLabelMap','labelVolume','roiLabelMap','fcLabelMap'};
-        for pp = 1:numel(preferred)
-            if isfield(obj,preferred{pp})
-                try, cands = fcGACollectLabelCandidates_20260624(obj.(preferred{pp}),cands,depth+1); catch, end
-            end
-        end
-        for ii = 1:min(numel(obj),10)
-            for ff = 1:numel(f)
-                nm = lower(f{ff});
-                if ~isempty(strfind(nm,'label')) || ~isempty(strfind(nm,'atlas')) || ~isempty(strfind(nm,'roi')) || strcmp(nm,'subjects') || strcmp(nm,'sliceresults')
-                    try, cands = fcGACollectLabelCandidates_20260624(obj(ii).(f{ff}),cands,depth+1); catch, end
-                end
-            end
-        end
-    end
-catch
-end
-end
-
-function cands = fcGAAddLabelCandidate_20260624(cands,A)
-try
-    if ~isnumeric(A), return; end
-    if ndims(A) > 3 || numel(A) < 100, return; end
-    vals = double(A(:));
-    vals = vals(isfinite(vals));
-    if isempty(vals), return; end
-    if max(abs(vals)) <= 1.5, return; end
-    vv = vals(1:min(numel(vals),5000));
-    integerish = mean(abs(vv - round(vv)) < 1e-6);
-    if integerish < 0.95, return; end
-    u = unique(vv);
-    if numel(u) < 3, return; end
-    cands{end+1,1} = A; %#ok<AGROW>
-catch
-end
-end
-
-function sc = fcGALabelCandidateScore_20260624(A,imgH,imgW)
-sc = 0;
-try
-    sz = size(A);
-    if ndims(A) == 2
-        h = sz(1); w = sz(2);
-    else
-        h = sz(1); w = sz(2);
-        sc = sc + 5;
-    end
-    if nargin >= 3 && imgH > 0 && imgW > 0
-        if h == imgH && w == imgW, sc = sc + 100; end
-        if h == imgW && w == imgH, sc = sc + 60; end
-        sc = sc - 0.001*(abs(h-imgH)+abs(w-imgW));
-    end
-    vals = double(A(:)); vals = vals(isfinite(vals));
-    vals = vals(vals ~= 0);
-    sc = sc + min(50,numel(unique(vals(1:min(numel(vals),10000)))));
-catch
-    sc = -Inf;
-end
-end
-
-function [imgH,imgW] = fcGAGetImageSizeFromAxes_20260624(ax)
-imgH = 0; imgW = 0;
-try
-    im = findall(ax,'Type','image');
-    if ~isempty(im)
-        cd = get(im(1),'CData');
-        imgH = size(cd,1);
-        imgW = size(cd,2);
-    end
-catch
-end
+try, if isfield(R,'roiMap') && ~isempty(R.roiMap), L = R.roiMap; return; end, catch, end
+try, if isfield(R,'labelMap') && ~isempty(R.labelMap), L = R.labelMap; return; end, catch, end
+try, if isfield(R,'roiAtlas') && ~isempty(R.roiAtlas), L = R.roiAtlas; return; end, catch, end
+try, if isfield(R,'atlasLabels') && ~isempty(R.atlasLabels), L = R.atlasLabels; return; end, catch, end
+try, if isfield(S,'lastFC') && isfield(S.lastFC,'roiMap') && ~isempty(S.lastFC.roiMap), L = S.lastFC.roiMap; return; end, catch, end
+try, if isfield(S,'lastFC') && isfield(S.lastFC,'labelMap') && ~isempty(S.lastFC.labelMap), L = S.lastFC.labelMap; return; end, catch, end
+try, if isfield(S,'lastFC') && isfield(S.lastFC,'roiAtlas') && ~isempty(S.lastFC.roiAtlas), L = S.lastFC.roiAtlas; return; end, catch, end
 end
 
 function lab = fcGAFindClickedLabel_20260624(ax,L2)
 lab = [];
 try
     cp = get(ax,'CurrentPoint');
-    xData = cp(1,1);
-    yData = cp(1,2);
-    nY = size(L2,1);
-    nX = size(L2,2);
-
-    im = findall(ax,'Type','image');
-    if ~isempty(im)
-        xd = get(im(1),'XData');
-        yd = get(im(1),'YData');
-        if numel(xd) == 2, xl = sort(double(xd)); else, xl = [min(double(xd(:))) max(double(xd(:)))]; end
-        if numel(yd) == 2, yl = sort(double(yd)); else, yl = [min(double(yd(:))) max(double(yd(:)))]; end
-    else
-        xl = sort(get(ax,'XLim'));
-        yl = sort(get(ax,'YLim'));
-    end
-
-    if xData < xl(1) || xData > xl(2) || yData < yl(1) || yData > yl(2), return; end
+    xData = cp(1,1); yData = cp(1,2);
+    xl = get(ax,'XLim'); yl = get(ax,'YLim');
+    nY = size(L2,1); nX = size(L2,2);
     x = round(1 + (xData - xl(1)) ./ max(eps,(xl(2)-xl(1))) .* (nX-1));
     y = round(1 + (yData - yl(1)) ./ max(eps,(yl(2)-yl(1))) .* (nY-1));
     x = max(1,min(nX,x));
     y = max(1,min(nY,y));
-
-    lab = fcGAReadLabelAround_20260624(L2,x,y,8);
-    if isempty(lab) && size(L2,1) == nX && size(L2,2) == nY
-        lab = fcGAReadLabelAround_20260624(L2',y,x,8);
-    end
-catch
-    lab = [];
-end
-end
-
-function lab = fcGAReadLabelAround_20260624(L2,x,y,rad)
-lab = [];
-try
-    nY = size(L2,1); nX = size(L2,2);
-    if x < 1 || y < 1 || x > nX || y > nY, return; end
-    v = double(L2(y,x));
-    if isfinite(v) && v ~= 0
-        lab = v;
-        return;
-    end
+    lab = double(L2(y,x));
+    if lab ~= 0 && isfinite(lab), return; end
+    rad = 6;
     yy = max(1,y-rad):min(nY,y+rad);
     xx = max(1,x-rad):min(nX,x+rad);
-    P = double(L2(yy,xx));
-    vals = P(isfinite(P) & P ~= 0);
-    if ~isempty(vals)
-        lab = vals(1);
-    end
+    patch = double(L2(yy,xx));
+    vals = patch(isfinite(patch) & patch ~= 0);
+    if ~isempty(vals), lab = vals(1); end
 catch
     lab = [];
 end
@@ -13367,13 +13059,6 @@ try
     if isempty(idx), return; end
     if isfield(S,'hFCRegion1') && ishghandle(S.hFCRegion1)
         set(S.hFCRegion1,'Value',max(1,min(idx,numel(labs))));
-        try
-            nm = fcNiceName_SAFE_20260617(R.names{idx},R.labels(idx),'Abbrev',false);
-            if isfield(S,'hFCInfo') && ishghandle(S.hFCInfo)
-                set(S.hFCInfo,'String',sprintf('ROI overlay click: seed set to %s',nm));
-            end
-        catch
-        end
         ok = true;
     end
 catch
@@ -13387,570 +13072,9 @@ try
     nz = size(L,3);
     if isfield(S,'hFCSlice') && ishghandle(S.hFCSlice)
         v = get(S.hFCSlice,'Value');
-        items = get(S.hFCSlice,'String');
-        if ischar(items), items = cellstr(items); end
-        zNum = [];
-        try
-            s = items{max(1,min(v,numel(items)))};
-            tok = regexp(s,'\d+','match');
-            if ~isempty(tok), zNum = str2double(tok{end}); end
-        catch
-        end
-        if ~isempty(zNum) && isfinite(zNum)
-            z = max(1,min(nz,round(zNum)));
-        else
-            z = max(1,min(nz,round(double(v))));
-        end
+        z = max(1,min(nz,round(double(v))));
     end
 catch
     z = 1;
-end
-end
-
-
-function [isL,isR,baseNames] = fcGAHemiMask_20260624(names,labels)
-% Robust side detection from names such as R_ALV, L_ALV, R-ALV, Right ALV, ALV_R.
-n = numel(labels);
-isL = false(n,1);
-isR = false(n,1);
-baseNames = cell(n,1);
-
-for ii = 1:n
-    raw = '';
-    try, raw = char(names{ii}); catch, raw = sprintf('ROI_%03d',ii); end
-    [side,base] = fcGAHemiSideBase_20260624(raw);
-    if strcmp(side,'L'), isL(ii) = true; end
-    if strcmp(side,'R'), isR(ii) = true; end
-    baseNames{ii} = base;
-end
-
-% Signed-label fallback if names do not contain side information.
-try
-    if (~any(isL) || ~any(isR)) && any(labels < 0) && any(labels > 0)
-        isL = labels < 0;
-        isR = labels > 0;
-        for ii = 1:n
-            if isempty(baseNames{ii})
-                baseNames{ii} = sprintf('ROI_%g',abs(labels(ii)));
-            end
-        end
-    end
-catch
-end
-
-% Do not invent a side if neither side exists.
-if ~any(isL) && ~any(isR)
-    isL = false(n,1);
-    isR = false(n,1);
-end
-end
-
-function [side,base] = fcGAHemiSideBase_20260624(raw)
-side = '';
-base = '';
-try
-    s = char(raw);
-    s = regexprep(s,'\|\|.*$','');
-    s = regexprep(s,'\[[^\]]*\]','');
-    s = regexprep(s,'^\s*-?\d+\s*=?\s*','');
-    s = strtrim(s);
-    if isempty(s)
-        base = '';
-        return;
-    end
-
-    u = upper(s);
-    u = regexprep(u,'[-\s]+','_');
-    u = regexprep(u,'_+','_');
-    u = regexprep(u,'^_','');
-    u = regexprep(u,'_$','');
-
-    % Side prefix.
-    if ~isempty(regexp(u,'^(L|LEFT)_','once'))
-        side = 'L';
-        base = regexprep(u,'^(L|LEFT)_','');
-    elseif ~isempty(regexp(u,'^(R|RIGHT)_','once'))
-        side = 'R';
-        base = regexprep(u,'^(R|RIGHT)_','');
-    % Side suffix.
-    elseif ~isempty(regexp(u,'_(L|LEFT)$','once'))
-        side = 'L';
-        base = regexprep(u,'_(L|LEFT)$','');
-    elseif ~isempty(regexp(u,'_(R|RIGHT)$','once'))
-        side = 'R';
-        base = regexprep(u,'_(R|RIGHT)$','');
-    else
-        base = u;
-    end
-
-    base = regexprep(base,'^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)_','','ignorecase');
-    base = regexprep(base,'^(L|R|LEFT|RIGHT)_','','ignorecase');
-    base = regexprep(base,'_(L|R|LEFT|RIGHT)$','');
-    base = regexprep(base,'_+','_');
-    base = strtrim(base);
-    if isempty(base), base = u; end
-catch
-    base = strtrim(char(raw));
-end
-end
-
-function [Mmerge,namesMerge,labelsMerge] = fcGAMergeHemisphereMatrix_20260624(M,names,labels,baseNames)
-% Collapse L/R homologues into base ROI matrix.
-n = size(M,1);
-keys = baseNames(:);
-for ii = 1:numel(keys)
-    if isempty(keys{ii})
-        try
-            keys{ii} = sprintf('ROI_%g',abs(labels(ii)));
-        catch
-            keys{ii} = sprintf('ROI_%03d',ii);
-        end
-    end
-end
-
-% Sort base ROIs alphabetically.
-[~,ordBase] = sort(lower(keys));
-keysSorted = keys(ordBase);
-unq = {};
-for ii = 1:numel(keysSorted)
-    if isempty(unq) || ~strcmpi(unq{end},keysSorted{ii})
-        unq{end+1,1} = keysSorted{ii}; %#ok<AGROW>
-    end
-end
-
-k = numel(unq);
-Mmerge = NaN(k,k);
-namesMerge = cell(k,1);
-labelsMerge = zeros(k,1);
-groups = cell(k,1);
-
-for ii = 1:k
-    groups{ii} = find(strcmpi(keys,unq{ii}));
-    namesMerge{ii} = unq{ii};
-    try
-        labelsMerge(ii) = abs(labels(groups{ii}(1)));
-    catch
-        labelsMerge(ii) = ii;
-    end
-end
-
-for ii = 1:k
-    for jj = 1:k
-        rr = groups{ii};
-        cc = groups{jj};
-        vals = M(rr,cc);
-        Mmerge(ii,jj) = fcGANanMeanVec_20260624(vals(:));
-    end
-end
-end
-
-function m = fcGANanMeanVec_20260624(v)
-v = v(:);
-v = v(isfinite(v));
-if isempty(v), m = NaN; else, m = mean(v); end
-end
-
-function labs = fcGAHeatLabels_20260624(names,labels,labelMode,hemiTitle)
-% Heatmap labels. Merged names are already base-only, but strip side prefixes again for safety.
-n = numel(labels);
-labs = cell(n,1);
-for ii = 1:n
-    try
-        stripSide = ~isempty(strfind(lower(hemiTitle),'merged')) || ~isempty(strfind(lower(hemiTitle),'bilateral')); labs{ii} = fcNiceName_SAFE_20260617(names{ii},labels(ii),labelMode,stripSide);
-    catch
-        try, labs{ii} = char(names{ii}); catch, labs{ii} = sprintf('%g',labels(ii)); end
-    end
-    labs{ii} = strtrim(labs{ii});
-    labs{ii} = regexprep(labs{ii},'^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','','ignorecase');
-    if stripSide
-        labs{ii} = regexprep(labs{ii},'^(L|R|LEFT|RIGHT)[_\-\s]+','','ignorecase');
-    end
-    % If the internal name has no side prefix, make sure the displayed label also has no side prefix.
-    try
-        raw = upper(regexprep(char(names{ii}),'[-\s]+','_'));
-        if isempty(regexp(raw,'^(L|R|LEFT|RIGHT)_','once')) && isempty(regexp(raw,'_(L|R|LEFT|RIGHT)$','once'))
-            labs{ii} = fcGAStripSidePrefix_20260624(labs{ii});
-        end
-    catch
-    end
-end
-end
-
-function s = fcGAStripSidePrefix_20260624(s)
-try
-    s = char(s);
-    s = regexprep(s,'^\s*(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','','ignorecase');
-    s = regexprep(s,'^\s*(L|R|LEFT|RIGHT)[_\-\s]+','','ignorecase');
-    s = regexprep(s,'[_\-\s]+(L|R|LEFT|RIGHT)\s*$','','ignorecase');
-    s = regexprep(s,'_+','_');
-    s = strtrim(s);
-catch
-end
-end
-
-
-function fcGAEnsureHemiCallbacks_20260625(S)
-% SMALL_HEMI_REFRESH_FIX_20260623
-% Make sure changing Hemi/View/Display/etc. really refreshes the normal FC-GA plot.
-try
-    fields = {'hFCHemi','hFCView','hFCDisplay','hFCROISet','hFCSubject', ...
-              'hFCColorMap','hFCLabelMode','hFCSlice','hFCRegion1','hFCRegion2'};
-    for ii = 1:numel(fields)
-        try
-            if isfield(S,fields{ii}) && ishghandle(S.(fields{ii}))
-                set(S.(fields{ii}),'Callback',@(src,evt)fcGARequestPreviewRefresh_20260625(src));
-            end
-        catch
-        end
-    end
-catch
-end
-end
-
-function fcGARequestPreviewRefresh_20260625(src)
-% SMALL_HEMI_REFRESH_FIX_20260623
-% Robust refresh for both normal/small FC-GA panel and Large view.
-try
-    fig = ancestor(src,'figure');
-    if isempty(fig) || ~ishghandle(fig), return; end
-
-    % If this callback came from the Hemi popup, capture its exact visible value.
-    try
-        items = get(src,'String');
-        if ischar(items), items = cellstr(items); end
-        allItems = lower(sprintf('%s|',items{:}));
-        if ~isempty(strfind(allItems,'left vs right')) && ~isempty(strfind(allItems,'merged'))
-            v = get(src,'Value');
-            hemiChoice = items{max(1,min(v,numel(items)))};
-            setappdata(fig,'FCGA_FORCE_HEMI_MODE_20260623',hemiChoice);
-        end
-    catch
-    end
-
-    D = guidata(fig);
-    if isstruct(D) && isfield(D,'S') && isfield(D,'ax')
-        % Large view.
-        fcGALargeReplot_20260622(fig);
-    else
-        % Normal/small GroupAnalysis panel.
-        try, D.isLargeFCGA = false; catch, end
-        try, guidata(fig,D); catch, end
-        updateFCTabPreview_ADV_20260617(D);
-        drawnow;
-    end
-catch ME
-    try, fprintf('FC-GA refresh warning: %s\n',ME.message); catch, end
-end
-end
-
-function [M2,names2,labels2,rowIdx,colIdx,hemiTitle] = applyHemisphereMode_ADV_20260617(M,names,labels,hemiMode)
-% SMALL_HEMI_REFRESH_FIX_20260623
-% Correct FC-GA hemisphere computation.
-% All           = full matrix.
-% Merged L+R    = collapse L/R homologues into base ROI names.
-% Left only     = left-left matrix.
-% Right only    = right-right matrix.
-% Left vs Right = left rows, right columns.
-% If no true L/R labels are found, fall back to previous full-matrix behavior.
-try
-    n = size(M,1);
-    if nargin < 2 || isempty(names)
-        names = cell(n,1);
-        for ii = 1:n, names{ii} = sprintf('ROI_%03d',ii); end
-    end
-    if nargin < 3 || isempty(labels)
-        labels = (1:n)';
-    end
-    labels = labels(:);
-    if nargin < 4 || isempty(hemiMode)
-        hemiMode = 'All';
-    end
-
-    mode = lower(strtrim(char(hemiMode)));
-    rowIdx = 1:n;
-    colIdx = 1:n;
-    M2 = M;
-    names2 = names;
-    labels2 = labels;
-    hemiTitle = 'All hemispheres';
-
-    [isL,isR,baseNames] = fcGAHemiMask_20260625(names,labels);
-
-    if ~isempty(strfind(mode,'merged')) || ~isempty(strfind(mode,'bilateral')) || ~isempty(strfind(mode,'l+r'))
-        [M2,names2,labels2] = fcGAMergeHemisphereMatrix_20260625(M,names,labels,baseNames);
-        rowIdx = 1:size(M2,1);
-        colIdx = 1:size(M2,2);
-        hemiTitle = 'Merged hemispheres';
-        return;
-    end
-
-    if ~isempty(strfind(mode,'left vs right')) || ~isempty(strfind(mode,'left-right')) || ~isempty(strfind(mode,'l vs r')) || ~isempty(strfind(mode,'l/r'))
-        if any(isL) && any(isR)
-            rowIdx = find(isL);
-            colIdx = find(isR);
-            M2 = M(rowIdx,colIdx);
-            names2 = names(rowIdx);
-            labels2 = labels(rowIdx);
-            hemiTitle = 'Left vs Right';
-            return;
-        else
-            hemiTitle = 'Left vs Right - no L/R labels detected, showing all';
-            return;
-        end
-    end
-
-    if strcmp(mode,'left') || strcmp(mode,'l') || ~isempty(strfind(mode,'left only')) || ~isempty(strfind(mode,'left hemi')) || ~isempty(strfind(mode,'left hemisphere'))
-        if any(isL)
-            rowIdx = find(isL);
-            colIdx = find(isL);
-            M2 = M(rowIdx,colIdx);
-            names2 = names(rowIdx);
-            labels2 = labels(rowIdx);
-            hemiTitle = 'Left hemisphere';
-            return;
-        else
-            hemiTitle = 'Left hemisphere - no left labels detected, showing all';
-            return;
-        end
-    end
-
-    if strcmp(mode,'right') || strcmp(mode,'r') || ~isempty(strfind(mode,'right only')) || ~isempty(strfind(mode,'right hemi')) || ~isempty(strfind(mode,'right hemisphere'))
-        if any(isR)
-            rowIdx = find(isR);
-            colIdx = find(isR);
-            M2 = M(rowIdx,colIdx);
-            names2 = names(rowIdx);
-            labels2 = labels(rowIdx);
-            hemiTitle = 'Right hemisphere';
-            return;
-        else
-            hemiTitle = 'Right hemisphere - no right labels detected, showing all';
-            return;
-        end
-    end
-catch ME
-    try, fprintf('FC-GA hemisphere warning: %s\n',ME.message); catch, end
-    M2 = M;
-    names2 = names;
-    labels2 = labels;
-    rowIdx = 1:size(M,1);
-    colIdx = 1:size(M,2);
-    hemiTitle = 'All hemispheres';
-end
-end
-
-function [isL,isR,baseNames] = fcGAHemiMask_20260625(names,labels)
-% Detect side from names such as R_AAA, L_AAA, Right_AAA, AAA_R, etc.
-n = numel(labels);
-isL = false(n,1);
-isR = false(n,1);
-baseNames = cell(n,1);
-for ii = 1:n
-    raw = '';
-    try, raw = char(names{ii}); catch, raw = sprintf('ROI_%03d',ii); end
-    [side,base] = fcGAHemiSideBase_20260625(raw);
-    if strcmp(side,'L'), isL(ii) = true; end
-    if strcmp(side,'R'), isR(ii) = true; end
-    baseNames{ii} = base;
-end
-
-% Fallback to signed labels if available.
-try
-    if (~any(isL) || ~any(isR)) && any(labels < 0) && any(labels > 0)
-        isL = labels < 0;
-        isR = labels > 0;
-        for ii = 1:n
-            if isempty(baseNames{ii})
-                baseNames{ii} = sprintf('ROI_%g',abs(labels(ii)));
-            end
-        end
-    end
-catch
-end
-end
-
-function [side,base] = fcGAHemiSideBase_20260625(raw)
-side = '';
-base = '';
-try
-    s = char(raw);
-    s = regexprep(s,'\|\|.*$','');
-    s = regexprep(s,'\[[^\]]*\]','');
-    s = regexprep(s,'^\s*-?\d+\s*=?\s*','');
-    s = strtrim(s);
-    if isempty(s), return; end
-
-    u = upper(s);
-    u = regexprep(u,'[-\s]+','_');
-    u = regexprep(u,'_+','_');
-    u = regexprep(u,'^_','');
-    u = regexprep(u,'_$','');
-
-    if ~isempty(regexp(u,'^(L|LEFT)_','once'))
-        side = 'L';
-        base = regexprep(u,'^(L|LEFT)_','');
-    elseif ~isempty(regexp(u,'^(R|RIGHT)_','once'))
-        side = 'R';
-        base = regexprep(u,'^(R|RIGHT)_','');
-    elseif ~isempty(regexp(u,'_(L|LEFT)$','once'))
-        side = 'L';
-        base = regexprep(u,'_(L|LEFT)$','');
-    elseif ~isempty(regexp(u,'_(R|RIGHT)$','once'))
-        side = 'R';
-        base = regexprep(u,'_(R|RIGHT)$','');
-    else
-        base = u;
-    end
-
-    base = regexprep(base,'^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)_','','ignorecase');
-    base = regexprep(base,'^(L|R|LEFT|RIGHT)_','','ignorecase');
-    base = regexprep(base,'_(L|R|LEFT|RIGHT)$','');
-    base = regexprep(base,'_+','_');
-    base = strtrim(base);
-    if isempty(base), base = u; end
-catch
-    base = strtrim(char(raw));
-end
-end
-
-function [Mmerge,namesMerge,labelsMerge] = fcGAMergeHemisphereMatrix_20260625(M,names,labels,baseNames)
-% Collapse L/R homologues into one matrix per base region.
-n = size(M,1);
-keys = baseNames(:);
-for ii = 1:numel(keys)
-    if isempty(keys{ii})
-        try, keys{ii} = sprintf('ROI_%g',abs(labels(ii))); catch, keys{ii} = sprintf('ROI_%03d',ii); end
-    end
-end
-[~,ord] = sort(lower(keys));
-keysSorted = keys(ord);
-unq = {};
-for ii = 1:numel(keysSorted)
-    if isempty(unq) || ~strcmpi(unq{end},keysSorted{ii})
-        unq{end+1,1} = keysSorted{ii}; %#ok<AGROW>
-    end
-end
-k = numel(unq);
-Mmerge = NaN(k,k);
-namesMerge = cell(k,1);
-labelsMerge = zeros(k,1);
-groups = cell(k,1);
-for ii = 1:k
-    groups{ii} = find(strcmpi(keys,unq{ii}));
-    namesMerge{ii} = unq{ii};
-    try, labelsMerge(ii) = abs(labels(groups{ii}(1))); catch, labelsMerge(ii) = ii; end
-end
-for ii = 1:k
-    for jj = 1:k
-        vals = M(groups{ii},groups{jj});
-        Mmerge(ii,jj) = fcGANanMeanVec_20260625(vals(:));
-    end
-end
-end
-
-function m = fcGANanMeanVec_20260625(v)
-v = v(:);
-v = v(isfinite(v));
-if isempty(v), m = NaN; else, m = mean(v); end
-end
-
-function [namesX,namesY,labelsX,labelsY] = fcGAReconcileHemiLabels_20260625(hemiTitle,namesH,labelsH,namesX,namesY,labelsX,labelsY)
-% For merged mode, use collapsed base ROI names/labels returned by applyHemisphereMode.
-try
-    ht = lower(char(hemiTitle));
-    if ~isempty(strfind(ht,'merged')) && ~isempty(namesH) && numel(namesH)==numel(labelsH)
-        namesX = namesH;
-        namesY = namesH;
-        labelsX = labelsH;
-        labelsY = labelsH;
-    end
-catch
-end
-end
-
-function plotFCMatrix_CLEAN_20260617(ax,M,clim,ttl,namesX,namesY,labelsX,labelsY,C,cmapName,labelMode,hemiTitle)
-% Heatmap plotter with hemisphere-aware axis labels.
-try, cla(ax,'reset'); catch, cla(ax); end
-imagesc(ax,M);
-set(ax,'YDir','reverse');
-axis(ax,'tight');
-try, colormap(ax,fcGAColormap_LOCAL_20260624(cmapName)); catch, colormap(ax,jet(256)); end
-try, caxis(ax,clim); catch, end
-try
-    cb = colorbar(ax);
-    set(cb,'Color',C.txt,'FontSize',9);
-    ylabel(cb,'FC value','Color',C.txt,'FontSize',9);
-catch
-end
-
-labsX = fcGAHeatLabels_20260625(namesX,labelsX,labelMode,hemiTitle);
-labsY = fcGAHeatLabels_20260625(namesY,labelsY,labelMode,hemiTitle);
-nx = numel(labsX);
-ny = numel(labsY);
-nMax = max(nx,ny);
-if nMax > 120, fs = 4.5; elseif nMax > 90, fs = 5; elseif nMax > 60, fs = 5.5; elseif nMax > 35, fs = 6.5; else, fs = 8.5; end
-
-set(ax,'XTick',1:nx,'XTickLabel',labsX, ...
-    'YTick',1:ny,'YTickLabel',labsY, ...
-    'TickLabelInterpreter','none', ...
-    'FontSize',fs, ...
-    'Color',C.axisBg, ...
-    'XColor',C.txt, ...
-    'YColor',C.txt, ...
-    'Layer','top');
-try
-    if nMax > 35, xtickangle(ax,90); else, xtickangle(ax,55); end
-catch
-end
-try, fcGADrawHeatmapGrid_LOCAL_20260624(ax,nx,ny); catch, end
-
-[xAxisName,yAxisName] = fcGAAxisNamesForHemi_20260625(hemiTitle);
-title(ax,ttl,'Color',C.txt,'FontWeight','bold','Interpreter','none','FontSize',12);
-xlabel(ax,xAxisName,'Color',C.txt,'Interpreter','none','FontSize',10);
-ylabel(ax,yAxisName,'Color',C.txt,'Interpreter','none','FontSize',10);
-box(ax,'on');
-end
-
-function [xAxisName,yAxisName] = fcGAAxisNamesForHemi_20260625(hemiTitle)
-ht = lower(char(hemiTitle));
-xAxisName = 'Regions';
-yAxisName = 'Regions';
-if ~isempty(strfind(ht,'left vs right'))
-    xAxisName = 'Right regions';
-    yAxisName = 'Left regions';
-elseif ~isempty(strfind(ht,'left hemisphere'))
-    xAxisName = 'Left regions';
-    yAxisName = 'Left regions';
-elseif ~isempty(strfind(ht,'right hemisphere'))
-    xAxisName = 'Right regions';
-    yAxisName = 'Right regions';
-elseif ~isempty(strfind(ht,'merged'))
-    xAxisName = 'Merged regions';
-    yAxisName = 'Merged regions';
-end
-end
-
-function labs = fcGAHeatLabels_20260625(names,labels,labelMode,hemiTitle)
-% SMALL_HEMI_REFRESH_FIX_20260623
-% Labels for heatmap. Strip side prefixes when title/axis already defines side.
-if nargin < 4, hemiTitle = ''; end
-n = numel(labels);
-labs = cell(n,1);
-ht = lower(strtrim(char(hemiTitle)));
-stripSide = ~isempty(strfind(ht,'merged')) || ...
-            ~isempty(strfind(ht,'left hemisphere')) || ...
-            ~isempty(strfind(ht,'right hemisphere')) || ...
-            ~isempty(strfind(ht,'left vs right'));
-for ii = 1:n
-    try
-        labs{ii} = fcNiceName_SAFE_20260617(names{ii},labels(ii),labelMode,stripSide);
-    catch
-        try, labs{ii} = char(names{ii}); catch, labs{ii} = sprintf('%g',labels(ii)); end
-    end
-    labs{ii} = strtrim(labs{ii});
-    labs{ii} = regexprep(labs{ii},'^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)[_\-\s/]+','','ignorecase');
-    if stripSide
-        labs{ii} = regexprep(labs{ii},'^(L|R|LEFT|RIGHT)[_\-\s]+','','ignorecase');
-    end
 end
 end

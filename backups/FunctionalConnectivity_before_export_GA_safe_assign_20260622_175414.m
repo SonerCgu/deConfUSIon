@@ -7433,17 +7433,7 @@ end
 % Otherwise FC map and timecourse labels would not match.
 % ------------------------------------------------------------
 hasLR = isfield(Seg,'Left') && isstruct(Seg.Left) && isfield(Seg,'Right') && isstruct(Seg.Right);
-% TRUE_LR_SEGLEFT_RIGHT_FIX_20260623
-% Use true left/right region traces whenever Seg.Left and Seg.Right exist.
-% Do NOT require signed labelMap here. Some segmentation exports store unsigned spatial maps
-% but still correctly store separate Left/Right time traces.
-useLR = hasLR;
-if useLR && ~hasSignedMap
-    try
-        fprintf('FC TRUE-LR note: Seg.Left/Seg.Right traces found, but labelMap is unsigned. Using true L/R traces for heatmaps and exports; spatial overlay may remain unsigned/bilateral.\n');
-    catch
-    end
-end
+useLR = hasSignedMap && hasLR;
 
 Mregion = [];
 labels = [];
@@ -7700,9 +7690,7 @@ info.spaceName = spaceName;
 info.nRegions = numel(labels);
 info.nTime = size(meanTS,1);
 info.hasSignedMap = hasSignedMap;
-info.hasLRTraces = hasLR;
-info.usedLRTraces = useLR;
-info.note = 'True LR FC uses Seg.Left/Right traces whenever available. If labelMap is unsigned, heatmap/export can still be true L/R, but spatial overlay may remain bilateral/unsigned.';
+info.note = 'True LR FC uses Seg.Left/Right only when Seg.labelMap has signed labels.';
 end
 
 function A = fc_repair_signed_label_map(A)
@@ -8334,19 +8322,6 @@ try
         sliceResults(n).statSpace = 'Fisher z';
         sliceResults(n).displayMatrix = R;
         sliceResults(n).displaySpace = 'Pearson r';
-        % ROI_OVERLAY_SLICE_EXPORT_COPY_20260623
-        % Preserve the true 2D ROI/label map for this slice so GroupAnalysis
-        % ROI Overlay Map can update correctly when switching slices.
-        try
-            mapFields = {'labelMap','roiMap','roiAtlas','overlaySliceMap'};
-            for mf = 1:numel(mapFields)
-                f = mapFields{mf};
-                if isfield(rz,f) && isnumeric(rz.(f)) && ~isempty(rz.(f))
-                    sliceResults(n).(f) = int32(round(double(rz.(f))));
-                end
-            end
-        catch
-        end
         if isfield(rz,'timeIdx'), sliceResults(n).timeIdx = rz.timeIdx; else, sliceResults(n).timeIdx = []; end
     end
 catch
@@ -9346,7 +9321,7 @@ for i = 1:nSub
     rec.seedResults = fc_seed_results_auto_v4(s,i);
     rec.allEpochs = fc_all_epochs_auto_v4(s,i);
 
-    fcBundle.subjects = fc_safe_subject_assign_20260623(fcBundle.subjects,i,rec);
+    fcBundle.subjects(i) = rec;
 end
 end
 
@@ -10596,106 +10571,5 @@ try
         if ischar(v), val = v; elseif isstring(v), val = char(v); end
     end
 catch
-end
-end
-
-
-function S = fc_safe_subject_assign_20260623(S,idx,rec)
-% Safe assignment into FC GroupAnalysis bundle subject arrays.
-% MATLAB errors if struct arrays have different fields. This helper unions fields.
-try
-    if nargin < 1 || isempty(S)
-        S = struct([]);
-    end
-    if nargin < 3 || isempty(rec) || ~isstruct(rec)
-        return;
-    end
-    if numel(rec) > 1
-        rec = rec(1);
-    end
-    idx = round(double(idx));
-    if isempty(idx) || ~isfinite(idx) || idx < 1
-        idx = 1;
-    end
-
-    if ~isstruct(S)
-        S = struct([]);
-    end
-
-    fS = {};
-    if ~isempty(S)
-        try, fS = fieldnames(S); catch, fS = {}; end
-    else
-        try, fS = fieldnames(S); catch, fS = {}; end
-    end
-    fR = fieldnames(rec);
-    allF = fc_union_fieldnames_20260623(fS,fR);
-
-    S = fc_struct_add_missing_fields_20260623(S,allF);
-    rec = fc_struct_add_missing_fields_20260623(rec,allF);
-
-    if isempty(S)
-        blank = fc_blank_struct_with_fields_20260623(allF);
-        S = repmat(blank,max(1,idx),1);
-    elseif numel(S) < idx
-        blank = fc_blank_struct_with_fields_20260623(allF);
-        S(numel(S)+1:idx,1) = repmat(blank,idx-numel(S),1);
-    end
-
-    % Make absolutely sure field order matches before assignment.
-    try
-        rec = orderfields(rec,S);
-    catch
-        S = orderfields(S);
-        rec = orderfields(rec);
-    end
-
-    S(idx) = rec;
-catch ME
-    error('FC safe subject assignment failed: %s',ME.message);
-end
-end
-
-function S = fc_struct_add_missing_fields_20260623(S,fields)
-try
-    if isempty(fields), return; end
-    if isempty(S)
-        S = fc_blank_struct_with_fields_20260623(fields);
-        S = S([]);
-        return;
-    end
-    for ii = 1:numel(fields)
-        f = fields{ii};
-        if ~isfield(S,f)
-            [S.(f)] = deal([]);
-        end
-    end
-catch ME
-    error('Could not add missing struct fields: %s',ME.message);
-end
-end
-
-function S = fc_blank_struct_with_fields_20260623(fields)
-S = struct();
-for ii = 1:numel(fields)
-    S.(fields{ii}) = [];
-end
-end
-
-function out = fc_union_fieldnames_20260623(a,b)
-out = {};
-try
-    for ii = 1:numel(a)
-        if ~any(strcmp(out,a{ii}))
-            out{end+1,1} = a{ii}; %#ok<AGROW>
-        end
-    end
-    for ii = 1:numel(b)
-        if ~any(strcmp(out,b{ii}))
-            out{end+1,1} = b{ii}; %#ok<AGROW>
-        end
-    end
-catch
-    out = [a(:); b(:)];
 end
 end

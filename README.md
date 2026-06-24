@@ -8,14 +8,21 @@ This repository was previously developed as **HUMoR / HUMOR-Analysis-Tool**. The
 
 ---
 
-## User Manual PDF
+## User Manual
 
-Open the current user manual directly from GitHub:
+Open the current full updated user manual:
 
-- [View the deConfUSIon fUSI Studio User Manual PDF](docs/deConfUSion_fUSI_Studio_User_Manual_current_2026-06-09.pdf)
-- [Direct PDF download](https://github.com/SonerCgu/deConfUSIon/raw/main/docs/deConfUSion_fUSI_Studio_User_Manual_current_2026-06-09.pdf)
+- [Open the current deConfUSIon fUSI Studio User Manual PDF](docs/deConfUSIon_fUSI_Studio_Full_Updated_User_Manual_2026-06-24.pdf)
+- [Open on GitHub](https://github.com/SonerCgu/deConfUSIon/blob/main/docs/deConfUSIon_fUSI_Studio_Full_Updated_User_Manual_2026-06-24.pdf)
+- [Direct PDF download / browser open](https://github.com/SonerCgu/deConfUSIon/raw/main/docs/deConfUSIon_fUSI_Studio_Full_Updated_User_Manual_2026-06-24.pdf)
 
-The manual explains installation, expected data formats, QC, preprocessing, SCM visualization, masks, atlas registration, segmentation, functional connectivity, group analysis, output folders, and troubleshooting.
+This manual covers installation/startup, expected folder structure, Standardized Analysis workflows A and B, QC, preprocessing, frame rejection, scrubbing, despiking, SCM and Video GUI, mask editing, atlas registration, segmentation, functional connectivity, group analysis, exports, abbreviations, mathematical calculations, and troubleshooting.
+
+In MATLAB you can also open the same manual directly with:
+
+```matlab
+web(fullfile(pwd,'docs','deConfUSIon_fUSI_Studio_Full_Updated_User_Manual_2026-06-24.pdf'),'-browser')
+```
 
 ---
 
@@ -40,7 +47,7 @@ The current source package contains approximately:
 
 - 80 root MATLAB runtime/helper files
 - 2 MATLAB utilities inside `atlas_tools`
-- 1 user manual PDF inside `docs`
+- 1 current full updated PDF user manual inside `docs`
 - atlas support files including `allen_brain_atlas.mat`, `rgb2acr.xlsx`, and `list_selected_regions.txt`
 
 The current code is best suited for:
@@ -101,13 +108,17 @@ Some export workflows may depend on Windows-specific features, Microsoft PowerPo
 
 7. After each preprocessing step, check the active dataset dropdown.
 
-8. Use the Time-Course Viewer and SCM GUI to inspect PSC maps and signal dynamics.
+8. For a guided workflow, use **Standardized Analysis**:
+   - **Option A Fast** ticks only Motor, Imregdemons, Video GUI, Time-Course Viewer, and SCM GUI.
+   - **Option B Detailed** restores the longer current workflow with mask, atlas registration, segmentation, and Functional Connectivity.
 
-9. Use masks, segmentation, and atlas registration only after the dataset passes QC.
+9. Use the Time-Course Viewer, Video GUI, and SCM GUI to inspect PSC maps and signal dynamics.
 
-10. Run Functional Connectivity and Group Analysis only after individual datasets are validated.
+10. Use masks, segmentation, and atlas registration only after the dataset passes QC.
 
-11. Export logs, figures, and analysis outputs for reproducibility.
+11. Run Functional Connectivity and Group Analysis only after individual datasets are validated.
+
+12. Export logs, figures, and analysis outputs for reproducibility.
 
 ---
 
