@@ -271,7 +271,7 @@ titles = { ...
     '5. Visualization', ...
     '6. Coregistration', ...
     '7. Advanced Analysis', ...
-    '8. GLM / Regression', ...
+    '8. SVD / Clutter Filtering', ...
     '9. Velocity Analysis', ...
     '10. Community Analysis'};
 
@@ -279,11 +279,11 @@ buttons = { ...
     {'Load fUSI Data'}, ...
     {'Full QC','Specific QC'}, ...
     {'Frame Rejection','Imregdemons','Scrubbing','Motor'}, ...
-    {'Temporal Smoothing/Subsampling','Filtering','PCA / ICA','Despike'}, ...
+    {'Temporal Smoothing/Subsampling','Filtering','PCA / ICA','Despike','Drift Compensation'}, ...
     {'Time-Course Viewer','SCM GUI','Video GUI','Mask Editor'}, ...
     {'Registration to Atlas','Segmentation'}, ...
     {'Functional connectivity','Group analysis'}, ...
-    {'General Linear Models','Regression'}, ...
+    {'SVD / Clutter Filtering'}, ...
     {'Velocity Maps','Flow / Velocity QC'}, ...
     {'Standardized Analysis','Placeholder Community B'}};
 
@@ -447,6 +447,21 @@ function drawButtons(parent, btns, sectionIndex)
             0.54 0.57 0.38 0.28; ...
             0.08 0.17 0.38 0.28; ...
             0.54 0.17 0.38 0.28];
+    elseif n == 5
+        positions = [ ...
+            0.08 0.68 0.38 0.24; ...
+            0.54 0.68 0.38 0.24; ...
+            0.08 0.38 0.38 0.24; ...
+            0.54 0.38 0.38 0.24; ...
+            0.08 0.08 0.84 0.24];
+    elseif n == 6
+        positions = [ ...
+            0.08 0.68 0.38 0.24; ...
+            0.54 0.68 0.38 0.24; ...
+            0.08 0.38 0.38 0.24; ...
+            0.54 0.38 0.38 0.24; ...
+            0.08 0.08 0.38 0.24; ...
+            0.54 0.08 0.38 0.24];
     else
         positions = zeros(n,4);
         for kk = 1:n
@@ -486,6 +501,8 @@ case 'pca / ica'
     callback = @pcaCallback;
             case 'despike'
                 callback = @despikeCallback;
+            case {'drift compensation','driftcompensation','drift correction'}
+                callback = @driftCompensationCallback;
             case 'time-course viewer'
                 callback = @liveViewerCallback;
             case {'scm','scm gui'}
@@ -504,6 +521,8 @@ case 'pca / ica'
                 callback = @functionalConnectivityCallback;
             case 'group analysis'
                 callback = @groupAnalysisCallback;
+            case {'svd / clutter filtering','svd clutter filtering','svd / clutter filter'}
+                callback = @svdClutterCallback;
         end
 
         btn = uicontrol(parent, ...
@@ -762,19 +781,9 @@ if exist(pscFolder,'dir')
     end
 end
 
-        preFiles = dir(fullfile(P.preprocRoot,'*.mat'));
-        shortPreFolder = fullfile(datasetFolder,'P');
-        if exist(shortPreFolder,'dir') == 7
-            preFiles = [preFiles; dir(fullfile(shortPreFolder,'*.mat'))];
-        end
-        for kk = 1:numel(preFiles)
-            [~,fullName] = fileparts(preFiles(kk).name);
-            safeKey = makeSafeKey(fullName, studio.datasets);
-            studio.datasets.(safeKey) = struct( ...
-                'lazyFile', fullfile(preFiles(kk).folder, preFiles(kk).name), ...
-                'isLazy', true, ...
-                'displayNameFull', fullName);
-        end
+        % Register preprocessing datasets from saved MAT metadata.
+        % Do not use shortened physical filenames as dropdown names.
+        studio = deConfUSIon_add_preproc_lazy_datasets(studio);
 
         guidata(fig, studio);
 
@@ -1353,13 +1362,16 @@ function imregdemonsCallback(~,~)
         if isfield(newData,'bg'),  newData.bg  = []; end
 
         baseStem = getCurrentNamingStem(studio);
-        baseStem = studio_short_output_stem(baseStem, 48);
+
         fullName = sprintf('%s_imreg_%s_n%d_%s', ...
             baseStem, blockMethod, nsub, ts);
 
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
@@ -2009,6 +2021,9 @@ function frameRateCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
@@ -2105,6 +2120,9 @@ fullName = [baseStem '_scrub_' methKey '_' interpKey '_' ts];
         newData.preprocessing = sprintf('Scrubbing (%s, %s)', method, interpMethod);
         newData.scrubbingStats = stats;
         newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
@@ -2274,12 +2292,15 @@ function stepMotorCallback(~,~)
         ts = datestr(now,'yyyymmdd_HHMMSS');
 
         baseStem = getCurrentNamingStem(studio);
-        baseStem = studio_short_output_stem(baseStem, 48);
+
         fullName = [baseStem '_motor_' ts];
 
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
@@ -2380,6 +2401,9 @@ fullName = sprintf('%s_despike_z%s_%s', baseStem, numTag(zthr), ts);
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
@@ -2415,6 +2439,399 @@ fullName = sprintf('%s_despike_z%s_%s', baseStem, numTag(zthr), ts);
     catch ME
         addLog(['DESPIKE ERROR: ' ME.message]);
         errordlg(ME.message,'Despike Failure');
+    end
+
+    setProgramStatus(true);
+end
+
+%% =========================================================
+%  SVD / CLUTTER FILTERING
+% =========================================================
+function svdClutterCallback(~,~)
+
+    studio = guidata(fig);
+
+    if ~studio.isLoaded
+        errordlg('Load data first.','SVD / Clutter Filtering');
+        return;
+    end
+
+    data = getActiveData();
+    if ~isstruct(data) || ~isfield(data,'I') || isempty(data.I)
+        errordlg('Active dataset has no data.I field.','SVD / Clutter Filtering');
+        return;
+    end
+    if ndims(data.I) < 3 || ndims(data.I) > 4
+        errordlg('SVD needs [Y X T] or [Y X Z T] data with time last.', ...
+            'SVD / Clutter Filtering');
+        return;
+    end
+
+    guiOpts = struct();
+    guiOpts.exportPath = studio.exportPath;
+    guiOpts.defaultPercent = 20;
+    guiOpts.mask = [];
+    guiOpts.maskLabel = 'loaded brain mask';
+
+    try
+        if isfield(studio,'mask') && ~isempty(studio.mask)
+            guiOpts.mask = logical(studio.mask);
+            if isfield(studio,'maskIsInclude') && ~studio.maskIsInclude
+                guiOpts.mask = ~guiOpts.mask;
+                guiOpts.maskLabel = 'inverse loaded mask';
+            end
+        elseif isfield(data,'mask') && ~isempty(data.mask)
+            guiOpts.mask = logical(data.mask);
+            guiOpts.maskLabel = 'dataset mask';
+        end
+    catch
+        guiOpts.mask = [];
+    end
+
+    datasetLabel = getDatasetDisplayName(studio,studio.activeDataset);
+    addLog(['Opening SVD / Clutter Filtering QC (Dataset: ' datasetLabel ')']);
+    setProgramStatus(false);
+    drawnow;
+
+    try
+        [I_svd,svdStats,wasApplied] = deConfUSIon_svd_clutter_gui( ...
+            data.I,data.TR,datasetLabel,guiOpts);
+
+        if ~wasApplied
+            addLog('SVD / Clutter Filtering closed without applying.');
+            setProgramStatus(true);
+            return;
+        end
+
+        newData = data;
+        newData.I = single(I_svd);
+        newData.svdClutter = svdStats;
+        newData.preprocessing = sprintf( ...
+            'SVD clutter filtering: rejected %d/%d components (%.1f%%), %s, centering=%s', ...
+            svdStats.nRejected,svdStats.nFrames,svdStats.cutoffPercent, ...
+            svdStats.scope,svdStats.centerMode);
+
+        % PSC and background products from the parent dataset are invalid now.
+        if isfield(newData,'PSC'), newData.PSC = []; end
+        if isfield(newData,'bg'),  newData.bg  = []; end
+
+        % Preserve the complete current processing-chain name.
+        baseStem = getCurrentNamingStem(studio);
+        baseStem = char(string(baseStem));
+        baseStem = strtrim(baseStem);
+
+        % Prevent repeated SVD suffixes when filtering an SVD dataset again.
+        baseStem = regexprep(baseStem, ...
+            '_SVD_p[0-9p]+_k[0-9]+_(perSlice|joint)(_[0-9]+)?$', ...
+            '','ignorecase');
+
+        pctTag = strrep(sprintf('%.1f',svdStats.cutoffPercent),'.','p');
+
+        if strcmpi(svdStats.scope,'per-slice') || ...
+                strcmpi(svdStats.scope,'perslice')
+            scopeTag = 'perSlice';
+        else
+            scopeTag = 'joint';
+        end
+
+        fullName = sprintf('%s_SVD_p%s_k%d_%s', ...
+            baseStem,pctTag,svdStats.nRejected,scopeTag);
+
+        fullName = regexprep(fullName,'[^A-Za-z0-9_\-]+','_');
+        fullName = regexprep(fullName,'_+','_');
+        fullName = regexprep(fullName,'^_|_$','');
+
+        % Keep the original dataset and create a unique new dropdown entry.
+        keyName = makeSafeKey(fullName,studio.datasets);
+
+        newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try
+            newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,'');
+        catch
+            newData.displayNameShort = fullName;
+        end
+        newData.datasetSortTime = now;
+        newData.sourceDatasetKey = studio.activeDataset;
+
+        preFolder = fullfile(studio.exportPath,'Preprocessing');
+        if ~exist(preFolder,'dir'), mkdir(preFolder); end
+        savePath = deConfUSIon_safe_preproc_save_path(preFolder,fullName,keyName,'svd');
+        newData.savedFile = savePath;
+        newData.lazyFile = savePath;
+
+        studio.datasets.(keyName) = newData;
+        studio.activeDataset = keyName;
+        studio.pipeline.preprocDone = true;
+
+        displayNameFull = fullName; %#ok<NASGU>
+        preprocDisplayName = fullName; %#ok<NASGU>
+        datasetSortTime = newData.datasetSortTime; %#ok<NASGU>
+        save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+        try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end
+        try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end
+
+        guidata(fig,studio);
+        refreshDatasetDropdown();
+
+        addLog(sprintf('SVD applied: %.1f%% (%d/%d components), scope=%s, center=%s.', ...
+            svdStats.cutoffPercent,svdStats.nRejected,svdStats.nFrames, ...
+            svdStats.scope,svdStats.centerMode));
+        addLog(['Saved MAT -> ' savePath]);
+        if isfield(svdStats,'qcFile') && ~isempty(svdStats.qcFile)
+            addLog(['SVD QC saved -> ' svdStats.qcFile]);
+        end
+
+    catch ME
+        addLog(['SVD / CLUTTER FILTER ERROR: ' ME.message]);
+        errordlg(ME.message,'SVD / Clutter Filtering Failure');
+    end
+
+    setProgramStatus(true);
+end
+
+%% =========================================================
+%  DRIFT COMPENSATION
+% =========================================================
+function driftCompensationCallback(~,~)
+
+    studio = guidata(fig);
+
+    if ~studio.isLoaded
+        errordlg('Load data first.');
+        return;
+    end
+
+    data = getActiveData();
+
+    if ~isfield(data,'I') || isempty(data.I)
+        errordlg('Active dataset has no image data.','Drift Compensation');
+        return;
+    end
+
+    ndI = ndims(data.I);
+    if ndI < 3
+        errordlg('Drift compensation needs a time series (3D or 4D dataset).','Drift Compensation');
+        return;
+    end
+    nFrames = size(data.I, ndI);
+
+    stdStep = [];
+    try
+        if isappdata(0,'deconf_std_workflow_step'), stdStep = getappdata(0,'deconf_std_workflow_step'); end
+        if isempty(stdStep) && exist('fig','var') && ishghandle(fig) && isappdata(fig,'deconf_std_workflow_step')
+            stdStep = getappdata(fig,'deconf_std_workflow_step');
+        end
+    catch
+    end
+
+    isAuto = isstruct(stdStep) && isfield(stdStep,'name') && ...
+             strcmpi(strtrim(stdStep.name),'Drift Compensation');
+
+    if isAuto
+        cfg = struct();
+        cfg.cancelled   = false;
+        cfg.method      = 'anchor';
+        cfg.polyOrder   = 1;
+        if isfield(stdStep,'base2') && isfinite(double(stdStep.base2))
+            cfg.tailSec = [];   % engine falls back to the last 25% of the run
+        end
+        cfg.vehicleFile = '';
+        b1 = 0; b2 = 60;
+        if isfield(stdStep,'base1') && isfinite(double(stdStep.base1)), b1 = double(stdStep.base1); end
+        if isfield(stdStep,'base2') && isfinite(double(stdStep.base2)), b2 = double(stdStep.base2); end
+        if b2 <= b1, b2 = b1 + 30; end
+        cfg.baselineSec = [b1 b2];
+        tr0 = double(data.TR(end));
+        runSec = max(0,(nFrames-1)*tr0);
+        availableSec = max(tr0,runSec-b2);
+        cfg.injectionSec = b2;
+        cfg.responseSec = min(availableSec, ...
+            min(180,max(120,0.70*availableSec)));
+        addLog(sprintf(['[Standardized] Drift GLM linear: baseline %.6g-%.6g s, ' ...
+            'injection %.6g s, response %.6g s [default capped at 180 s]'], ...
+            b1,b2,cfg.injectionSec,cfg.responseSec));
+    else
+        defs = struct();
+        defs.exportPath = studio.exportPath;
+        defs.TR         = data.TR;
+        defs.nFrames    = nFrames;
+        defs.I          = data.I;
+        cfg = deConfUSIon_drift_dialog(defs);
+    end
+
+    if isempty(cfg) || ~isstruct(cfg) || ~isfield(cfg,'cancelled') || cfg.cancelled
+        addLog('Drift compensation cancelled.');
+        return;
+    end
+
+        addLog(sprintf('Running drift compensation (method = %s)...', cfg.method));
+    setProgramStatus(false);
+    drawnow;
+
+    try
+        ts = datestr(now,'yyyymmdd_HHMMSS');
+
+        opts             = struct();
+        opts.method      = cfg.method;
+        opts.baselineSec = cfg.baselineSec;
+        opts.polyOrder   = cfg.polyOrder;
+        opts.tag         = ts;
+        opts.verbose     = true;
+        driftSkipFields = {'cancelled','method','baselineSec','polyOrder', ...
+                           'vehicleFile','targetFile','rootFolder'};
+        fnAllCfg = fieldnames(cfg);
+        for iOpt = 1:numel(fnAllCfg)
+            fnOpt = fnAllCfg{iOpt};
+            if any(strcmp(fnOpt, driftSkipFields)), continue; end
+            if ~isempty(cfg.(fnOpt))
+                opts.(fnOpt) = cfg.(fnOpt);
+            end
+        end
+
+        if strcmpi(cfg.method,'vehicle')
+            if ~isfield(cfg,'vehicleFile') || isempty(cfg.vehicleFile) || exist(cfg.vehicleFile,'file') ~= 2
+                error('No vehicle scan selected (or file not found).');
+            end
+            addLog(['Loading vehicle scan: ' cfg.vehicleFile]);
+            Sveh = load(cfg.vehicleFile);
+            vehData = [];
+            if isfield(Sveh,'newData') && isstruct(Sveh.newData)
+                vehData = Sveh.newData;
+            else
+                fnv = fieldnames(Sveh);
+                for iv = 1:numel(fnv)
+                    cand = Sveh.(fnv{iv});
+                    if isstruct(cand) && isfield(cand,'I') && ~isempty(cand.I)
+                        vehData = cand; break;
+                    end
+                end
+            end
+            if isempty(vehData) || ~isfield(vehData,'I') || isempty(vehData.I)
+                error('Selected vehicle MAT contains no usable dataset (no .I field).');
+            end
+            opts.vehicleI = vehData.I;
+            if isfield(vehData,'TR') && ~isempty(vehData.TR)
+                opts.vehicleTR = vehData.TR;
+            else
+                opts.vehicleTR = data.TR;
+            end
+        end
+
+        if strcmpi(cfg.method,'reference')
+            if ~isfield(opts,'refMask') || isempty(opts.refMask)
+                refM = [];
+                if isfield(data,'mask') && ~isempty(data.mask), refM = data.mask; end
+                if isempty(refM) && isfield(studio,'mask') && ~isempty(studio.mask), refM = studio.mask; end
+                if ~isempty(refM), opts.refMask = refM; end
+            end
+            if ~isfield(opts,'refMask') || isempty(opts.refMask)
+                error('Reference method needs a region. Pick one in the dialog, or load a mask first.');
+            end
+        elseif any(strcmpi(cfg.method,{'compcor','acompcor','glm','model'}))
+            % For CompCor/GLM, the Mask Editor mask is treated as the brain/functional candidate mask.
+            % It is not silently reused as the aCompCor noise ROI.
+            if ~isfield(opts,'brainMask') || isempty(opts.brainMask)
+                brainM = [];
+                if isfield(data,'mask') && ~isempty(data.mask), brainM = data.mask; end
+                if isempty(brainM) && isfield(studio,'mask') && ~isempty(studio.mask), brainM = studio.mask; end
+                if ~isempty(brainM), opts.brainMask = brainM; end
+            end
+        end
+
+        [outI, stats] = driftcompensation(data.I, data.TR, studio.exportPath, opts);
+
+        addLog(sprintf('Drift range %.4g -> %.4g (%.1f%% reduction).', ...
+            stats.driftRangeBefore, stats.driftRangeAfter, stats.driftReductionPercent));
+
+        if isfield(stats,'qcFile') && ~isempty(stats.qcFile)
+            addLog(['Drift QC saved: ' stats.qcFile]);
+        end
+
+        newData = data;
+        newData.I = single(outI);
+        newData.preprocessing = sprintf('Drift compensation (%s, baseline %.6g-%.6g s)', ...
+            stats.method, stats.baselineSec(1), stats.baselineSec(2));
+        newData.driftStats  = stats;
+        newData.driftMethod = stats.method;
+
+        baseStem = getCurrentNamingStem(studio);
+
+        driftMethod = lower(char(stats.method));
+        po = round(double(stats.polyOrder));
+
+        switch po
+            case 0, orderLabel = 'constant';
+            case 1, orderLabel = 'linear';
+            case 2, orderLabel = 'quadratic';
+            case 3, orderLabel = 'cubic';
+            otherwise, orderLabel = ['order' num2str(po)];
+        end
+
+        driftParts = {['driftComp_' driftMethod]};
+
+        if any(strcmp(driftMethod,{'glm','model','anchor','baseline','poly','robust','irls'}))
+            driftParts{end+1} = orderLabel;
+            driftParts{end+1} = ['o' num2str(po)];
+        end
+
+        driftParts{end+1} = ['b' numTag(stats.baselineSec(1)) '-' numTag(stats.baselineSec(2))];
+
+        if any(strcmp(driftMethod,{'glm','model'}))
+            if isfield(stats,'injectionSec') && ~isempty(stats.injectionSec)
+                driftParts{end+1} = ['inj' numTag(stats.injectionSec(1))];
+            end
+            if isfield(stats,'responseSec') && ~isempty(stats.responseSec)
+                driftParts{end+1} = ['resp' numTag(stats.responseSec(1))];
+            end
+        elseif strcmp(driftMethod,'anchor') && isfield(stats,'tailSec') && numel(stats.tailSec) == 2
+            driftParts{end+1} = ['tail' numTag(stats.tailSec(1)) '-' numTag(stats.tailSec(2))];
+        elseif any(strcmp(driftMethod,{'compcor','acompcor'})) && isfield(stats,'nComp')
+            driftParts{end+1} = ['nC' num2str(round(double(stats.nComp)))];
+        end
+
+        if isfield(stats,'restoreMode') && ~isempty(stats.restoreMode)
+            driftParts{end+1} = ['restore' lower(regexprep(char(stats.restoreMode),'[^A-Za-z0-9]',''))];
+        end
+
+        fullName = [baseStem '_' strjoin(driftParts,'_') '_' ts];
+        fullName = regexprep(fullName,'_+','_');
+
+        keyName = makeSafeKey(fullName, studio.datasets);
+
+        newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
+        newData.datasetSortTime = now;
+        newData.sourceDatasetKey = studio.activeDataset;
+
+        studio.datasets.(keyName) = newData;
+        studio.activeDataset = keyName;
+        studio.pipeline.preprocDone = true;
+
+        preFolder = fullfile(studio.exportPath,'Preprocessing');
+        savePath  = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'drift');
+        newData.savedFile = savePath;
+        newData.lazyFile  = savePath;
+        displayNameFull    = fullName;
+        preprocDisplayName = fullName;
+        try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
+        studio.datasets.(keyName) = newData;
+        save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+        try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch ME2, addLog(['[drift] name commit skipped: ' ME2.message]); end
+        try, deConfUSIon_write_full_display_metadata(savePath,newData); catch ME2, addLog(['[drift] metadata skipped: ' ME2.message]); end
+        addLog(['Saved MAT -> ' savePath]);
+
+        guidata(fig, studio);
+        refreshDatasetDropdown();
+
+        addLog(['Drift compensation complete -> ' fullName]);
+
+    catch ME
+        addLog(['DRIFT COMPENSATION ERROR: ' ME.message]);
+        errordlg(ME.message,'Drift Compensation Failure');
     end
 
     setProgramStatus(true);
@@ -2593,6 +3010,9 @@ function temporalSmoothingCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
@@ -3202,6 +3622,12 @@ end
                 keyName = makeSafeKey(fullName, studio.datasets);
                 newData.preprocessing = 'PCA denoising';
                 newData.displayNameFull = fullName;
+                newData.preprocDisplayName = fullName;
+                newData.HUMOR_fullDisplayName = fullName;
+                try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
                 newData.pcaStats = stats;
@@ -3268,6 +3694,12 @@ end
                 keyName = makeSafeKey(fullName, studio.datasets);
                 newData.preprocessing = 'ICA denoising';
                 newData.displayNameFull = fullName;
+                newData.preprocDisplayName = fullName;
+                newData.HUMOR_fullDisplayName = fullName;
+                try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
                 newData.icaStats = stats;
@@ -3373,6 +3805,9 @@ function computePSCCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
@@ -3537,6 +3972,9 @@ function filteringCallback(~,~)
         keyName = makeSafeKey(fullName, studio.datasets);
 
         newData.displayNameFull = fullName;
+        newData.preprocDisplayName = fullName;
+        newData.HUMOR_fullDisplayName = fullName;
+        try, newData.displayNameShort = deConfUSIon_display_short_name(fullName,newData,''); catch, newData.displayNameShort = fullName; end
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 

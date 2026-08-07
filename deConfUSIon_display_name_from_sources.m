@@ -75,6 +75,12 @@ if ~isempty(regexpi(combo,'(^|[_\s-])motor([_\s-]|$)')) || ~isempty(strfind(low,
     ops{end+1} = 'motor'; %#ok<AGROW>
 end
 
+% Drift compensation.
+driftTag = local_drift_tag(combo, dataStruct);
+if ~isempty(driftTag)
+    ops{end+1} = driftTag; %#ok<AGROW>
+end
+
 % PCA / ICA.
 pcaTag = local_component_tag(combo, dataStruct, 'pca', 'PC');
 if ~isempty(pcaTag), ops{end+1} = pcaTag; end %#ok<AGROW>
@@ -135,6 +141,73 @@ end
 
 label = local_clean(strjoin(parts,'_'));
 if isempty(label), label = 'dataset'; end
+end
+
+function tag = local_drift_tag(combo, dataStruct)
+% Detailed Drift Compensation label for Studio and Load Data dropdowns.
+tag = '';
+try
+    if isstruct(dataStruct) && isfield(dataStruct,'driftStats') && ~isempty(dataStruct.driftStats)
+        st = dataStruct.driftStats;
+        m = 'drift';
+        if isfield(st,'method') && ~isempty(st.method)
+            m = lower(char(st.method));
+        end
+
+        tag = ['driftComp_' m];
+
+        if isfield(st,'polyOrder') && ~isempty(st.polyOrder) && isfinite(double(st.polyOrder))
+            po = round(double(st.polyOrder));
+            switch po
+                case 0, ord = 'constant';
+                case 1, ord = 'linear';
+                case 2, ord = 'quadratic';
+                case 3, ord = 'cubic';
+                otherwise, ord = ['order' num2str(po)];
+            end
+            if any(strcmp(m,{'glm','model','anchor','baseline','poly','robust','irls'}))
+                tag = [tag '_' ord '_o' num2str(po)];
+            end
+        end
+
+        if isfield(st,'baselineSec') && numel(st.baselineSec) == 2
+            tag = [tag '_b' local_numtag(st.baselineSec(1)) '-' local_numtag(st.baselineSec(2))];
+        end
+
+        if any(strcmp(m,{'glm','model'}))
+            if isfield(st,'injectionSec') && ~isempty(st.injectionSec)
+                tag = [tag '_inj' local_numtag(st.injectionSec(1))];
+            end
+            if isfield(st,'responseSec') && ~isempty(st.responseSec)
+                tag = [tag '_resp' local_numtag(st.responseSec(1))];
+            end
+        elseif strcmp(m,'anchor') && isfield(st,'tailSec') && numel(st.tailSec) == 2
+            tag = [tag '_tail' local_numtag(st.tailSec(1)) '-' local_numtag(st.tailSec(2))];
+        elseif any(strcmp(m,{'compcor','acompcor'})) && isfield(st,'nComp')
+            tag = [tag '_nC' num2str(round(double(st.nComp)))];
+        end
+
+        if isfield(st,'restoreMode') && ~isempty(st.restoreMode)
+            tag = [tag '_restore' lower(regexprep(char(st.restoreMode),'[^A-Za-z0-9]',''))];
+        end
+        return;
+    end
+
+    tok = regexp(combo,'DRIFTCOMP[_-]([A-Za-z]+)','tokens','once','ignorecase');
+    if ~isempty(tok)
+        tag = ['driftComp_' lower(tok{1})];
+    elseif ~isempty(regexpi(combo,'(^|[_\s-])driftcomp|drift_comp|driftcompensat'))
+        tag = 'driftComp';
+    end
+catch
+    tag = '';
+end
+end
+
+function s = local_numtag(x)
+s = num2str(x,'%.6g');
+s = strrep(s,'.','p');
+s = strrep(s,'-','m');
 end
 
 function animal = local_animal(combo)
@@ -299,6 +372,7 @@ for i = 1:numel(ops)
     if ~isempty(strfind(low,'framerej')) || ~isempty(strfind(low,'frame_rej')), cls = 'frameRej';
     elseif ~isempty(strfind(low,'scrub')) || ~isempty(strfind(low,'dvars')), cls = 'scrub';
     elseif ~isempty(strfind(low,'despike')), cls = 'despike';
+    elseif ~isempty(strfind(low,'driftcomp')), cls = 'driftComp';
     elseif ~isempty(strfind(low,'pca')), cls = 'pca';
     elseif ~isempty(strfind(low,'ica')), cls = 'ica';
     elseif ~isempty(strfind(low,'imreg')), cls = 'imreg';

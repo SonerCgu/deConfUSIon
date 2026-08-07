@@ -243,77 +243,84 @@ end
 % -------------------------------------------------------------------------
 % Prepare data
 % -------------------------------------------------------------------------
-flatOrig = reshape(double(I), [], nt);
-flatOut  = flatOrig;
+Iflat = reshape(I, [], nt);          % shared read-only view, original class
+nVox  = size(Iflat,1);
 
-gs_before = finiteMeanCols(flatOrig);
+outFlat = single(Iflat);             % one single-precision output copy
 
-% IMPORTANT FIX: remove voxelwise mean before filtering, then restore it.
-% This preserves the anatomical/mean image in the filtered dataset.
-segOrig = flatOrig(:, idx1:idx2);
-voxelMean = finiteMeanRows(segOrig);
-segWork = bsxfun(@minus, segOrig, voxelMean);
-
-% -------------------------------------------------------------------------
-% Optional taper on fluctuation signal only, not on absolute image intensity
-% -------------------------------------------------------------------------
+% taper vector over the filtered segment (same for every voxel)
 taperLength = 0;
+taperVec = ones(1, nFiltFrames);
 if opts.useTaper && (opts.trimStart > 0 || opts.trimEnd > 0)
     taperLength = min(round(2/TR), floor(nFiltFrames/4));
     if taperLength > 5
         try
             g = gausswin(2*taperLength)';
         catch
-            x = linspace(-2.5, 2.5, 2*taperLength);
-            g = exp(-0.5 * x.^2);
+            xx = linspace(-2.5, 2.5, 2*taperLength);
+            g = exp(-0.5 * xx.^2);
         end
         g = g ./ max(g);
-        left  = g(1:taperLength);
-        right = g(taperLength+1:end);
-        segWork(:, 1:taperLength) = bsxfun(@times, segWork(:, 1:taperLength), left);
-        segWork(:, end-taperLength+1:end) = bsxfun(@times, segWork(:, end-taperLength+1:end), right);
+        taperVec(1:taperLength)         = g(1:taperLength);
+        taperVec(end-taperLength+1:end) = g(taperLength+1:end);
     end
 end
 
-% -------------------------------------------------------------------------
-% Chunked filtering
-% -------------------------------------------------------------------------
-nVox = size(segWork,1);
 chunkSize = opts.chunkSize;
-nChunks = ceil(nVox / chunkSize);
+nChunks   = ceil(nVox / chunkSize);
 nFallbackChunks = 0;
-nFailedChunks = 0;
+nFailedChunks   = 0;
+
+sumBefore = zeros(1, nt); cntBefore = zeros(1, nt);
+sumAfter  = zeros(1, nt); cntAfter  = zeros(1, nt);
 
 for c = 1:nChunks
     s = (c-1)*chunkSize + 1;
     e = min(c*chunkSize, nVox);
 
-    block = segWork(s:e,:);
-    valid = all(isfinite(block),2) & std(block,0,2) > 1e-8;
+    rawChunk = double(Iflat(s:e, :));          % double only this chunk
 
+    mb = isfinite(rawChunk);
+    tb = rawChunk; tb(~mb) = 0;
+    sumBefore = sumBefore + sum(tb,1);
+    cntBefore = cntBefore + sum(mb,1);
+
+    seg   = rawChunk(:, idx1:idx2);
+    vmask = isfinite(seg);
+    segz  = seg; segz(~vmask) = 0;
+    vcnt  = sum(vmask,2); vcnt(vcnt==0) = 1;
+    voxelMean = sum(segz,2) ./ vcnt;
+
+    work = bsxfun(@minus, seg, voxelMean);
+    work = bsxfun(@times, work, taperVec);
+
+    valid = all(isfinite(work),2) & std(work,0,2) > 1e-8;
     if any(valid)
-        [blockValid, usedFallback, failedBlock] = filterBlock(block(valid,:), b, a, useSinglePassFallback);
-        block(valid,:) = blockValid;
-        if usedFallback
-            nFallbackChunks = nFallbackChunks + 1;
-        end
-        if failedBlock
-            nFailedChunks = nFailedChunks + 1;
-        end
+        [wv, usedFb, failedB] = filterBlock(work(valid,:), b, a, useSinglePassFallback);
+        work(valid,:) = wv;
+        if usedFb,  nFallbackChunks = nFallbackChunks + 1; end
+        if failedB, nFailedChunks   = nFailedChunks + 1;   end
     end
 
-    segWork(s:e,:) = block;
+    if opts.restoreMean
+        seg = bsxfun(@plus, work, voxelMean);
+    else
+        seg = work;
+    end
+
+    outFlat(s:e, idx1:idx2) = single(seg);
+
+    oc  = double(outFlat(s:e, :));
+    ma  = isfinite(oc);
+    ta  = oc; ta(~ma) = 0;
+    sumAfter = sumAfter + sum(ta,1);
+    cntAfter = cntAfter + sum(ma,1);
 end
 
-if opts.restoreMean
-    flatOut(:, idx1:idx2) = bsxfun(@plus, segWork, voxelMean);
-else
-    flatOut(:, idx1:idx2) = segWork;
-end
+I_filt = reshape(outFlat, dims);
 
-I_filt = reshape(flatOut, dims);
-
-gs_after = finiteMeanCols(flatOut);
+gs_before = sumBefore ./ max(cntBefore,1); gs_before(cntBefore==0) = NaN;
+gs_after  = sumAfter  ./ max(cntAfter,1);  gs_after(cntAfter==0)  = NaN;
 t = (0:nt-1) * TR;
 
 % -------------------------------------------------------------------------

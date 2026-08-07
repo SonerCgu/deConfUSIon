@@ -1066,7 +1066,7 @@ function refreshDatasetDropdown()
     end
 
     % Always select latest analysis output. If only raw exists, select latest raw.
-    analysisExpr = 'frameRej|framerej|scrub|despike|despiking|despiked|motor|pca|ica|imreg|BPF|LPF|HPF|tsmooth|temporalSmooth|submean|submed|subsample|filter';
+    analysisExpr = 'frameRej|framerej|scrub|despike|despiking|despiked|motor|pca|ica|imreg|BPF|LPF|HPF|tsmooth|temporalSmooth|submean|submed|subsample|filter|driftComp|driftcomp|DRIFTCOMP';
     idx = [];
     bestTime = -Inf;
     for i = 1:numel(keys)
@@ -1772,14 +1772,18 @@ function name = getDatasetDisplayName(studio, key)
         if isstruct(d)
             if isfield(d,'lazyFile') && ~isempty(d.lazyFile), matFile = d.lazyFile; end
             if isempty(matFile) && isfield(d,'savedFile') && ~isempty(d.savedFile), matFile = d.savedFile; end
-            if isfield(d,'HUMOR_fullDisplayName') && ~isempty(d.HUMOR_fullDisplayName)
+
+            if isfield(d,'displayNameShort') && ~isempty(d.displayNameShort)
+                name = d.displayNameShort;
+            elseif isfield(d,'HUMOR_fullDisplayName') && ~isempty(d.HUMOR_fullDisplayName)
                 name = d.HUMOR_fullDisplayName;
             elseif isfield(d,'displayNameFull') && ~isempty(d.displayNameFull)
                 name = d.displayNameFull;
             elseif isfield(d,'preprocDisplayName') && ~isempty(d.preprocDisplayName)
                 name = d.preprocDisplayName;
             end
-            name = deConfUSIon_display_name_from_sources(name,d,matFile);
+
+            name = deConfUSIon_display_short_name(name,d,matFile);
         end
     catch
         name = key;

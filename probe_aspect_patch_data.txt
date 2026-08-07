@@ -1,0 +1,39 @@
+<<<PATCH V|play_fusi_video_final.m|3D PROBE ASPECT FIX>>>
+<<<FIND>>>
+    axis(ax,'image');
+    axis(ax,'off');
+end
+<<<REPLACE>>>
+    axis(ax,'image');
+    axis(ax,'off');
+    % ===== 3D PROBE ASPECT FIX (nZ>1 only; 2D / 2D+motor untouched) =====
+    if exist('nZ','var') && nZ > 1
+        probeViewAspect = 1.0;   % <-- EDIT: >1 makes the tall probe image wider/shorter
+        if exist('par','var') && isstruct(par) && isfield(par,'probeViewAspect') ...
+                && isscalar(par.probeViewAspect) && isfinite(par.probeViewAspect) && par.probeViewAspect > 0
+            probeViewAspect = double(par.probeViewAspect);
+        end
+        set(ax,'DataAspectRatio',[1 probeViewAspect 1]);
+    end
+end
+<<<END>>>
+
+<<<PATCH S|SCM_gui.m|3D PROBE ASPECT FIX>>>
+<<<FIND>>>
+axis(ax, 'image');
+axis(ax, 'off');
+set(ax, 'YDir', 'reverse');
+<<<REPLACE>>>
+axis(ax, 'image');
+axis(ax, 'off');
+% ===== 3D PROBE ASPECT FIX (nZ>1 only; 2D untouched) =====
+if exist('nZ','var') && nZ > 1
+    probeViewAspect = 1.0;   % <-- EDIT: >1 makes the tall probe image wider/shorter
+    if exist('par','var') && isstruct(par) && isfield(par,'probeViewAspect') ...
+            && isscalar(par.probeViewAspect) && isfinite(par.probeViewAspect) && par.probeViewAspect > 0
+        probeViewAspect = double(par.probeViewAspect);
+    end
+    set(ax, 'DataAspectRatio', [1 probeViewAspect 1]);
+end
+set(ax, 'YDir', 'reverse');
+<<<END>>>
