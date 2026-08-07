@@ -1,282 +1,231 @@
 function studio = deConfUSIon_add_preproc_lazy_datasets(studio)
-% Scanner for saved Preprocessing/P MATs. Repairs abbreviated names.
+% Fast scanner for saved Preprocessing/P datasets.
+%
+% Performance rules:
+%   - never load newData during Studio startup
+%   - never write into preprocessing MAT files while refreshing dropdowns
+%   - read only small top-level naming variables
+%   - cache metadata by filename, byte size and modification time
 
 if nargin < 1 || ~isstruct(studio), return; end
-if ~isfield(studio,'datasets') || isempty(studio.datasets), studio.datasets = struct(); end
+if ~isfield(studio,'datasets') || isempty(studio.datasets)
+    studio.datasets = struct();
+end
 
 folders = {};
 try
     if isfield(studio,'exportPath') && ~isempty(studio.exportPath)
-        folders{end+1} = fullfile(studio.exportPath,'Preprocessing');
-        folders{end+1} = fullfile(studio.exportPath,'P');
+        folders{end+1} = fullfile(studio.exportPath,'Preprocessing'); %#ok<AGROW>
+        folders{end+1} = fullfile(studio.exportPath,'P'); %#ok<AGROW>
     end
 catch
 end
 
-allFiles = [];
-for f = 1:numel(folders)
-    try
-        if exist(folders{f},'dir') == 7
-            d = dir(fullfile(folders{f},'*.mat'));
-            allFiles = [allFiles; d]; %#ok<AGROW>
-        end
-    catch
-    end
-end
-if isempty(allFiles), return; end
-[~,ord] = sort([allFiles.datenum],'ascend');
-allFiles = allFiles(ord);
+folders = local_unique_folders(folders);
+registered = local_registered_paths(studio);
 
-for kk = 1:numel(allFiles)
-    matFile = fullfile(allFiles(kk).folder, allFiles(kk).name);
-    if local_registered(studio, matFile), continue; end
+for ff = 1:numel(folders)
+    folder = folders{ff};
+    if exist(folder,'dir') ~= 7, continue; end
 
-    [~,stem] = fileparts(allFiles(kk).name);
-    displayName = stem;
-    sortTime = allFiles(kk).datenum;
+    files = dir(fullfile(folder,'*.mat'));
+    if isempty(files), continue; end
 
-    try
-        info = whos('-file', matFile);
-    catch
-        % Corrupt/partial MAT: skip silently.
-        continue;
-    end
-    names = {info.name};
+    cacheFile = fullfile(folder,'.deconfusion_name_index.cache');
+    cache = struct('name',{},'bytes',{},'datenum',{}, ...
+        'displayNameFull',{},'displayNameShort',{},'sortTime',{});
 
-    try
-        vars = {};
-        if ismember('HUMOR_fullDisplayName',names), vars{end+1} = 'HUMOR_fullDisplayName'; end %#ok<AGROW>
-        if ismember('displayNameFull',names), vars{end+1} = 'displayNameFull'; end %#ok<AGROW>
-        if ismember('preprocDisplayName',names), vars{end+1} = 'preprocDisplayName'; end %#ok<AGROW>
-        if ismember('datasetSortTime',names), vars{end+1} = 'datasetSortTime'; end %#ok<AGROW>
-        if ~isempty(vars)
-            S = load(matFile, vars{:});
-            if isfield(S,'HUMOR_fullDisplayName') && ~isempty(S.HUMOR_fullDisplayName)
-                displayName = char(S.HUMOR_fullDisplayName);
-            elseif isfield(S,'displayNameFull') && ~isempty(S.displayNameFull)
-                displayName = char(S.displayNameFull);
-            elseif isfield(S,'preprocDisplayName') && ~isempty(S.preprocDisplayName)
-                displayName = char(S.preprocDisplayName);
-            end
-            if isfield(S,'datasetSortTime') && ~isempty(S.datasetSortTime)
-                sortTime = S.datasetSortTime;
-            end
-        end
-    catch
-    end
-
-    displayName = deConfUSIon_best_visible_dataset_name(displayName, [], matFile);
-
-    if local_needs_newdata(displayName) && ismember('newData',names)
+    if exist(cacheFile,'file') == 2
         try
-            S2 = load(matFile,'newData');
-            if isfield(S2,'newData') && isstruct(S2.newData)
-                displayName = deConfUSIon_best_visible_dataset_name(displayName, S2.newData, matFile);
-                try, deConfUSIon_commit_full_display_name(matFile, S2.newData, displayName); catch, end
+            C = load(cacheFile,'cache','-mat');
+            if isfield(C,'cache') && isstruct(C.cache)
+                cache = C.cache;
             end
         catch
+            cache = struct('name',{},'bytes',{},'datenum',{}, ...
+                'displayNameFull',{},'displayNameShort',{},'sortTime',{});
         end
     end
 
-    key = local_key(displayName, studio.datasets);
-    studio.datasets.(key) = struct('lazyFile',matFile,'isLazy',true,'displayNameFull',displayName,'preprocDisplayName',displayName,'datasetSortTime',sortTime);
+    cacheDirty = false;
+
+    for kk = 1:numel(files)
+        matFile = fullfile(files(kk).folder,files(kk).name);
+
+        if local_is_registered(registered,matFile)
+            continue;
+        end
+
+        [~,stem] = fileparts(files(kk).name);
+        displayNameFull = stem;
+        displayNameShort = stem;
+        sortTime = files(kk).datenum;
+
+        cacheHit = 0;
+        for cc = 1:numel(cache)
+            sameName = strcmpi(cache(cc).name,files(kk).name);
+            sameBytes = isequal(double(cache(cc).bytes),double(files(kk).bytes));
+            sameTime = abs(double(cache(cc).datenum)-double(files(kk).datenum)) < 1e-10;
+            if sameName && sameBytes && sameTime
+                cacheHit = cc;
+                break;
+            end
+        end
+
+        if cacheHit > 0
+            try, displayNameFull = cache(cacheHit).displayNameFull; catch, end
+            try, displayNameShort = cache(cacheHit).displayNameShort; catch, end
+            try, sortTime = cache(cacheHit).sortTime; catch, end
+        else
+            % Read only tiny top-level metadata variables.
+            % Never read newData here.
+            oldWarning = warning('off','all');
+            try
+                S = load(matFile, ...
+                    'HUMOR_fullDisplayName', ...
+                    'displayNameFull', ...
+                    'displayNameShort', ...
+                    'preprocDisplayName', ...
+                    'datasetSortTime');
+            catch
+                S = struct();
+            end
+            warning(oldWarning);
+
+            try
+                if isfield(S,'HUMOR_fullDisplayName') && ~isempty(S.HUMOR_fullDisplayName)
+                    displayNameFull = char(S.HUMOR_fullDisplayName);
+                elseif isfield(S,'displayNameFull') && ~isempty(S.displayNameFull)
+                    displayNameFull = char(S.displayNameFull);
+                elseif isfield(S,'preprocDisplayName') && ~isempty(S.preprocDisplayName)
+                    displayNameFull = char(S.preprocDisplayName);
+                end
+            catch
+                displayNameFull = stem;
+            end
+
+            try
+                if isfield(S,'displayNameShort') && ~isempty(S.displayNameShort)
+                    displayNameShort = char(S.displayNameShort);
+                else
+                    displayNameShort = deConfUSIon_display_short_name( ...
+                        displayNameFull,[],'');
+                end
+            catch
+                displayNameShort = displayNameFull;
+            end
+
+            try
+                if isfield(S,'datasetSortTime') && ...
+                        ~isempty(S.datasetSortTime) && ...
+                        isnumeric(S.datasetSortTime)
+                    sortTime = double(S.datasetSortTime(1));
+                end
+            catch
+            end
+
+            % Remove stale cache records for the same filename.
+            keep = true(1,numel(cache));
+            for cc = 1:numel(cache)
+                if strcmpi(cache(cc).name,files(kk).name)
+                    keep(cc) = false;
+                end
+            end
+            cache = cache(keep);
+
+            entry = struct();
+            entry.name = files(kk).name;
+            entry.bytes = double(files(kk).bytes);
+            entry.datenum = double(files(kk).datenum);
+            entry.displayNameFull = displayNameFull;
+            entry.displayNameShort = displayNameShort;
+            entry.sortTime = sortTime;
+            cache(end+1) = entry; %#ok<AGROW>
+            cacheDirty = true;
+        end
+
+        if isempty(displayNameFull), displayNameFull = stem; end
+        if isempty(displayNameShort), displayNameShort = displayNameFull; end
+
+        key = local_key(displayNameFull,studio.datasets);
+
+        studio.datasets.(key) = struct( ...
+            'lazyFile',matFile, ...
+            'isLazy',true, ...
+            'displayNameFull',displayNameFull, ...
+            'displayNameShort',displayNameShort, ...
+            'preprocDisplayName',displayNameFull, ...
+            'datasetSortTime',sortTime);
+
+        registered{end+1} = matFile; %#ok<AGROW>
+    end
+
+    if cacheDirty
+        try
+            save(cacheFile,'cache','-mat');
+        catch
+            % Cache failure must never prevent loading the dataset.
+        end
+    end
 end
 end
 
-function tf = local_needs_newdata(s)
-low = lower(s);
-tf = false;
-if isempty(s), tf = true; return; end
-if ~isempty(strfind(s,'...')), tf = true; return; end
-if ~isempty(strfind(low,'preproc_preproc')), tf = true; return; end
-if ~isempty(regexp(low,'(^|_)preproc_[0-9]','once')), tf = true; return; end
-if ~isempty(regexp(low,'_[0-9a-f]{8}($|_)','once')), tf = true; return; end
-% Names without timestamp are probably incomplete.
-if isempty(regexp(low,'(?:19|20)\d{6}_\d{6}','once')), tf = true; return; end
+function folders = local_unique_folders(folders)
+out = {};
+for i = 1:numel(folders)
+    f = folders{i};
+    if isempty(f), continue; end
+    found = false;
+    for j = 1:numel(out)
+        if strcmpi(out{j},f), found = true; break; end
+    end
+    if ~found, out{end+1} = f; end %#ok<AGROW>
+end
+folders = out;
 end
 
-function tf = local_registered(studio, matFile)
-tf = false;
+function registered = local_registered_paths(studio)
+registered = {};
 try
     keys = fieldnames(studio.datasets);
     for i = 1:numel(keys)
         d = studio.datasets.(keys{i});
-        if isstruct(d)
-            if isfield(d,'lazyFile') && strcmpi(char(d.lazyFile),char(matFile)), tf = true; return; end
-            if isfield(d,'savedFile') && strcmpi(char(d.savedFile),char(matFile)), tf = true; return; end
+        if ~isstruct(d), continue; end
+        if isfield(d,'lazyFile') && ~isempty(d.lazyFile)
+            registered{end+1} = char(d.lazyFile); %#ok<AGROW>
+        end
+        if isfield(d,'savedFile') && ~isempty(d.savedFile)
+            registered{end+1} = char(d.savedFile); %#ok<AGROW>
         end
     end
 catch
 end
 end
 
-function key = local_key(name, datasets)
-key = regexprep(char(name),'[^A-Za-z0-9_]','_');
+function tf = local_is_registered(registered,matFile)
+tf = false;
+for i = 1:numel(registered)
+    if strcmpi(registered{i},matFile)
+        tf = true;
+        return;
+    end
+end
+end
+
+function key = local_key(name,datasets)
+try, name = char(name); catch, name = 'dataset'; end
+key = regexprep(name,'[^A-Za-z0-9_]','_');
 key = regexprep(key,'_+','_');
 key = regexprep(key,'^_+|_+$','');
 if isempty(key), key = 'dataset'; end
 if ~isletter(key(1)), key = ['d_' key]; end
 if numel(key) > 75, key = key(1:75); end
-base = key; n = 1;
+base = key;
+n = 1;
 while isfield(datasets,key)
-    key = sprintf('%s_v%d',base,n);
-    if numel(key) > 83, key = [base(1:75) sprintf('_v%d',n)]; end
+    suffix = sprintf('_v%d',n);
+    maxBase = max(1,83-numel(suffix));
+    key = [base(1:min(numel(base),maxBase)) suffix];
     n = n + 1;
 end
 end
-
-
-%% ------------------------------------------------------------------------
-%% Integrated helper from deConfUSIon_commit_full_display_name.m on 09-Jun-2026 16:52:19
-%% Original file archived in backups/deConfUSIon_phase6_fast_cleanup_*/integrated_helpers
-%% ------------------------------------------------------------------------
-
-function fullName = deConfUSIon_commit_full_display_name(matFile, dataStruct, fallbackName)
-% Append exact full display name into top-level MAT metadata.
-
-if nargin < 1, matFile = ''; end
-if nargin < 2, dataStruct = []; end
-if nargin < 3 || isempty(fallbackName), fallbackName = 'dataset'; end
-try, matFile = char(matFile); catch, matFile = ''; end
-
-fullName = deConfUSIon_best_visible_dataset_name(fallbackName, dataStruct, matFile);
-
-if ~isempty(matFile) && exist(matFile,'file') == 2
-    try
-        HUMOR_fullDisplayName = fullName; %#ok<NASGU>
-        displayNameFull = fullName; %#ok<NASGU>
-        preprocDisplayName = fullName; %#ok<NASGU>
-        datasetSortTime = now; %#ok<NASGU>
-        save(matFile,'HUMOR_fullDisplayName','displayNameFull','preprocDisplayName','datasetSortTime','-append');
-    catch
-    end
-end
-end
-
-
-
-%% ------------------------------------------------------------------------
-%% Integrated tiny helper from deConfUSIon_best_visible_dataset_name.m on 09-Jun-2026 16:59:35
-%% ------------------------------------------------------------------------
-
-function name = deConfUSIon_best_visible_dataset_name(fallbackName, dataStruct, matFile)
-% Prefer exact full name saved inside dataset struct. Never abbreviate.
-
-if nargin < 1 || isempty(fallbackName), fallbackName = 'dataset'; end
-if nargin < 2, dataStruct = []; end
-if nargin < 3, matFile = ''; end
-
-try, fallbackName = char(fallbackName); catch, fallbackName = 'dataset'; end
-try, matFile = char(matFile); catch, matFile = ''; end
-
-cands = {};
-
-% Highest priority: exact fields inside loaded dataset struct.
-try
-    if isstruct(dataStruct)
-        exactFields = {'HUMOR_fullDisplayName','displayNameFull','preprocDisplayName','fullDisplayName','sourceDisplayName'};
-        for i = 1:numel(exactFields)
-            f = exactFields{i};
-            if isfield(dataStruct,f) && ~isempty(dataStruct.(f))
-                try, cands{end+1} = char(dataStruct.(f)); catch, end %#ok<AGROW>
-            end
-        end
-    end
-catch
-end
-
-% Lower priority: top-level/fallback string.
-cands{end+1} = fallbackName;
-
-best = '';
-bestScore = -Inf;
-for i = 1:numel(cands)
-    s = local_clean_exact(cands{i});
-    if isempty(s), continue; end
-    score = local_score(s);
-    if score > bestScore
-        best = s;
-        bestScore = score;
-    end
-end
-
-% If best is still an internal/short name, reconstruct from helper.
-if local_is_bad(best)
-    try
-        if exist('deConfUSIon_ordered_chain_label','file') == 2
-            best = deConfUSIon_ordered_chain_label([best '_' matFile], dataStruct, matFile);
-        elseif exist('deConfUSIon_ordered_chain_label','file') == 2
-            best = deConfUSIon_ordered_chain_label([best '_' matFile], dataStruct, matFile);
-        end
-    catch
-    end
-end
-
-name = local_clean_exact(best);
-if isempty(name), name = 'dataset'; end
-end
-
-function tf = local_is_bad(s)
-try, s = char(s); catch, tf = true; return; end
-low = lower(s);
-tf = false;
-if isempty(s), tf = true; return; end
-if ~isempty(strfind(s,'...')), tf = true; return; end
-if ~isempty(strfind(low,'preproc_preproc')), tf = true; return; end
-if ~isempty(regexp(low,'(^|_)preproc_[0-9]','once')), tf = true; return; end
-if ~isempty(regexp(low,'_[0-9a-f]{8}($|_)','once')), tf = true; return; end
-end
-
-function score = local_score(s)
-low = lower(s);
-score = numel(s) * 0.05;
-if isempty(strfind(s,'...')), score = score + 200; else, score = score - 1000; end
-if ~isempty(regexp(low,'(?:^|_)\d{3,6}(?:_|$)','once')), score = score + 30; end
-if ~isempty(regexp(low,'sess\d+','once')), score = score + 30; end
-if ~isempty(regexp(low,'(?:19|20)\d{6}_\d{6}','once')), score = score + 50; end
-if ~isempty(strfind(low,'motor')), score = score + 25; end
-if ~isempty(strfind(low,'pca')), score = score + 50; end
-if ~isempty(strfind(low,'ica')), score = score + 50; end
-if ~isempty(strfind(low,'imreg')), score = score + 45; end
-if ~isempty(strfind(low,'bpf')) || ~isempty(strfind(low,'lpf')) || ~isempty(strfind(low,'hpf')), score = score + 30; end
-if ~isempty(strfind(low,'preproc_preproc')), score = score - 800; end
-if ~isempty(regexp(low,'_[0-9a-f]{8}($|_)','once')), score = score - 400; end
-end
-
-function out = local_clean_exact(in)
-try, out = char(in); catch, out = ''; end
-out = strrep(out,'...','_');
-out = regexprep(out,'\.nii\.gz$','','ignorecase');
-out = regexprep(out,'\.nii$','','ignorecase');
-out = regexprep(out,'\.mat$','','ignorecase');
-out = regexprep(out,'^preproc_preproc_','','ignorecase');
-out = regexprep(out,'^preproc_','','ignorecase');
-out = regexprep(out,'_0000[0-9a-fA-F]{4,}','');
-out = regexprep(out,'_[0-9a-fA-F]{8}(?=_|$)','');
-out = regexprep(out,'_+','_');
-out = regexprep(out,'^_+|_+$','');
-end
-
-
-
-%% ------------------------------------------------------------------------
-%% Integrated tiny helper from deConfUSIon_ordered_chain_label.m on 09-Jun-2026 16:59:37
-%% ------------------------------------------------------------------------
-
-function label = deConfUSIon_ordered_chain_label(nameIn, dataStruct, matFile)
-% Compatibility wrapper for the Studio display-name builder.
-if nargin < 1 || isempty(nameIn), nameIn = 'dataset'; end
-if nargin < 2, dataStruct = []; end
-if nargin < 3, matFile = ''; end
-try
-    label = deConfUSIon_display_name_from_sources(nameIn, dataStruct, matFile);
-catch
-    try, label = char(nameIn); catch, label = 'dataset'; end
-    label = strrep(label,'...','_');
-    label = regexprep(label,'\.mat$','','ignorecase');
-    label = regexprep(label,'_+','_');
-    label = regexprep(label,'^_+|_+$','');
-    if isempty(label), label = 'dataset'; end
-end
-end
-

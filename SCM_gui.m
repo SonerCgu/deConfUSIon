@@ -347,6 +347,15 @@ colBtnDanger  = [0.72 0.18 0.18];
 ax = axes('Parent', fig, 'Units', 'pixels');
 axis(ax, 'image');
 axis(ax, 'off');
+% ===== 3D PROBE ASPECT FIX (nZ>1 only; 2D untouched) =====
+if exist('nZ','var') && nZ > 1
+    probeViewAspect = 1.0;   % <-- EDIT: >1 makes the tall probe image wider/shorter
+    if exist('par','var') && isstruct(par) && isfield(par,'probeViewAspect') ...
+            && isscalar(par.probeViewAspect) && isfinite(par.probeViewAspect) && par.probeViewAspect > 0
+        probeViewAspect = double(par.probeViewAspect);
+    end
+    set(ax, 'DataAspectRatio', [1 probeViewAspect 1]);
+end
 set(ax, 'YDir', 'reverse');
 hold(ax, 'on');
 
@@ -585,6 +594,7 @@ txtVlv = mkValBox(pUnderlay, sprintf('%d', uState.conectLev));
 btnLoadUnder = mkBtn(pUnderlay, 'LOAD NEW UNDERLAY', @loadNewUnderlayCB, colBtnNeutral, 12);
 btnWarpAtlas = mkBtn(pUnderlay, 'WARP FUNCTIONAL TO ATLAS', @warpFunctionalToAtlasCB, colBtnExport, 12);
 btnResetWarp = mkBtn(pUnderlay, 'RESET TO NATIVE', @resetWarpToNativeCB, colBtnNeutral, 12);
+btnSigUnder  = mkBtn(pUnderlay, 'SIGNAL UNDERLAY (sharp)', @signalUnderlayCB, colBtnNeutral, 12);
 
 %% ---------------- Time-course axis controls ----------------
 tcAxisBar = uipanel('Parent', fig, 'Units', 'pixels', 'BorderType', 'none', ...
@@ -862,6 +872,8 @@ function layoutUnder(w, h)
     set(btnWarpAtlas, 'Position', [xLabel y (w-2*pad) wideBtnHLoc]);
     y = y - (wideBtnHLoc + gapLoc);
     set(btnResetWarp, 'Position', [xLabel y (w-2*pad) wideBtnHLoc]);
+    y = y - (wideBtnHLoc + gapLoc);
+    set(btnSigUnder, 'Position', [xLabel y (w-2*pad) wideBtnHLoc]);
 
     function setRowSliderUnder(lbl, sl, valbox)
         set(lbl, 'Position', [xLabel y wLabel rowHLoc]);
@@ -4966,6 +4978,46 @@ function [U, meta] = extractUnderlayFromMatStruct(S)
         end
     end
     error('MAT underlay file has no usable numeric variable.');
+end
+
+function signalUnderlayCB(~,~)
+    choices = {'P90 (sharp, clean)','Mean first 10 vols','First volume','Max'};
+    [selIx, okSel] = listdlg('PromptString','Build underlay from signal:', ...
+        'SelectionMode','single','ListString',choices,'InitialValue',1, ...
+        'Name','Signal underlay','ListSize',[220 90]);
+    if ~okSel || isempty(selIx), return; end
+    dimT = ndims(PSC);
+    Tf = size(PSC, dimT);
+    if Tf > 600
+        idxT = 1:ceil(Tf/600):Tf;
+        subsSub = repmat({':'},1,dimT); subsSub{dimT} = idxT;
+        Psub = double(PSC(subsSub{:}));
+    else
+        Psub = double(PSC);
+    end
+    dt2 = ndims(Psub);
+    switch selIx
+        case 1
+            Is = sort(Psub, dt2); nq = size(Is, dt2);
+            kq = max(1, min(nq, round(0.90*nq)));
+            subsK = repmat({':'},1,dt2); subsK{dt2} = kq;
+            U = Is(subsK{:});
+        case 2
+            nf = max(1, min(size(PSC,dimT), 10));
+            subsN = repmat({':'},1,dimT); subsN{dimT} = 1:nf;
+            U = mean(double(PSC(subsN{:})), dimT);
+        case 3
+            subs1 = repmat({':'},1,dimT); subs1{dimT} = 1;
+            U = double(PSC(subs1{:}));
+        otherwise
+            U = max(Psub, [], dt2);
+    end
+    U = squeeze(U);
+    bg = validateAndPrepareUnderlay(U, 'signal projection');
+    applyUnderlayMeta(struct(), bg);
+    origBG = bg;
+    try, set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z))); catch, end
+    try, set(info1, 'String', ['Underlay from signal: ' choices{selIx}]); catch, end
 end
 
 function U = validateAndPrepareUnderlay(U, fullf)

@@ -84,6 +84,11 @@ underSrc = 1;
 underSrcLabel = 'Default(bg)';
 bgMeanFull   = [];
 bgMedianFull = [];
+bgMaxFull    = [];
+bgP90Full    = [];
+bgFirstFull  = [];
+bgFirstNFull = [];
+underlayFirstN = 10;   % <- Mean first N volume count
 bgFileFull   = [];
 
 % native/original snapshots (used by atlas warp + reset)
@@ -495,7 +500,7 @@ btnSaveInterp = mkBtn(pVideo,'Save interpolated data (.mat)',@saveInterpolatedMa
 % UNDERLAY TAB
 % -----------------------------
 lblUSrc = mkLbl(pUnder,'Underlay source');
-popUSrc = mkPopup(pUnder,{'1) Default(bg)','2) Mean(I)','3) Median(I) robust'},underSrc,@underSrcChanged);
+popUSrc = mkPopup(pUnder,{'1) Default(bg)','2) Mean(I)','3) Median(I) robust','4) Max(I) sharp','5) P90(I) sharp','6) First vol','7) Mean first N'},underSrc,@underSrcChanged);
 
 lblUMode = mkLbl(pUnder,'Underlay mode');
 popUMode = mkPopup(pUnder,{'1) Legacy(mat2gray)','2) Robust(1-99%)','3) Video robust(0.5-99.5%)','4) Vessel enhance'},uState.mode,@underModeChanged);
@@ -1537,6 +1542,10 @@ end
     if underSrc == 1, underSrcLabel = 'Default(bg)'; end
     if underSrc == 2, underSrcLabel = 'Mean(I)'; end
     if underSrc == 3, underSrcLabel = 'Median(I)'; end
+    if underSrc == 4, underSrcLabel = 'Max(I)'; end
+    if underSrc == 5, underSrcLabel = 'P90(I)'; end
+    if underSrc == 6, underSrcLabel = 'FirstVol'; end
+    if underSrc == 7, underSrcLabel = 'MeanFirstN'; end
     statusLine = '';
     render();
 end
@@ -2053,7 +2062,23 @@ function saveVideo(~,~)
         axis(exportAx,'image');
         axis(exportAx,'off');
 
-        for zz = 1:max(1,nZ)
+        % ===== EXPORT SLICE RANGE (nZ>1 only) =====
+        zFrom = 1; zTo = max(1,nZ);
+        if nZ > 1
+            answ = inputdlg({sprintf('First slice (1-%d):',nZ), sprintf('Last slice (1-%d):',nZ)}, ...
+                'Export slice range', 1, {'1', num2str(nZ)});
+            if isempty(answ)
+                statusLine = 'Export cancelled.'; render(); return;
+            end
+            zFrom = round(str2double(answ{1}));
+            zTo   = round(str2double(answ{2}));
+            if ~isfinite(zFrom) || ~isfinite(zTo) || zFrom < 1 || zTo > nZ || zFrom > zTo
+                errordlg('Invalid slice range.','Export');
+                statusLine = 'Export cancelled (bad range).'; render(); return;
+            end
+        end
+
+        for zz = zFrom:zTo
             sliceIdx = zz;
             volume   = 1;
             frame    = 1;
@@ -2250,7 +2275,7 @@ outRGB = baseRGB;
             end
         end
 
-        statusLine = sprintf('Videos saved for all %d slice(s) in: %s', max(1,nZ), videosDir);
+        statusLine = sprintf('Videos saved (slices %d-%d) in: %s', zFrom, zTo, videosDir);
         render();
 
     catch ME
@@ -2693,6 +2718,18 @@ end
         case 3
             if isempty(bgMedianFull), bgMedianFull = computeUnderlayFromI('median'); end
             bgFull = bgMedianFull;
+        case 4
+            if isempty(bgMaxFull), bgMaxFull = computeUnderlayFromI('max'); end
+            bgFull = bgMaxFull;
+        case 5
+            if isempty(bgP90Full), bgP90Full = computeUnderlayFromI('p90'); end
+            bgFull = bgP90Full;
+        case 6
+            if isempty(bgFirstFull), bgFirstFull = computeUnderlayFromI('first'); end
+            bgFull = bgFirstFull;
+        case 7
+            if isempty(bgFirstNFull), bgFirstNFull = computeUnderlayFromI('meanfirst'); end
+            bgFull = bgFirstNFull;
         otherwise
             bgFull = bgDefaultFull;
     end
@@ -2702,6 +2739,18 @@ end
         dimT = ndims(I);
         if strcmpi(method,'mean')
             bgFull = mean(double(I), dimT);
+            return;
+        end
+        if strcmpi(method,'first')
+            subs1 = repmat({':'},1,dimT); subs1{dimT} = 1;
+            bgFull = double(I(subs1{:}));
+            return;
+        end
+        if strcmpi(method,'meanfirst')
+            szf = size(I); Tf = szf(dimT);
+            nf = max(1, min(Tf, round(underlayFirstN)));
+            subsN = repmat({':'},1,dimT); subsN{dimT} = 1:nf;
+            bgFull = mean(double(I(subsN{:})), dimT);
             return;
         end
         sz = size(I);
@@ -2716,7 +2765,18 @@ end
         subs = repmat({':'},1,dimT);
         subs{dimT} = idx;
         Isub = double(I(subs{:}));
-        bgFull = median(Isub, dimT);
+        switch lower(method)
+            case 'max'
+                bgFull = max(Isub, [], dimT);
+            case 'p90'
+                Is = sort(Isub, dimT);
+                nq = size(Is, dimT);
+                kq = max(1, min(nq, round(0.90*nq)));
+                subsK = repmat({':'},1,dimT); subsK{dimT} = kq;
+                bgFull = Is(subsK{:});
+            otherwise
+                bgFull = median(Isub, dimT);
+        end
     end
 
     function bg2 = getBg2DForSlice(bgIn, z)
@@ -3166,6 +3226,21 @@ function syncImageAxesToCurrentFrame(C)
 
     h = size(C,1);
     w = size(C,2);
+    % ===== 3D PROBE SMOOTH DISPLAY (nZ>1 only; coordinates unchanged) =====
+    if exist('nZ','var') && nZ > 1
+        kUp = max(1, round(480 / max(1, min(h,w))));
+        if kUp > 1
+            C = imresize(C, kUp, 'bicubic');
+        end
+        usSig = 1.0; usAmt = 0.6;   % unsharp: raise usAmt (0-1.5) = sharper; usSig = detail scale
+        usR = max(1, ceil(3*usSig)); usX = -usR:usR;
+        usG = exp(-(usX.^2)/(2*usSig^2)); usG = usG/sum(usG);
+        for usC = 1:size(C,3)
+            usB = conv2(usG, usG, double(C(:,:,usC)), 'same');
+            C(:,:,usC) = C(:,:,usC) + usAmt*(C(:,:,usC) - usB);
+        end
+        C = min(max(C,0),1);
+    end
 
     set(img, ...
         'CData', C, ...
@@ -3180,6 +3255,15 @@ function syncImageAxesToCurrentFrame(C)
 
     axis(ax,'image');
     axis(ax,'off');
+    % ===== 3D PROBE ASPECT FIX (nZ>1 only; 2D / 2D+motor untouched) =====
+    if exist('nZ','var') && nZ > 1
+        probeViewAspect = 1.0;   % <-- EDIT: >1 makes the tall probe image wider/shorter
+        if exist('par','var') && isstruct(par) && isfield(par,'probeViewAspect') ...
+                && isscalar(par.probeViewAspect) && isfinite(par.probeViewAspect) && par.probeViewAspect > 0
+            probeViewAspect = double(par.probeViewAspect);
+        end
+        set(ax,'DataAspectRatio',[1 probeViewAspect 1]);
+    end
 end
 
     function B = makeBrushMask(x0, y0, r, ny0, nx0)
@@ -4078,6 +4162,10 @@ end
 
     bgMeanFull = [];
     bgMedianFull = [];
+    bgMaxFull = [];
+    bgP90Full = [];
+    bgFirstFull = [];
+    bgFirstNFull = [];
     bgFileFull = [];
 
     ndPSC = ndims(PSC);

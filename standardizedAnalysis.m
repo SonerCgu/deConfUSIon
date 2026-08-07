@@ -580,6 +580,19 @@ end
 steps(5).filterType = 1; steps(5).fcLow = 0.001; steps(5).fcHigh = 0.20; steps(5).filterOrder = 4;
 steps(6).tempMode = 1; steps(6).tempWinSec = 60; steps(6).tempNsub = 50; steps(6).tempMethod = 1;
 steps(7).pcaicaMethod = 1; steps(7).pcaNcomp = 50; steps(7).icaNcomp = 30;
+
+% --- deConfUSIon: Drift Compensation step (inserted right after Despike) ---
+if ~any(strcmpi({steps.name},'Drift Compensation'))
+    dstep = makeStep(false, 9, 'Drift Compensation', ...
+        'baseline-window detrend; base1/base2 = pre-injection window [s]', ...
+        NaN, NaN, 0, 60, NaN, NaN, NaN, NaN);
+    idxDes = find(strcmpi({steps.name},'Despike'), 1, 'first');
+    if isempty(idxDes), idxDes = numel(steps); end
+    steps = insertStepAt(steps, dstep, idxDes + 1);
+    for kk = 1:numel(steps)
+        steps(kk).order = kk;
+    end
+end
 end
 
 function steps = makeFastSteps()
@@ -855,6 +868,8 @@ switch lower(strtrim(stepName))
         candidates = {'PCA / ICA','PCA/ICA','ICA','PCA'};
     case 'despike'
         candidates = {'Despike','Despiking'};
+    case 'drift compensation'
+        candidates = {'Drift Compensation','Drift','Drift Correction'};
     case 'imregdemons'
         candidates = {'Imregdemons','Imreg Demons','Imregdemons Preprocess'};
     case 'full qc'

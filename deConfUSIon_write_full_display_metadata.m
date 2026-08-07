@@ -1,5 +1,5 @@
 function deConfUSIon_write_full_display_metadata(matFile, dataStruct)
-% Append full display metadata into a saved MAT file.
+% Append stable display metadata after a preprocessing MAT is saved.
 if nargin < 1 || isempty(matFile), return; end
 if nargin < 2, dataStruct = []; end
 try, matFile = char(matFile); catch, return; end
@@ -15,15 +15,20 @@ try
     end
 catch
 end
-if isempty(nameIn)
-    [~,nameIn] = fileparts(matFile);
+if isempty(nameIn), [~,nameIn] = fileparts(matFile); end
+try
+    displayNameFull = deConfUSIon_best_visible_dataset_name(nameIn,dataStruct,matFile); %#ok<NASGU>
+catch
+    displayNameFull = nameIn; %#ok<NASGU>
 end
-displayNameFull = deConfUSIon_best_visible_dataset_name(nameIn, dataStruct, matFile); %#ok<NASGU>
 preprocDisplayName = displayNameFull; %#ok<NASGU>
 HUMOR_fullDisplayName = displayNameFull; %#ok<NASGU>
+displayNameShort = deConfUSIon_display_short_name(displayNameFull,dataStruct,matFile); %#ok<NASGU>
 datasetSortTime = now; %#ok<NASGU>
 try
-    save(matFile,'displayNameFull','preprocDisplayName','HUMOR_fullDisplayName','datasetSortTime','-append');
+    save(matFile,'displayNameFull','displayNameShort', ...
+        'preprocDisplayName','HUMOR_fullDisplayName', ...
+        'datasetSortTime','-append');
 catch
 end
 end
