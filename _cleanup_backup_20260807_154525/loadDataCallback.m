@@ -244,7 +244,7 @@ try
 catch
 end
 if ispc
-    p = getpref('deConfUSIon','rawRoot','Z:\fUS\Project_PACAP_AVATAR_SC\RawData');
+    p = 'Z:\fUS\Project_PACAP_AVATAR_SC\RawData';
     if exist(p,'dir'), startPath = p; end
 end
 end

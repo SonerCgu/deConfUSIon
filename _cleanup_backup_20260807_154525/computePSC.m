@@ -239,15 +239,10 @@ function PSC = lpf_time_chunks_3d(PSC, B, A)
 V = reshape(PSC, [nY*nX, nT]);           % [vox T]
 
 chunk = 80000;
-nPad = 3*(max(numel(B),numel(A))-1);
 for s = 1:chunk:size(V,1)
     e = min(size(V,1), s+chunk-1);
     tmp = double(V(s:e,:));
-    if size(tmp,2) > nPad
-        tmp = filtfilt(B, A, tmp.').';
-    else
-        tmp = filter(B, A, tmp, [], 2);
-    end
+    tmp = filter(B, A, tmp, [], 2);
     V(s:e,:) = single(tmp);
 end
 
@@ -260,15 +255,10 @@ function PSC = lpf_time_chunks_4d(PSC, B, A)
 V = reshape(PSC, [nY*nX*nZ, nT]);        % [vox T]
 
 chunk = 50000;
-nPad = 3*(max(numel(B),numel(A))-1);
 for s = 1:chunk:size(V,1)
     e = min(size(V,1), s+chunk-1);
     tmp = double(V(s:e,:));
-    if size(tmp,2) > nPad
-        tmp = filtfilt(B, A, tmp.').';
-    else
-        tmp = filter(B, A, tmp, [], 2);
-    end
+    tmp = filter(B, A, tmp, [], 2);
     V(s:e,:) = single(tmp);
 end
 

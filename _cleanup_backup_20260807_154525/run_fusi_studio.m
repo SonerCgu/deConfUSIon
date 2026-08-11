@@ -96,6 +96,18 @@ try
         warning('deConfUSIon:IconCopy', 'Could not copy Icon.png: %s', ME_iconcopy.message);
     end
 
+    % deConfUSIon icon copy
+    % The assembled fusi_studio_runtime.m lives in tempdir, so mfilename
+    % inside the runtime points there. Copy Icon.png into the runtime folder.
+    try
+        iconSrc = fullfile(root,'Icon.png');
+        iconDst = fullfile(runtimeDir,'Icon.png');
+        if exist(iconSrc,'file') == 2
+            copyfile(iconSrc, iconDst);
+        end
+    catch ME_iconcopy
+        warning('deConfUSIon:IconCopy', 'Could not copy Icon.png to runtime folder: %s', ME_iconcopy.message);
+    end
 
     runtimeFile = fullfile(runtimeDir,'fusi_studio_runtime.m');
     writeFile = true;
