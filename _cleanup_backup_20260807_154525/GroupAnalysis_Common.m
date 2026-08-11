@@ -4332,7 +4332,7 @@ function d = getPreferredPacapRootDir(S)
     d = '';
 
     if ispc
-        cands = {getpref('deConfUSIon','pacapAnalysedRoot','Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData\AprilStayLeuven\PACAP')};
+        cands = {'Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData\AprilStayLeuven\PACAP'};
     else
         cands = {};
     end

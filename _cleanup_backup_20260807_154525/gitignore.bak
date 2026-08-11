@@ -35,12 +35,3 @@ _backup*/
 
 # Local backup/archive folders
 _local_readme_pdf_cleanup_backup_*/
-
-# added by cleanup 20260807_154525
-backups/
-_quarantine_*/
-cleanup_reports/
-*.mat
-!allen_brain_atlas.mat
-Thumbs.db
-.DS_Store

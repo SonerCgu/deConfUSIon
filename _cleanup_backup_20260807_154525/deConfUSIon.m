@@ -12,10 +12,5 @@ if exist(atlasTools,'dir') == 7
     addpath(atlasTools,'-begin');
 end
 
-acqDir = fullfile(root,'acquisition');
-if exist(acqDir,'dir') == 7
-    addpath(acqDir,'-begin');
-end
-
 run_fusi_studio;
 end

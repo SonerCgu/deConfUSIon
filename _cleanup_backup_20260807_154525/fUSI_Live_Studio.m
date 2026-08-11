@@ -1412,9 +1412,8 @@ set(fig,'CloseRequestFcn',@cleanup);
 
         startPath = pwd;
 
-        dcuRoot = getpref('deConfUSIon','analysedRoot','Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData');
-        if ispc && ~isempty(dcuRoot) && exist(dcuRoot,'dir') == 7
-            startPath = dcuRoot;
+        if ispc && exist('Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData','dir') == 7
+            startPath = 'Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData';
         end
 
         selectedDir = uigetdir(startPath, ...
