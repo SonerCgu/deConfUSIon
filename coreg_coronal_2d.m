@@ -778,6 +778,14 @@ if isstruct(v) && isfield(v,'Data') && ~isempty(v.Data)
     v = v.Data;
 end
 if ~(isnumeric(v) || islogical(v)), return; end
+if ndims(v) == 4 && exist('deConfUSIon_collapse_time','file') == 2
+    try
+        [v, ctNote] = deConfUSIon_collapse_time(v);
+        fprintf('[coreg] %s' , ctNote); fprintf(char(10));
+    catch ME_ct
+        warning('deConfUSIon:CollapseTime', '4D collapse failed: %s', ME_ct.message);
+    end
+end
 D = double(v);
 if ndims(D) == 2 || ndims(D) == 3
     if prod(double(size(D))) > 100

@@ -128,17 +128,12 @@ searchFolders = unique(searchFolders,'stable');
 %% ---------------------------------------------------------
 % 4) SELECT ANATOMY SOURCE
 %% ---------------------------------------------------------
-if ~isempty(forcedAnatomyFile) && exist(forcedAnatomyFile,'file') == 2
+fileWasForced = ~isempty(forcedAnatomyFile) && exist(forcedAnatomyFile,'file') == 2;
+
+if fileWasForced
     anatomyFile = forcedAnatomyFile;
     fprintf('Selected 3D anatomy source file:\n%s\n', anatomyFile);
 else
- if ~isempty(forcedAnatomyFile) && exist(forcedAnatomyFile,'file') == 2
-
-    anatomyFile = forcedAnatomyFile;
-    fprintf('Selected 3D anatomy source file:\n%s\n', anatomyFile);
-
-else
-
     [fileList, displayList] = collectAnatomyFiles(searchFolders, rawFolder, analysedFolder, registrationDir);
 
     if isempty(fileList)
@@ -157,8 +152,6 @@ else
     end
 
     anatomyFile = fileList{idx};
-
-end
 end
 
 %% ---------------------------------------------------------
@@ -175,27 +168,36 @@ if endsWithLower(anatomyFile,'.mat')
     end
 
     if numel(candStruct) > 1
-        pretty = candNames;
-        for k = 1:numel(candStruct)
-            try
-                sz = size(candStruct{k}.Data);
-                pretty{k} = sprintf('%s   [%s]', candNames{k}, joinDims(sz));
-            catch
+
+        if fileWasForced
+            % User already selected / forced the anatomy source upstream.
+            % Do not show a second popup. Use the first prioritized real anatomy field.
+            anatomic = candStruct{1};
+            fprintf('Auto-selected anatomy field: %s\n', candNames{1});
+        else
+            pretty = candNames;
+            for k = 1:numel(candStruct)
+                try
+                    sz = size(candStruct{k}.Data);
+                    pretty{k} = sprintf('%s   [%s]', candNames{k}, joinDims(sz));
+                catch
+                end
             end
+
+            [jdx, tf2] = listdlg( ...
+                'PromptString','Multiple anatomy candidates found. Select one:', ...
+                'SelectionMode','single', ...
+                'ListString',pretty, ...
+                'ListSize',[860 360]);
+
+            if ~tf2
+                fprintf('Coregistration cancelled.\n');
+                return;
+            end
+
+            anatomic = candStruct{jdx};
         end
 
-        [jdx, tf2] = listdlg( ...
-            'PromptString','Multiple anatomy candidates found. Select one:', ...
-            'SelectionMode','single', ...
-            'ListString',pretty, ...
-            'ListSize',[860 360]);
-
-        if ~tf2
-            fprintf('Coregistration cancelled.\n');
-            return;
-        end
-
-        anatomic = candStruct{jdx};
     else
         anatomic = candStruct{1};
     end
@@ -231,6 +233,59 @@ if ~isfield(anatomic,'VoxelSize') || isempty(anatomic.VoxelSize)
     anatomic.VoxelSize = [1 1 1];
 end
 
+%% ---------------------------------------------------------
+% 5b) SCAN GEOMETRY - units MUST match atlas.VoxelSize
+%% ---------------------------------------------------------
+% interpolate3D resamples with (n-1)*d/dAtlas. allen_brain_atlas.mat has
+% VoxelSize = [50 50 50] (micrometres). A scan left at the default [1 1 1]
+% is therefore shrunk 50x on every axis: a 90x64x54 volume collapses to
+% about 2x3x2 voxels and is invisible in the GUI.
+%
+% interpolate3D also expects Data as [Z X Y] (dim 1 = slice axis), while
+% deConfUSIon volumes are [Y X Z]. Both are corrected here.
+
+atlasVoxUm = [50 50 50];
+if isfield(atlas,'VoxelSize') && numel(atlas.VoxelSize) >= 3
+    atlasVoxUm = double(atlas.VoxelSize(:)');
+end
+
+anatVoxIsDefault = true;
+if isfield(anatomic,'VoxelSize') && numel(anatomic.VoxelSize) >= 3
+    anatVoxIsDefault = isequal(double(anatomic.VoxelSize(1:3))', [1;1;1]) || ...
+                       isequal(double(anatomic.VoxelSize(1:3)),  [1 1 1]);
+end
+
+if anatVoxIsDefault
+    inPlaneDef = getpref('deConfUSIon','inPlaneUm',   100);
+    stepDef    = getpref('deConfUSIon','sliceStepUm', 80);
+
+    geoAns = inputdlg( ...
+        { sprintf('In-plane pixel size (um)            [atlas voxel = %g um]', atlasVoxUm(2)), ...
+          sprintf('Slice spacing / motor step (um)     [%d slices detected]', size(anatomic.Data,3)) }, ...
+        'Scan geometry', 1, {num2str(inPlaneDef), num2str(stepDef)});
+
+    if isempty(geoAns)
+        fprintf('Coregistration cancelled (no scan geometry given).\n');
+        return;
+    end
+
+    inPlaneUm = str2double(geoAns{1});
+    stepUm    = str2double(geoAns{2});
+    if ~isfinite(inPlaneUm) || inPlaneUm <= 0, inPlaneUm = 100; end
+    if ~isfinite(stepUm)    || stepUm    <= 0, stepUm    = 300; end
+
+    setpref('deConfUSIon','inPlaneUm',   inPlaneUm);
+    setpref('deConfUSIon','sliceStepUm', stepUm);
+
+    if ndims(anatomic.Data) == 3 && size(anatomic.Data,3) > 1
+        % [Y X Z] -> [Z X Y]
+        anatomic.Data = permute(anatomic.Data, [3 2 1]);
+        fprintf('Permuted anatomy [Y X Z] -> [Z X Y]: %s\n', mat2str(size(anatomic.Data)));
+    end
+
+    anatomic.VoxelSize = [stepUm inPlaneUm inPlaneUm];
+end
+
 fprintf('Anatomy source: %s\n', anatomyFile);
 fprintf('Anatomy size  : %s\n', mat2str(size(anatomic.Data)));
 fprintf('VoxelSize     : %s\n', mat2str(anatomic.VoxelSize));
@@ -252,6 +307,45 @@ end
 funcFiles = funcFiles(keep);
 funcLabels = funcLabels(keep);
 
+% ---- put the anatomy from THIS animal / THIS session first ------------
+% The recursive sweep returns every MAT under RAW + ANALYSED + Registration.
+% Rank by how well each path matches the loaded dataset folder and the
+% anatomy file just selected, so the popup opens on the right one.
+if ~isempty(funcFiles)
+    [anatDir, anatStem] = fileparts(anatomyFile);
+    loadStem = '';
+    try
+        if isfield(studio,'loadedPath') && ~isempty(studio.loadedPath)
+            [~, loadStem] = fileparts(studio.loadedPath);
+        end
+    catch
+    end
+
+    score = zeros(1, numel(funcFiles));
+    for fi = 1:numel(funcFiles)
+        thisDir = fileparts(funcFiles{fi});
+        if strcmpi(thisDir, anatDir),                          score(fi) = score(fi) + 4; end
+        if ~isempty(loadStem) && ...
+           ~isempty(strfind(lower(funcFiles{fi}), lower(loadStem)))    %#ok<STREMP>
+            score(fi) = score(fi) + 3;
+        end
+        if ~isempty(anatStem) && ...
+           ~isempty(strfind(lower(funcFiles{fi}), lower(anatStem)))    %#ok<STREMP>
+            score(fi) = score(fi) + 2;
+        end
+        if ~isempty(strfind(lower(funcLabels{fi}), 'brainonly'))       %#ok<STREMP>
+            score(fi) = score(fi) + 1;
+        end
+    end
+
+    [~, ord]   = sort(score, 'descend');
+    funcFiles  = funcFiles(ord);
+    funcLabels = funcLabels(ord);
+
+    if max(score) > 0
+        fprintf('Functional candidate pre-selected: %s\n', funcLabels{1});
+    end
+end
 funcCandidates = struct();
 funcCandidates.files = funcFiles;
 funcCandidates.labels = funcLabels;
@@ -678,6 +772,17 @@ for i = 1:numel(orderedFields)
     nm = orderedFields{i};
     v = S.(nm);
 
+    if isstruct(v)
+        subPref = {'Data','I','brainImage','anatomical_reference', ...
+                   'anatomical_reference_raw','underlay','img','image'};
+        for sIdx = 1:numel(subPref)
+            if isfield(v, subPref{sIdx}) && ~isempty(v.(subPref{sIdx})) ...
+                    && (isnumeric(v.(subPref{sIdx})) || islogical(v.(subPref{sIdx})))
+                v.Data = v.(subPref{sIdx});
+                break;
+            end
+        end
+    end
     if isstruct(v) && isfield(v,'Data') && ~isempty(v.Data) && isnumeric(v.Data)
         tmp = v;
         tmp.Data = double(tmp.Data);
@@ -687,6 +792,14 @@ for i = 1:numel(orderedFields)
         if ndims(tmp.Data) == 2
             tmp.Data = reshape(tmp.Data, size(tmp.Data,1), size(tmp.Data,2), 1);
         end
+if ndims(tmp.Data) == 4 && exist('deConfUSIon_collapse_time','file') == 2
+    try
+        [tmp.Data, ctNote] = deConfUSIon_collapse_time(tmp.Data);
+        fprintf('[coreg] %s' , ctNote); fprintf(char(10));
+    catch ME_ct
+        warning('deConfUSIon:CollapseTime', '4D collapse failed: %s', ME_ct.message);
+    end
+end
         if ndims(tmp.Data) == 3
             candNames{end+1}  = nm; %#ok<AGROW>
             candStruct{end+1} = tmp; %#ok<AGROW>
@@ -706,6 +819,25 @@ for i = 1:numel(orderedFields)
             candNames{end+1}  = nm; %#ok<AGROW>
             candStruct{end+1} = tmp; %#ok<AGROW>
         end
+    end
+end
+% ---- keep only real anatomy candidates -------------------------------
+% A mask-editor MAT exposes ~15 fields (masks, flags, bundles). Only a few
+% are usable anatomy. If any of those are present, hide the rest.
+if ~isempty(candNames)
+    anatomyPref = {'brainImage','anatomical_reference_raw','anatomical_reference', ...
+                   'sliceUnderlayProcessed','sliceUnderlayRaw','I','Data'};
+    keepIdx = [];
+    for a = 1:numel(anatomyPref)
+        for b = 1:numel(candNames)
+            if strcmpi(candNames{b}, anatomyPref{a}) && ~any(keepIdx == b)
+                keepIdx(end+1) = b; %#ok<AGROW>
+            end
+        end
+    end
+    if ~isempty(keepIdx)
+        candNames  = candNames(keepIdx);
+        candStruct = candStruct(keepIdx);
     end
 end
 

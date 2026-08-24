@@ -1355,7 +1355,16 @@ function imregdemonsCallback(~,~)
                 blockMethod, nsub);
         end
 
-        newData.imregdemons = out;
+        % DECONF_OPTA_V2 : out.I is the same array as newData.I - storing both
+        % doubled the size of every saved preprocessing MAT. Keep metadata only.
+        try
+            outMeta = out;
+            if isfield(outMeta,'I'), outMeta = rmfield(outMeta,'I'); end
+            newData.imregdemons = outMeta;
+            clear outMeta;
+        catch
+            newData.imregdemons = out;
+        end
 
         % Important: old PSC/bg are no longer valid after motion correction
         if isfield(newData,'PSC'), newData.PSC = []; end
@@ -1391,7 +1400,7 @@ function imregdemonsCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-        save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+        try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
         addLog(['Saved MAT -> ' savePath]);
@@ -2046,7 +2055,7 @@ function frameRateCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
@@ -2145,7 +2154,7 @@ fullName = [baseStem '_scrub_' methKey '_' interpKey '_' ts];
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
@@ -2323,7 +2332,7 @@ function stepMotorCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
@@ -2426,7 +2435,7 @@ fullName = sprintf('%s_despike_z%s_%s', baseStem, numTag(zthr), ts);
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
@@ -2568,7 +2577,7 @@ function svdClutterCallback(~,~)
         displayNameFull = fullName; %#ok<NASGU>
         preprocDisplayName = fullName; %#ok<NASGU>
         datasetSortTime = newData.datasetSortTime; %#ok<NASGU>
-        save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+        try, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
         try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end
         try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end
 
@@ -2819,7 +2828,7 @@ function driftCompensationCallback(~,~)
         preprocDisplayName = fullName;
         try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
         studio.datasets.(keyName) = newData;
-        save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+        try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
         try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch ME2, addLog(['[drift] name commit skipped: ' ME2.message]); end
         try, deConfUSIon_write_full_display_metadata(savePath,newData); catch ME2, addLog(['[drift] metadata skipped: ' ME2.message]); end
         addLog(['Saved MAT -> ' savePath]);
@@ -3032,7 +3041,7 @@ function temporalSmoothingCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-        save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+        try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
         addLog(['Saved MAT -> ' savePath]);
@@ -3598,6 +3607,22 @@ end
                 opts.maxDisplayPoints = 2000;
                 opts.chunkT = 250;
                 opts.centerMode = 'voxel';
+% DECONF_OPTA_V1 : standardized Option A auto component removal
+try
+    if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'PCA / ICA')
+        if isfield(stdStep,'pcaDropPC') && isfinite(double(stdStep.pcaDropPC))
+            opts.autoSelect = max(1,round(double(stdStep.pcaDropPC)));
+        end
+        if isfield(stdStep,'pcaAutoApply') && isfinite(double(stdStep.pcaAutoApply))
+            opts.autoApply = (round(double(stdStep.pcaAutoApply)) == 1);
+        end
+        opts.logFcn = @(msg) addLog(msg);
+        if isfield(opts,'autoSelect') && ~isempty(opts.autoSelect) && isfield(opts,'autoApply') && opts.autoApply
+            addLog(sprintf('[Standardized] PCA: removing PC%s over all slices, no manual selection.',sprintf(' %d',opts.autoSelect)));
+        end
+    end
+catch
+end
                 opts.onApply = @(sel) decomp_onApply('PCA', sel);
                 opts.onCancel = @() decomp_onCancel('PCA');
                 [newData, stats] = pca_denoise(data, studio.exportPath, ['pca_' ts], opts);
@@ -3643,7 +3668,7 @@ end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
@@ -3715,7 +3740,7 @@ end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+                try, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
                 addLog(['Saved MAT -> ' savePath]);
@@ -4000,7 +4025,7 @@ function filteringCallback(~,~)
             newData.datasetSortTime = datasetSortTime;
             studio.datasets.(keyName) = newData;
         end
-        save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3');
+        try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
                 try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
                 try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
         addLog(['Saved MAT -> ' savePath]);

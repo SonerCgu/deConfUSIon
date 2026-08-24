@@ -14,6 +14,9 @@ if ~isfield(opts,'verbose'),          opts.verbose = true; end
 if ~isfield(opts,'onApply'),          opts.onApply = []; end
 if ~isfield(opts,'onCancel'),         opts.onCancel = []; end
 if ~isfield(opts,'logFcn'),           opts.logFcn = []; end
+% DECONF_OPTA_V1 : automatic / preselected component removal
+if ~isfield(opts,'autoSelect'),       opts.autoSelect = []; end
+if ~isfield(opts,'autoApply'),        opts.autoApply = false; end
 
 isStruct = isstruct(dataIn);
 if isStruct
@@ -39,7 +42,19 @@ else
     error('Data must be 3D [Y X T] or 4D [Y X Z T].');
 end
 
-[selected, applyFlag, st] = pca_v12_gui(I4orig, TR, opts, tag);
+% DECONF_OPTA_V1 : headless path - drop fixed components over all slices
+autoSel = round(double(opts.autoSelect(:)'));
+autoSel = autoSel(isfinite(autoSel) & autoSel >= 1);
+if ~isempty(autoSel) && ~isempty(opts.autoApply) && any(logical(opts.autoApply))
+    st = computePCA(struct('mode','all','zIndex',1,'nSlices',Z0,'sliceSpecific',false));
+    selected = autoSel(autoSel <= st.K);
+    applyFlag = ~isempty(selected);
+    if ~isempty(opts.logFcn) && isa(opts.logFcn,'function_handle')
+        try, opts.logFcn(sprintf('PCA auto-removal: PC%s over all slices.',sprintf(' %d',selected))); catch, end
+    end
+else
+    [selected, applyFlag, st] = pca_v12_gui(I4orig, TR, opts, tag);
+end
 
 stats = emptyStats(tag);
 stats.nComponents = 0;
@@ -174,6 +189,13 @@ stats.qcMeanImageFile = '';
         scopeInfo = struct('mode','all','zIndex',1,'nSlices',Z0,'sliceSpecific',false);
         st = computePCA(scopeInfo);
         K = st.K; T = st.T;
+        % DECONF_OPTA_V1 : start with requested components already ticked
+        try
+            pre = round(double(opts.autoSelect(:)'));
+            selected = pre(isfinite(pre) & pre >= 1 & pre <= K);
+        catch
+            selected = [];
+        end
         maxPts = opts.maxDisplayPoints;
         idx = getIdx(T,maxPts);
         tmin = ((0:T-1)*TR)/60; tmin = tmin(idx); tmax = max(tmin);

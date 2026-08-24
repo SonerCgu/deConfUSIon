@@ -641,6 +641,12 @@ h.btnClearSlice = makeButton(pTools,[0.75 0.43 0.22 0.12],'Clr Slice',C.grayBtn,
 
 h.btnClearMask = makeButton(pTools,[0.03 0.24 0.94 0.11],'Clear Active Mask',C.red,'w',@onClearMask);
 
+h.btnAutoMask  = makeButton(pTools,[0.03 0.09 0.45 0.12],'AUTO MASK',C.blue,'w',@onAutoMask);
+h.btnCopyToAll = makeButton(pTools,[0.52 0.09 0.45 0.12],'Slice -> All',C.grayBtn,'w',@onCopySliceToAll);
+if nZ <= 1
+    set(h.btnCopyToAll,'Enable','off');
+end
+
 % -------------------- Underlay Source --------------------
 h.popUnderlay = uicontrol('Style','popupmenu','Parent',pUnder,'Units','normalized', ...
     'Position',[0.03 0.81 0.94 0.10], ...
@@ -1393,6 +1399,126 @@ end
                 overlayMaskVol(:,:,zz) = fillHolesAllSafe(overlayMaskVol(:,:,zz));
             end
             updateStatus('Filled holes in overlay mask for all slices.');
+        end
+        renderNow();
+    end
+
+    function onCopySliceToAll(~,~)
+        if nZ <= 1
+            updateStatus('Only one slice present - nothing to copy.');
+            return;
+        end
+        amZ = max(1, min(nZ, S.z));
+        if S.editTarget == 1
+            amSrc = brainMaskVol(:,:,amZ);
+            amTgt = 'brain';
+        else
+            amSrc = overlayMaskVol(:,:,amZ);
+            amTgt = 'overlay';
+        end
+        if ~any(amSrc(:))
+            updateStatus(sprintf('Current %s-mask slice is empty. Nothing copied.', amTgt));
+            return;
+        end
+        amScope = questdlg(sprintf(['Copy the %s mask from slice %d to ALL %d slices?' char(10) char(10) ...
+                                    'This overwrites every other slice and cannot be undone.'], ...
+                                    amTgt, amZ, nZ), ...
+                           'Copy slice to all', 'Copy', 'Cancel', 'Cancel');
+        if ~strcmp(amScope,'Copy')
+            updateStatus('Copy to all slices cancelled.');
+            return;
+        end
+        if S.editTarget == 1
+            brainMaskVol = repmat(amSrc, [1 1 nZ]);
+        else
+            overlayMaskVol = repmat(amSrc, [1 1 nZ]);
+        end
+        updateStatus(sprintf('Copied %s mask from slice %d to all %d slices.', amTgt, amZ, nZ));
+        renderNow();
+    end
+
+    function onAutoMask(~,~)
+        if nZ > 1
+            amScope = questdlg('Compute the automatic mask for:', 'Auto mask', ...
+                               'Current slice', 'All slices', 'All slices');
+        else
+            amScope = 'Current slice';
+        end
+        if isempty(amScope)
+            return;
+        end
+
+        if S.editTarget == 1
+            amTgt    = 'brain / underlay';
+            amErodeD = '0';
+        else
+            amTgt    = 'overlay / signal';
+            amErodeD = '2';
+        end
+
+        amAns = inputdlg({'Sensitivity (below 1 = larger mask, above 1 = tighter):', ...
+                          'Shrink edges inward by (voxels):'}, ...
+                         'Auto mask', 1, {'0.40', amErodeD});
+        if isempty(amAns)
+            return;
+        end
+
+        amSens = str2double(amAns{1});
+        if ~isfinite(amSens) || amSens <= 0
+            amSens = 0.40;
+        end
+        amSens = max(0.05, min(2.5, amSens));
+
+        amErode = round(str2double(amAns{2}));
+        if ~isfinite(amErode) || amErode < 0
+            amErode = 0;
+        end
+        amErode = min(20, amErode);
+
+        if strcmp(amScope,'All slices')
+            amList = 1:nZ;
+        else
+            amList = max(1, min(nZ, S.z));
+        end
+
+        set(fig,'Pointer','watch');
+        drawnow;
+
+        amCount = 0;
+        for amZ = amList
+            amU01 = buildDisplayUnderlay(Ubase(:,:,amZ));
+
+            if S.editTarget == 1
+                amBrain = [];
+            else
+                amBrain = brainMaskVol(:,:,amZ);
+                if ~any(amBrain(:))
+                    amBrain = [];
+                end
+            end
+
+            amMask = deConfUSIon_auto_mask_slice(amU01, amSens, amBrain);
+            amMask = fillHolesAllSafe(amMask);
+            amMask = deConfUSIon_shrink_mask(amMask, amErode);
+
+            if S.editTarget == 1
+                brainMaskVol(:,:,amZ) = amMask;
+            else
+                overlayMaskVol(:,:,amZ) = amMask;
+            end
+            amCount = amCount + nnz(amMask);
+        end
+
+        set(fig,'Pointer','arrow');
+
+        if S.editTarget == 2 && amErode == 0
+            updateStatus(sprintf(['Auto mask: %s, %d slice(s), sensitivity %.2f, no edge shrink, ' ...
+                                  '%d voxels. Edge voxels are included - consider shrink 1-2.'], ...
+                         amTgt, numel(amList), amSens, amCount));
+        else
+            updateStatus(sprintf(['Auto mask: %s, %d slice(s), sensitivity %.2f, shrink %d px, ' ...
+                                  '%d voxels set. Check every slice before saving.'], ...
+                         amTgt, numel(amList), amSens, amErode, amCount));
         end
         renderNow();
     end
@@ -3537,6 +3663,191 @@ end
         tmpOutFile = fullfile(p, sprintf('%s_writing_%s_%06d%s', n, datestr(now,'HHMMSS'), randi(999999), e));
     end
 
+end
+
+%% =======================================================================
+% AUTO MASK helpers - LOCAL functions (own workspace).
+% They must NOT be nested: nested functions share the parent workspace of
+% mask.m, where 'h' is the handles struct and 'x','y','z','M','L' are all
+% live GUI state. Keeping these local makes accidental clobbering
+% impossible.
+%% =======================================================================
+
+function M = deConfUSIon_auto_mask_slice(U01, sens, restrictMask)
+% Otsu threshold + largest connected component on a 0-1 display image.
+% restrictMask (optional) limits both the threshold estimate and the
+% result, so an overlay mask can be confined to the existing brain mask.
+
+U01 = double(U01);
+U01(~isfinite(U01)) = 0;
+U01 = min(max(U01,0),1);
+
+useRestrict = ~isempty(restrictMask) && any(restrictMask(:));
+if useRestrict
+    rm   = logical(restrictMask);
+    vals = U01(rm);
+else
+    rm   = [];
+    vals = U01(:);
+end
+
+thrLevel = deConfUSIon_otsu_level(vals) * sens;
+thrLevel = max(0, min(1, thrLevel));
+
+M = U01 > thrLevel;
+if useRestrict
+    M = M & rm;
+end
+if ~any(M(:))
+    return;
+end
+
+try
+    M = imclose(M, strel('disk',3));
+    if useRestrict
+        M = M & rm;
+    end
+catch
+    % No Image Processing Toolbox: keep the raw threshold result.
+    % Edges are rougher but the mask is still usable.
+end
+
+M = deConfUSIon_largest_component(M);
+end
+
+
+function t = deConfUSIon_otsu_level(vals)
+% Otsu threshold of values already scaled to 0-1. Base MATLAB only.
+nb = 256;
+
+v = double(vals(:));
+v = v(isfinite(v));
+if isempty(v)
+    t = 0.5;
+    return;
+end
+v = min(max(v,0),1);
+
+idx  = min(nb, floor(v*(nb-1)) + 1);
+cnts = accumarray(idx, 1, [nb 1]);
+tot  = sum(cnts);
+if tot <= 0
+    t = 0.5;
+    return;
+end
+
+p   = cnts / tot;
+lev = (0:nb-1)';
+omg = cumsum(p);
+mu1 = cumsum(p .* lev);
+muT = mu1(end);
+
+den = omg .* (1 - omg);
+sig = zeros(nb,1);
+okd = den > eps;
+sig(okd) = (muT*omg(okd) - mu1(okd)).^2 ./ den(okd);
+
+[~, kBest] = max(sig);
+t = (kBest-1) / (nb-1);
+end
+
+
+function M = deConfUSIon_largest_component(M)
+% Keep only the largest 4-connected component.
+M = logical(M);
+if ~any(M(:))
+    return;
+end
+
+try
+    L  = bwlabel(M, 4);
+    mxL = max(L(:));
+    if mxL > 1
+        cnts = accumarray(L(L>0), 1);
+        [~, kBest] = max(cnts);
+        M = (L == kBest);
+    end
+    return;
+catch
+    % No Image Processing Toolbox: flood fill below.
+end
+
+[Hh, Ww] = size(M);
+lbl = zeros(Hh, Ww);
+qr  = zeros(Hh*Ww, 1);
+qc  = zeros(Hh*Ww, 1);
+curL = 0; bestN = 0; bestL = 0;
+
+for sr = 1:Hh
+    for sc = 1:Ww
+        if M(sr,sc) && lbl(sr,sc) == 0
+            curL = curL + 1;
+            qHead = 1; qTail = 1;
+            qr(1) = sr; qc(1) = sc;
+            lbl(sr,sc) = curL;
+            nSeen = 0;
+            while qHead <= qTail
+                rr = qr(qHead); cc = qc(qHead);
+                qHead = qHead + 1;
+                nSeen = nSeen + 1;
+                if rr > 1  && M(rr-1,cc) && lbl(rr-1,cc) == 0
+                    qTail=qTail+1; qr(qTail)=rr-1; qc(qTail)=cc; lbl(rr-1,cc)=curL;
+                end
+                if rr < Hh && M(rr+1,cc) && lbl(rr+1,cc) == 0
+                    qTail=qTail+1; qr(qTail)=rr+1; qc(qTail)=cc; lbl(rr+1,cc)=curL;
+                end
+                if cc > 1  && M(rr,cc-1) && lbl(rr,cc-1) == 0
+                    qTail=qTail+1; qr(qTail)=rr; qc(qTail)=cc-1; lbl(rr,cc-1)=curL;
+                end
+                if cc < Ww && M(rr,cc+1) && lbl(rr,cc+1) == 0
+                    qTail=qTail+1; qr(qTail)=rr; qc(qTail)=cc+1; lbl(rr,cc+1)=curL;
+                end
+            end
+            if nSeen > bestN
+                bestN = nSeen; bestL = curL;
+            end
+        end
+    end
+end
+
+if bestL > 0
+    M = (lbl == bestL);
+end
+end
+
+
+function M = deConfUSIon_shrink_mask(M, nPix)
+% Erode the mask inward by nPix voxels (4-connected).
+M = logical(M);
+if nPix <= 0 || ~any(M(:))
+    return;
+end
+
+try
+    M2 = imerode(M, strel('disk', nPix));
+    if any(M2(:))
+        M = M2;
+    end
+    return;
+catch
+    % No Image Processing Toolbox: iterative 4-neighbour erosion below.
+end
+
+for it = 1:nPix
+    E = M;
+    E(2:end,:)   = E(2:end,:)   & M(1:end-1,:);
+    E(1:end-1,:) = E(1:end-1,:) & M(2:end,:);
+    E(:,2:end)   = E(:,2:end)   & M(:,1:end-1);
+    E(:,1:end-1) = E(:,1:end-1) & M(:,2:end);
+    E(1,:)   = false;
+    E(end,:) = false;
+    E(:,1)   = false;
+    E(:,end) = false;
+    if ~any(E(:))
+        break;
+    end
+    M = E;
+end
 end
 
 
