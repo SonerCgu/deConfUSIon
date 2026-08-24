@@ -381,6 +381,15 @@ end
     'sigStart', 840, ...
     'sigEnd',   900, ...
     'mode',     'sec');
+% DECONF_OPTA_V1 : signal window from the standardized workflow step
+try
+    if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'SCM GUI')
+        if isfield(stdStep,'sig1') && isfinite(double(stdStep.sig1)), baseline.sigStart = double(stdStep.sig1); end
+        if isfield(stdStep,'sig2') && isfinite(double(stdStep.sig2)), baseline.sigEnd = double(stdStep.sig2); end
+        addLog(sprintf('[Standardized] SCM GUI: signal window %.4g-%.4g s',baseline.sigStart,baseline.sigEnd));
+    end
+catch
+end
 
     % -----------------------------------------------------
     % Prepare par
@@ -456,10 +465,29 @@ end
     % -----------------------------------------------------
     % Get PSC + default background
     % -----------------------------------------------------
-    if isfield(data,'PSC') && ~isempty(data.PSC) && ...
-       isfield(data,'bg')  && ~isempty(data.bg)
+    % DECONF_OPTA_V2 : cache PSC/bg, but only reuse it for the same windows
+    deconfPscKey = [NaN NaN NaN NaN NaN];
+    try
+        deconfPscKey = [double(baseline.start) double(baseline.end) ...
+                        double(baseline.sigStart) double(baseline.sigEnd) ...
+                        double(par.interpol)];
+    catch
+    end
+    deconfUseCached = false;
+    try
+        if isfield(data,'PSC') && ~isempty(data.PSC) && isfield(data,'bg') && ~isempty(data.bg)
+            if ~isfield(data,'deconfPscKey') || isempty(data.deconfPscKey)
+                deconfUseCached = true;   % legacy cache, keep old behaviour
+            elseif isequal(double(data.deconfPscKey(:)).', deconfPscKey)
+                deconfUseCached = true;
+            end
+        end
+    catch
+    end
+    if deconfUseCached
         PSCsig = data.PSC;
         bgDefault = data.bg;
+        addLog('[Speed] Reusing cached PSC for this dataset and window.');
     else
         try
             proc = computePSC(data.I, data.TR, par, baseline);
@@ -469,6 +497,20 @@ end
             proc = computePSC(double(data.I), data.TR, par, baseline);
             PSCsig = proc.PSC;
             bgDefault = proc.bg;
+        end
+        try
+            deconfBytes = numel(PSCsig) * 4;
+            if deconfBytes < 8e8
+                studio = guidata(fig);
+                studio.datasets.(studio.activeDataset).PSC = PSCsig;
+                studio.datasets.(studio.activeDataset).bg = bgDefault;
+                studio.datasets.(studio.activeDataset).deconfPscKey = deconfPscKey;
+                guidata(fig, studio);
+                addLog(sprintf('[Speed] PSC cached (%.0f MB) - reopening SCM will be instant.', deconfBytes/1e6));
+            else
+                addLog(sprintf('[Speed] PSC not cached (%.0f MB, too large) to protect memory.', deconfBytes/1e6));
+            end
+        catch
         end
     end
 

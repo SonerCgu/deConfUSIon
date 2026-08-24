@@ -52,12 +52,15 @@ classdef registration_ccf < handle
         funcFiles = {}
         funcLabels = {}
 
-        overlayOpacity = 0.65
-        overlayCmapName = 'gray'
+        overlayOpacity = 1.00
+        overlayCmapName = 'red'
         overlayInvert = false
-        overlayWinMin = 0.05
-        overlayWinMax = 0.95
+        overlayWinMin = 0.00
+        overlayWinMax = 1.00
         showAtlasLines = true
+
+        overlayCoronalOnly = true
+        atlasStepCor = 1
 
         lastScrollT = -inf
         scrollMinDt = 0.03
@@ -104,6 +107,7 @@ classdef registration_ccf < handle
         uiScaleCorX
         uiScaleSagY
         uiScaleAxiZ
+        uiAuto
         uiApply
         uiSave
         uiSaveStatus
@@ -174,6 +178,32 @@ classdef registration_ccf < handle
 
             R.atlas = atlas;
             R.log(sprintf('[Atlas GUI] Save directory: %s', R.saveDir));
+            % deConfUSIon 3D registration patch START: voxel-aware coronal scrolling
+            atlasStepUm = 50;
+            scanStepUm  = 80;
+
+            try
+                if isfield(atlas,'VoxelSize') && numel(atlas.VoxelSize) >= 1
+                    atlasStepUm = double(atlas.VoxelSize(1));
+                end
+            catch
+            end
+
+            try
+                if isfield(scananatomy,'VoxelSize') && numel(scananatomy.VoxelSize) >= 1
+                    scanStepUm = double(scananatomy.VoxelSize(1));
+                end
+            catch
+            end
+
+            if ~isfinite(atlasStepUm) || atlasStepUm <= 0, atlasStepUm = 50; end
+            if ~isfinite(scanStepUm)  || scanStepUm  <= 0, scanStepUm  = 80; end
+
+            R.atlasStepCor = max(1, round(scanStepUm / atlasStepUm));
+            R.scrollMinDt  = 0.08;
+            % deConfUSIon 3D registration patch END
+
+
 
             % Normalize anatomy overlay and bring it into atlas voxel/orientation space
             scananatomy.Data = equalizeImages(double(scananatomy.Data));
@@ -225,6 +255,18 @@ classdef registration_ccf < handle
 
             R.H.figure1 = f;
             set(f,'WindowScrollWheelFcn',@(src,evt)R.onScroll(evt));
+
+            % open maximised: the six axes are unusable in a small window
+            try
+                set(f,'WindowState','maximized');
+            catch
+                % pre-R2018a has no WindowState: fill the screen manually
+                try
+                    set(f,'Units','pixels','OuterPosition',get(0,'ScreenSize'));
+                catch ME_fs
+                    warning('deConfUSIon:Maximize','Could not maximise: %s', ME_fs.message);
+                end
+            end
 
             leftX = 0.03;
             midX  = 0.35;
@@ -371,11 +413,14 @@ classdef registration_ccf < handle
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
-            cmapList = {'gray','bone','hot','copper','parula','jet'};
+            cmapList = {'red','gray','bone','hot','copper','parula','jet'};
+            defaultIdx = find(strcmpi(cmapList, R.overlayCmapName), 1);
+            if isempty(defaultIdx), defaultIdx = 1; end
+
             R.uiCmapPopup = uicontrol(ovPanel,'Style','popupmenu','Units','normalized', ...
                 'Position',[0.36 0.35 0.32 0.14], ...
                 'String',cmapList, ...
-                'Value',1, ...
+                'Value',defaultIdx, ...
                 'BackgroundColor',[0.15 0.15 0.15], ...
                 'ForegroundColor',fg, ...
                 'Callback',@(src,evt)R.onOverlayChanged());
@@ -439,8 +484,16 @@ classdef registration_ccf < handle
                 'BackgroundColor',[0.12 0.12 0.12], ...
                 'ForegroundColor',fg);
 
+            R.uiAuto = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
+                'Position',[0.56 0.68 0.37 0.18], ...
+                'String','0. Auto init', ...
+                'BackgroundColor',[0.45 0.35 0.85], ...
+                'ForegroundColor','w', ...
+                'FontWeight','bold', ...
+                'Callback',@(src,evt)R.onAutoRegister());
+
             R.uiApply = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
-                'Position',[0.56 0.54 0.37 0.26], ...
+                'Position',[0.56 0.40 0.37 0.18], ...
                 'String','1. Apply', ...
                 'BackgroundColor',[0.20 0.45 0.95], ...
                 'ForegroundColor','w', ...
@@ -448,7 +501,7 @@ classdef registration_ccf < handle
                 'Callback',@(src,evt)R.onApply());
 
             R.uiSave = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
-                'Position',[0.56 0.18 0.37 0.26], ...
+                'Position',[0.56 0.12 0.37 0.18], ...
                 'String','2. Save', ...
                 'BackgroundColor',[0.15 0.70 0.55], ...
                 'ForegroundColor','w', ...
@@ -676,12 +729,35 @@ classdef registration_ccf < handle
             set(R.uiEditCor,'String',num2str(R.ms1.x0));
             set(R.uiEditSag,'String',num2str(R.ms1.y0));
             set(R.uiEditAxi,'String',num2str(R.ms1.z0));
+
+            R.bumpControlFonts(ctrlPanel, 12);        end
+
+
+        function bumpControlFonts(R, parentObj, minFS)
+            h = findall(parentObj);
+            for k = 1:numel(h)
+                try
+                    if isprop(h(k),'FontSize')
+                        fs = get(h(k),'FontSize');
+                        if isnumeric(fs) && isfinite(fs) && fs < minFS
+                            set(h(k),'FontSize',minFS);
+                        end
+                    end
+                catch
+                end
+            end
         end
 
         function restartMove(R)
             R.r1 = moveimage(R.H.axes4, R.im4);
-            R.r2 = moveimage(R.H.axes5, R.im5);
-            R.r3 = moveimage(R.H.axes6, R.im6);
+
+            if R.overlayCoronalOnly
+                R.r2 = [];
+                R.r3 = [];
+            else
+                R.r2 = moveimage(R.H.axes5, R.im5);
+                R.r3 = moveimage(R.H.axes6, R.im6);
+            end
         end
 
         function tf = anyDragging(R)
@@ -785,9 +861,15 @@ classdef registration_ccf < handle
                 R.r3.setImageData(oAxi);
             end
 
-            set(R.im4,'AlphaData',R.overlayOpacity);
-            set(R.im5,'AlphaData',R.overlayOpacity);
-            set(R.im6,'AlphaData',R.overlayOpacity);
+            set(R.im4,'Visible','on','AlphaData',R.overlayOpacity);
+
+            if R.overlayCoronalOnly
+                set(R.im5,'Visible','off','AlphaData',0);
+                set(R.im6,'Visible','off','AlphaData',0);
+            else
+                set(R.im5,'Visible','on','AlphaData',R.overlayOpacity);
+                set(R.im6,'Visible','on','AlphaData',R.overlayOpacity);
+            end
 
             set(R.line1x,'XData',[1 R.ms1.nz],'YData',[y0 y0]);
             set(R.line1y,'XData',[z0 z0],'YData',[1 R.ms1.ny]);
@@ -817,7 +899,7 @@ classdef registration_ccf < handle
                 R.hlinesS = addLines(R.H.axes6, R.linmap.Sag, clampToNumel(R.linmap.Sag, z0));
             end
 
-            drawnow;
+            drawnow limitrate;
         end
 
         function onOverlayChanged(R)
@@ -865,11 +947,17 @@ classdef registration_ccf < handle
         end
 
         function applyOverlayColormap(R)
-            try
-                cmap = feval(R.overlayCmapName, 256);
-            catch
-                cmap = gray(256);
-                R.overlayCmapName = 'gray';
+
+            switch lower(R.overlayCmapName)
+                case 'red'
+                    cmap = [linspace(0,1,256)' zeros(256,1) zeros(256,1)];
+                otherwise
+                    try
+                        cmap = feval(R.overlayCmapName, 256);
+                    catch
+                        cmap = gray(256);
+                        R.overlayCmapName = 'gray';
+                    end
             end
 
             colormap(R.H.axes4, cmap);
@@ -934,13 +1022,50 @@ classdef registration_ccf < handle
             R.scale = [sx sy sz];
 
             set(R.H.figure1,'Pointer','watch');
-            drawnow;
+            drawnow limitrate;
             R.apply();
             R.refresh();
             set(R.H.figure1,'Pointer','arrow');
 
             set(R.uiSaveStatus,'String','Applied.');
             R.log('[Atlas GUI] Apply executed.');
+        end
+
+        function onAutoRegister(R)
+
+            try
+                set(R.H.figure1,'Pointer','watch');
+                drawnow limitrate;
+
+                % Rough 3D rigid initialization: atlas histology = fixed, anatomy overlay = moving.
+                fixed  = single(rescaleSafe(double(R.mapHistology.D)));
+                moving = single(rescaleSafe(double(R.DataNoScale)));
+
+                [optimizer, metric] = imregconfig('multimodal');
+                optimizer.MaximumIterations = 80;
+
+                tform = imregtform(moving, fixed, 'rigid', optimizer, metric);
+
+                R.T0    = tform.T;
+                R.Trot  = eye(4);
+                R.scale = [1 1 1];
+
+                set(R.uiScaleCorX,'String','1');
+                set(R.uiScaleSagY,'String','1');
+                set(R.uiScaleAxiZ,'String','1');
+
+                R.apply();
+                R.refresh();
+
+                set(R.H.figure1,'Pointer','arrow');
+                set(R.uiSaveStatus,'String','Auto init finished. Fine-tune manually, then Save.');
+                R.log('[Atlas GUI] Auto init finished.');
+
+            catch ME
+                try, set(R.H.figure1,'Pointer','arrow'); catch, end
+                set(R.uiSaveStatus,'String',['Auto init failed: ' ME.message]);
+                R.log(['[Atlas GUI] Auto init failed: ' ME.message]);
+            end
         end
 
         function onSave(R)
@@ -996,7 +1121,7 @@ classdef registration_ccf < handle
 
             try
                 set(R.H.figure1,'Pointer','watch');
-                drawnow;
+                drawnow limitrate;
 
                 [scan, desc0] = loadFunctionalCandidateFile(f);
                 TransfNow = R.getCurrentTransform();
@@ -1141,7 +1266,7 @@ classdef registration_ccf < handle
             end
 
             if ax == R.H.axes1 || ax == R.H.axes4
-                R.ms1.x0 = R.ms1.x0 + step;
+                R.ms1.x0 = R.ms1.x0 + step * R.atlasStepCor;
             elseif ax == R.H.axes2 || ax == R.H.axes5
                 R.ms1.y0 = R.ms1.y0 + step;
             elseif ax == R.H.axes3 || ax == R.H.axes6
@@ -1627,10 +1752,15 @@ end
 
 
 function cmap = getOverlayCmap(nameIn)
-try
-    cmap = feval(nameIn, 256);
-catch
-    cmap = gray(256);
+switch lower(nameIn)
+    case 'red'
+        cmap = [linspace(0,1,256)' zeros(256,1) zeros(256,1)];
+    otherwise
+        try
+            cmap = feval(nameIn, 256);
+        catch
+            cmap = gray(256);
+        end
 end
 end
 
@@ -1896,120 +2026,6 @@ for k = 1:3
         v(k) = 1;
     end
 end
-end
-
-
-%% ------------------------------------------------------------------------
-%% Integrated tiny helper from mapscan.m on 09-Jun-2026 16:59:40
-%% ------------------------------------------------------------------------
-
-% Urban Lab - NERF empowered by imec, KU Leuven and VIB
-% Mace Lab  - Max Planck institute of Neurobiology
-% Authors:  G. MONTALDO, E. MACE
-% Review & test: C.BRUNNER, M. GRILLET
-% September 2020
-
-%% auxiliary class to manage a 3D volume
-classdef mapscan < handle
-    
-    properties
-        D
-        nx
-        ny
-        nz
-        x0
-        y0
-        z0
-        cmap
-        caxis
-        method
-    end
-    
-    methods
-        function M=mapscan(data,cmap,method)
-            M.D=data;
-            [M.nx,M.ny,M.nz]=size(data);
-            M.x0=round(M.nx/2);
-            M.y0=round(M.ny/2);
-            M.z0=round(M.nz/2);
-            M.cmap= gray(128);
-            M.method='auto';
-            if nargin>1, M.cmap=cmap;  end
-            if nargin>2
-                M.method=method;
-                if strcmp(method,'fix')
-                    M.caxis=double([min(data(:)),max(data(:))]);
-                end
-            end
-        end
-        
-        function [ax,ay,az]=cuts(M)
-           if M.x0>0 && M.x0<=M.nx
-                ax=rgbfunc(double(squeeze(M.D(M.x0,:,:))),M);
-           else
-               ax=zeros(M.ny,M.nz,3);
-           end
-            
-           if M.y0>0 && M.y0<=M.ny
-                ay=rgbfunc(double(squeeze(M.D(:,M.y0,:))),M);
-           else
-               ay=zeros(M.nx,M.nz,3);
-           end
-            
-           if M.z0>0 && M.z0<=M.nz
-                az=rgbfunc(double(squeeze(M.D(:,:,M.z0))),M);
-           else
-               az=zeros(M.nx,M.ny,3);
-           end
-            
-        end
-        
-        function setData(M,data)
-            M.D=data;
-            M.nx=size(data,1);
-            M.ny=size(data,2);
-            M.nz=size(data,3);
-        end
-        
-    end
-    
-    
-    events
-        eventRefresh
-    end
-    
-end
-
-
-
-function b=rgbfunc(a,M)
-[nx,ny]=size(a);
-aa=a(:);
-method=M.method;
-cmap=M.cmap;
-
-if strcmp(method,'auto')
-    norm=max(aa)-min(aa);
-    aa=(aa-min(aa))/norm;
-    aa=uint16(round(aa(:)*(length(cmap)-1)+1));
-    aa(aa==0)=1;
-    b=cmap(aa,:);
-    b=reshape(b,nx,ny,3);
-elseif strcmp(method,'fix')
-    aa=(aa-M.caxis(1))/(M.caxis(2)-M.caxis(1));
-    aa=uint16(round(aa(:)*(length(cmap)-1)+1));
-    aa(aa<1)=1;
-    aa(aa>length(cmap))=length(cmap);
-    b=cmap(aa,:);
-    b=reshape(b,nx,ny,3);
-elseif strcmp(method,'index')
-    aa(aa==0)=1;
-    b=cmap(abs(aa),:);
-    b=reshape(b,nx,ny,3);
-else
-    error('mapscan unknown rgb method')
-end
-
 end
 
 

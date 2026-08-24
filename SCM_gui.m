@@ -198,6 +198,15 @@ end
     end
 catch
 end
+% DECONF_OPTA_V2 : positive-only sign mode when the display range starts at >= 0
+try
+    if isfield(par,'standardizedWorkflow') && ~isempty(par.standardizedWorkflow) && par.standardizedWorkflow ...
+            && isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2 ...
+            && isfinite(double(par.standardCaxis(1))) && double(par.standardCaxis(1)) >= 0
+        par.standardSignMode = 1;
+    end
+catch
+end
 % DECONF_STD_SCM_DISPLAY_V71
 try
     if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2, state.cax = double(par.standardCaxis(:)).'; end
@@ -373,7 +382,12 @@ cmapNames = { ...
 % DECONF_STD_SCM_SIGNED_CMAP_INIT
 try
     if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
-        setOverlayColormap('signed_blackbdy_winter');
+        % DECONF_OPTA_V2 : a diverging map wastes half its range on a 0-50 % display
+        if exist('state','var') && isstruct(state) && isfield(state,'signMode') && double(state.signMode) == 1
+            setOverlayColormap('blackbdy_iso');
+        else
+            setOverlayColormap('signed_blackbdy_winter');
+        end
     elseif exist('state','var') && isstruct(state) && isfield(state,'signMode') && double(state.signMode) == 3
         setOverlayColormap('signed_blackbdy_winter');
     else

@@ -61,7 +61,7 @@ uicontrol(fig,'Style','text', ...
     'HorizontalAlignment','left');
 
 uicontrol(fig,'Style','text', ...
-    'String','Option A = fast review path. Option B = detailed analysis path. Click a row to select it; only the checkbox changes Run/Skip.', ...
+    'String','Option A = PCA drop PC1 -> Imregdemons median n=50 -> SCM GUI. Option B = detailed analysis path. Click a row to select it; only the checkbox changes Run/Skip.', ... % DECONF_OPTA_V1
     'Units','normalized', ...
     'Position',[0.015 0.900 0.74 0.032], ...
     'BackgroundColor',[0.020 0.025 0.040], ...
@@ -494,12 +494,12 @@ end
 function onOptionAFast(src,~)
 fig = ancestor(src,'figure');
 S = guidata(fig);
-S.steps = makeFastSteps();
+S.steps = deconf_optA_steps(); % DECONF_OPTA_V1
 S.selectedRow = 1;
 guidata(fig,S);
 refreshRows(fig);
 refreshSelectedPanel(fig);
-setStatus(fig,'Option A loaded: fast analysis with Motor, Imregdemons, Video GUI, Time-Course Viewer, and SCM GUI.',[0.80 0.95 0.85]);
+setStatus(fig,'Option A loaded: PCA (drop PC1, all slices) -> Imregdemons (median, n=50) -> SCM GUI (baseline 30-60 s, display 0-50 %, alpha 10-15 %, signal 120-180 s).',[0.80 0.95 0.85]); % DECONF_OPTA_V1
 end
 
 function onOptionBDetailed(src,~)
@@ -574,12 +574,21 @@ for kk = 1:numel(steps)
     steps(kk).filterType = NaN; steps(kk).fcLow = NaN; steps(kk).fcHigh = NaN; steps(kk).filterOrder = NaN;
     steps(kk).tempMode = NaN; steps(kk).tempWinSec = NaN; steps(kk).tempNsub = NaN; steps(kk).tempMethod = NaN;
     steps(kk).pcaicaMethod = NaN; steps(kk).pcaNcomp = NaN; steps(kk).icaNcomp = NaN;
+    steps(kk).sig1 = NaN; steps(kk).sig2 = NaN; % DECONF_OPTA_V1
+    steps(kk).pcaDropPC = NaN; steps(kk).pcaAutoApply = NaN; % DECONF_OPTA_V1
 end
 
 % Presets are kept editable even when the step is unticked.
 steps(5).filterType = 1; steps(5).fcLow = 0.001; steps(5).fcHigh = 0.20; steps(5).filterOrder = 4;
 steps(6).tempMode = 1; steps(6).tempWinSec = 60; steps(6).tempNsub = 50; steps(6).tempMethod = 1;
 steps(7).pcaicaMethod = 1; steps(7).pcaNcomp = 50; steps(7).icaNcomp = 30;
+% DECONF_OPTA_V1 : signal window + PCA auto-drop presets
+steps(7).pcaDropPC = 1; steps(7).pcaAutoApply = 1;
+for kk = 1:numel(steps)
+    if any(strcmpi(strtrim(steps(kk).name),{'SCM GUI','Video GUI','Time-Course Viewer'}))
+        steps(kk).sig1 = 840; steps(kk).sig2 = 900;
+    end
+end
 
 % --- deConfUSIon: Drift Compensation step (inserted right after Despike) ---
 if ~any(strcmpi({steps.name},'Drift Compensation'))
@@ -624,7 +633,8 @@ st = struct('run',false,'order',0,'name','','desc','', ...
     'cmin',NaN,'cmax',NaN,'amin',NaN,'amax',NaN, ...
     'filterType',NaN,'fcLow',NaN,'fcHigh',NaN,'filterOrder',NaN, ...
     'tempMode',NaN,'tempWinSec',NaN,'tempNsub',NaN,'tempMethod',NaN, ...
-    'pcaicaMethod',NaN,'pcaNcomp',NaN,'icaNcomp',NaN);
+    'pcaicaMethod',NaN,'pcaNcomp',NaN,'icaNcomp',NaN, ...
+    'sig1',NaN,'sig2',NaN,'pcaDropPC',NaN,'pcaAutoApply',NaN); % DECONF_OPTA_V1
 end
 
 function st = makeStep(runFlag,orderVal,name,desc,slices,nsub,base1,base2,cmin,cmax,amin,amax)
@@ -674,9 +684,9 @@ switch lower(strtrim(st.name))
     case 'temporal smoothing'
         fields = {'tempMode','tempWinSec','tempNsub','tempMethod'};
     case 'pca / ica'
-        fields = {'pcaicaMethod','pcaNcomp','icaNcomp'};
+        fields = {'pcaicaMethod','pcaNcomp','icaNcomp','pcaDropPC','pcaAutoApply'}; % DECONF_OPTA_V1
     case {'video gui','scm gui'}
-        fields = {'base1','base2','cmin','cmax','amin','amax'};
+        fields = {'base1','base2','cmin','cmax','amin','amax','sig1','sig2'}; % DECONF_OPTA_V1
     case 'time-course viewer'
         fields = {'base1','base2','cmin','cmax'};
     case 'functional connectivity'
@@ -705,6 +715,10 @@ labels.tempMethod = 'Block method 1=mean 2=median';
 labels.pcaicaMethod = 'Method 1=PCA 2=ICA';
 labels.pcaNcomp = 'PCA max components';
 labels.icaNcomp = 'ICA max components';
+labels.sig1 = 'Signal start (s)'; % DECONF_OPTA_V1
+labels.sig2 = 'Signal end (s)'; % DECONF_OPTA_V1
+labels.pcaDropPC = 'PCA drop component #'; % DECONF_OPTA_V1
+labels.pcaAutoApply = 'PCA auto-apply 1=yes 0=GUI'; % DECONF_OPTA_V1
 end
 
 function v = sanitizeValue(fieldName,v)
@@ -727,6 +741,10 @@ switch fieldName
         v = round(max(1,min(200,v)));
     case 'icaNcomp'
         v = round(max(1,min(100,v)));
+    case 'pcaDropPC' % DECONF_OPTA_V1
+        v = round(max(1,min(200,v)));
+    case 'pcaAutoApply' % DECONF_OPTA_V1
+        v = round(max(0,min(1,v)));
     otherwise
         if ~isfinite(v), v = NaN; end
 end
@@ -944,5 +962,51 @@ try
         waitfor(newFigs(1));
     end
 catch
+end
+end
+
+function steps = deconf_optA_steps() % DECONF_OPTA_V1
+% DECONF_OPTA_V1 - Option A fast path.
+%   PCA (drop component 1, all slices, auto-applied)
+%   -> Imregdemons (median, n = 50)
+%   -> SCM GUI (baseline 30-60 s, display 0-50 %, alpha mod 10-15 %,
+%      signal window 120-180 s)
+% Everything else is unticked. makeFastSteps is left untouched.
+steps = makeDefaultSteps();
+for kk = 1:numel(steps)
+    steps(kk).run = false;
+end
+wanted = {'PCA / ICA','Imregdemons','SCM GUI'};
+for ww = 1:numel(wanted)
+    idx = find(strcmpi({steps.name},wanted{ww}),1,'first');
+    if ~isempty(idx)
+        steps(idx).run = true;
+    end
+end
+scmIdx = find(strcmpi({steps.name},'SCM GUI'));
+if numel(scmIdx) > 1
+    for ii = 2:numel(scmIdx)
+        steps(scmIdx(ii)).run = false;
+    end
+end
+pIdx = find(strcmpi({steps.name},'PCA / ICA'),1,'first');
+if ~isempty(pIdx)
+    steps(pIdx).pcaicaMethod = 1;
+    steps(pIdx).pcaDropPC    = 1;
+    steps(pIdx).pcaAutoApply = 1;
+    steps(pIdx).desc = 'PCA, remove component 1, all slices together, applied automatically';
+end
+iIdx = find(strcmpi({steps.name},'Imregdemons'),1,'first');
+if ~isempty(iIdx)
+    steps(iIdx).nsub = 50;
+    steps(iIdx).desc = 'median mode, nsub 50, step-motor per-slice';
+end
+if ~isempty(scmIdx)
+    s1 = scmIdx(1);
+    steps(s1).base1 = 30;  steps(s1).base2 = 60;
+    steps(s1).cmin  = 0;   steps(s1).cmax  = 50;
+    steps(s1).amin  = 10;  steps(s1).amax  = 15;
+    steps(s1).sig1  = 120; steps(s1).sig2  = 180;
+    steps(s1).desc = 'baseline 30-60 s, display 0-50 %, alpha mod 10-15 %, signal 120-180 s';
 end
 end
