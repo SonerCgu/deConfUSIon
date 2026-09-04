@@ -472,25 +472,7 @@ elseif ischar(v)
 end
 end
 
-function m = finiteMeanRows(X)
-mask = isfinite(X);
-X2 = X;
-X2(~mask) = 0;
-cnt = sum(mask,2);
-den = max(cnt,1);
-m = sum(X2,2) ./ den;
-m(cnt == 0) = 0;
-end
 
-function m = finiteMeanCols(X)
-mask = isfinite(X);
-X2 = X;
-X2(~mask) = 0;
-cnt = sum(mask,1);
-den = max(cnt,1);
-m = sum(X2,1) ./ den;
-m(cnt == 0) = NaN;
-end
 
 function [Y, usedFallback, failedBlock] = filterBlock(X, b, a, forceSinglePass)
 usedFallback = false;

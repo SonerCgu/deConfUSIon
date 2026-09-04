@@ -819,20 +819,6 @@ blk(~isfinite(blk)) = NaN;
 m = nanmeanCompat(blk,1);
 end
 
-function q = localQuantile(x, pq)
-% simple linear-interpolation quantile without the Statistics Toolbox
-x = sort(double(x(:)));
-n = numel(x);
-if n == 0, q = NaN; return; end
-if n == 1, q = x; return; end
-pos = 1 + (n-1)*pq;
-lo  = floor(pos); hi = ceil(pos);
-if lo == hi
-    q = x(lo);
-else
-    q = x(lo) + (pos-lo)*(x(hi)-x(lo));
-end
-end
 
 function m = nanmeanCompat(X, dim)
 n = sum(isfinite(X), dim);

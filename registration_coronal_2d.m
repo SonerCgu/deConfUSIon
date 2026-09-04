@@ -1124,16 +1124,7 @@ end
             S.tx, S.ty, S.rotDeg, S.sx, S.sy));
     end
 
-    function sliceDir = getCurrentSliceDir()
-        sliceDir = getSliceSaveDir(saveDir, S.slice, getSourceSliceIndexForStatus(), isSourceMultiSlice());
-    end
 
-    function sliceFile = getCurrentRegFile()
-        sliceDir = getCurrentSliceDir();
-        sliceFile = fullfile(sliceDir, ...
-            sprintf('CoronalRegistration2D_source%03d_atlas%03d_%s.mat', ...
-            getSourceSliceIndexForStatus(), round(S.slice), lower(S.atlasMode)));
-    end
 
     function sourceIdx = getSourceSliceIndexForStatus()
         sourceIdx = max(1, min(sourceNSlices, round(currentSourceSlice)));

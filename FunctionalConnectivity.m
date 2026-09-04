@@ -5571,65 +5571,7 @@ for k = 1:3, tmp(:,:,k) = fc_resize2(R(:,:,k),Y,X); end
 R = tmp;
 end
 
-function T = fc_read_region_names(fullf)
-T = deConfUSIon_FC_read_region_names_file(fullf);
-end
 
-function T = fc_region_names_from_mat(S)
-
-
-T = struct('labels',[],'names',{{}});
-% HUMOR_FC_SEG_REGION_NAMES_FIX_20260519
-try
-    if isfield(S,'Seg') && isstruct(S.Seg) && isfield(S.Seg,'region')
-        T = fc_region_names_from_region_struct(S.Seg.region);
-        if ~isempty(T.labels), return; end
-    end
-    if isfield(S,'region') && isstruct(S.region)
-        T = fc_region_names_from_region_struct(S.region);
-        if ~isempty(T.labels), return; end
-    end
-catch
-end
-try
-    if isfield(S,'Seg') && isstruct(S.Seg) && isfield(S.Seg,'region')
-        T = fc_region_names_from_region_struct(S.Seg.region);
-        if ~isempty(T.labels), return; end
-    end
-    if isfield(S,'region') && isstruct(S.region)
-        T = fc_region_names_from_region_struct(S.region);
-        if ~isempty(T.labels), return; end
-    end
-catch
-end
-if isfield(S,'roiNameTable')
-    x = S.roiNameTable;
-    if isstruct(x) && isfield(x,'labels') && isfield(x,'names')
-        T.labels = double(x.labels(:)); T.names = cellstr(x.names(:)); return;
-    end
-end
-if isfield(S,'labels') && isfield(S,'names')
-    T.labels = double(S.labels(:)); T.names = cellstr(S.names(:)); return;
-end
-fn = fieldnames(S);
-for i = 1:numel(fn)
-    x = S.(fn{i});
-    if isstruct(x) && numel(x) > 1
-        f = fieldnames(x); idField = ''; nameField = '';
-        if any(strcmpi(f,'id')), idField = 'id'; end
-        if any(strcmpi(f,'label')), idField = 'label'; end
-        if any(strcmpi(f,'acronym')), nameField = 'acronym'; end
-        if any(strcmpi(f,'name')), nameField = 'name'; end
-        if ~isempty(idField) && ~isempty(nameField)
-            labs = zeros(numel(x),1); nms = cell(numel(x),1);
-            for k = 1:numel(x)
-                labs(k) = double(x(k).(idField)); nms{k} = char(x(k).(nameField));
-            end
-            T.labels = labs; T.names = nms; return;
-        end
-    end
-end
-end
 
 function info = fc_read_scm_roi(txtFile)
 fid = fopen(txtFile,'r');
@@ -6736,14 +6678,6 @@ end
 val = 1;
 end
 
-function out = fc_short_list(c,n)
-out = c;
-for i = 1:numel(out)
-    s = char(out{i});
-    if numel(s) > n, s = [s(1:max(1,n-3)) '...']; end
-    out{i} = s;
-end
-end
 
 function out = fc_abbrev_list(c,n,showHemisphere)
 if nargin < 2 || isempty(n), n = 12; end
@@ -7062,12 +6996,6 @@ switch name
 end
 end
 
-function A2 = fc_fill_empty_hemi_labels(A)
-% Disabled intentionally.
-% Functional Connectivity must use the true co-registered atlas labels.
-% Do not mirror labels, because that creates fake left/right symmetry.
-A2 = A;
-end
 
 function fc_draw_roi_abbrev_on_map(ax,atlasS,labels,names,C,showHemisphere)
 if nargin < 6 || isempty(showHemisphere), showHemisphere = true; end
@@ -7107,10 +7035,6 @@ switch modeVal
 end
 end
 
-function s = fc_short(s)
-s = char(s);
-if numel(s) > 32, s = [s(1:29) '...']; end
-end
 
 function out = fc_join(c)
 if isempty(c), out = 'none'; return; end
@@ -7767,175 +7691,8 @@ for ii = 1:numel(bad)
 end
 end
 
-function fc_region_key_dialog(s,C)
-% Show abbreviation -> full-name mapping for the current ROI/Segmentation result.
-res = [];
-try
-    res = s.roiResults{s.currentSubject,s.currentEpoch};
-catch
-end
 
-if isempty(res) || ~isfield(res,'labels') || isempty(res.labels)
-    error('No ROI/Segmentation result is loaded yet. Load Seg MAT or compute ROI FC first.');
-end
 
-labels = double(res.labels(:));
-names = res.names(:);
-n = numel(labels);
-if numel(names) < n
-    tmp = cell(n,1);
-    for k = 1:n
-        if k <= numel(names), tmp{k} = names{k}; else, tmp{k} = sprintf('ROI_%g',labels(k)); end
-    end
-    names = tmp;
-end
-
-[abbr, fullNames, sourceFile, sourceLabel] = fc_region_key_collect(labels,names,s,res);
-
-lines = {};
-lines{end+1} = 'FUNCTIONAL CONNECTIVITY REGION KEY';
-lines{end+1} = '============================================================';
-lines{end+1} = sprintf('Regions: %d',n);
-if ~isempty(sourceLabel)
-    lines{end+1} = ['Source: ' sourceLabel];
-end
-if ~isempty(sourceFile)
-    lines{end+1} = ['File: ' sourceFile];
-end
-lines{end+1} = '';
-lines{end+1} = sprintf('%-5s %-12s %-18s %s','No','Label','Abbrev','Full name');
-lines{end+1} = sprintf('%-5s %-12s %-18s %s','----','----------','----------------','------------------------------');
-for k = 1:n
-    lines{end+1} = sprintf('%-5d %-12g %-18s %s',k,labels(k),abbr{k},fullNames{k}); %#ok<AGROW>
-end
-outTxt = strjoin(lines,newline);
-
-bg = [0.06 0.06 0.07]; fg = [0.96 0.96 0.96];
-figKey = figure('Name','FC Region key: abbreviation -> full name', ...
-    'Color',bg,'MenuBar','none','ToolBar','none','NumberTitle','off', ...
-    'Units','pixels','Position',[260 90 1050 820]);
-try, movegui(figKey,'center'); catch, end
-
-uicontrol('Parent',figKey,'Style','edit','Max',2,'Min',0, ...
-    'Units','normalized','Position',[0.035 0.105 0.930 0.855], ...
-    'BackgroundColor',bg,'ForegroundColor',fg,'FontName','Consolas', ...
-    'FontSize',11,'HorizontalAlignment','left','String',outTxt);
-
-if ~isempty(sourceFile) && exist(sourceFile,'file')
-    uicontrol('Parent',figKey,'Style','pushbutton','Units','normalized', ...
-        'Position',[0.035 0.025 0.250 0.055],'String','Open source file', ...
-        'BackgroundColor',C.orange,'ForegroundColor','w', ...
-        'FontName',C.font,'FontWeight','bold','FontSize',12, ...
-        'Callback',@(src,evt)fc_open_file_external(sourceFile));
-end
-
-uicontrol('Parent',figKey,'Style','pushbutton','Units','normalized', ...
-    'Position',[0.790 0.025 0.175 0.055],'String','Close', ...
-    'BackgroundColor',C.red,'ForegroundColor','w', ...
-    'FontName',C.font,'FontWeight','bold','FontSize',12, ...
-    'Callback',@(src,evt)delete(figKey));
-end
-
-function [abbr, fullNames, sourceFile, sourceLabel] = fc_region_key_collect(labels,names,s,res)
-n = numel(labels);
-abbr = cell(n,1);
-fullNames = cell(n,1);
-for k = 1:n
-    displayName = char(names{k});
-    displayName = strtrim(displayName);
-    abbr{k} = fc_roi_abbrev(displayName,18);
-    fullNames{k} = regexprep(displayName,'\s*\[[^\]]*\]\s*$','');
-    if isempty(strtrim(fullNames{k})), fullNames{k} = displayName; end
-end
-
-sourceFile = '';
-sourceLabel = '';
-
-try
-    if isfield(s,'loadedRegionNameFile') && ~isempty(s.loadedRegionNameFile) && exist(s.loadedRegionNameFile,'file')
-        sourceFile = s.loadedRegionNameFile;
-        sourceLabel = 'Loaded region-name TXT/CSV/MAT';
-    elseif isfield(s,'loadedSegmentationFile') && ~isempty(s.loadedSegmentationFile) && exist(s.loadedSegmentationFile,'file')
-        sourceFile = s.loadedSegmentationFile;
-        sourceLabel = 'Loaded Segmentation MAT';
-    elseif isfield(res,'sourceFile') && ~isempty(res.sourceFile) && exist(res.sourceFile,'file')
-        sourceFile = res.sourceFile;
-        sourceLabel = 'ROI result source file';
-    end
-catch
-end
-
-% If a region-name table was loaded, use it as full-name source.
-try
-    if isfield(s,'opts') && isfield(s.opts,'roiNameTable')
-        T = s.opts.roiNameTable;
-        if isstruct(T) && isfield(T,'labels') && isfield(T,'names') && ~isempty(T.labels)
-            for k = 1:n
-                idx = find(abs(double(T.labels(:))) == abs(labels(k)),1,'first');
-                if ~isempty(idx) && idx <= numel(T.names)
-                    nm = strtrim(char(T.names{idx}));
-                    if ~isempty(nm)
-                        fullNames{k} = nm;
-                        abbr{k} = fc_roi_abbrev(nm,18);
-                    end
-                end
-            end
-        end
-    end
-catch
-end
-
-% If this came from deConfUSIon Segmentation, retrieve acronyms and full names directly from Seg.region.
-try
-    segFile = '';
-    if isfield(res,'sourceFile') && ~isempty(res.sourceFile) && exist(res.sourceFile,'file')
-        segFile = res.sourceFile;
-    elseif ~isempty(sourceFile) && exist(sourceFile,'file')
-        segFile = sourceFile;
-    end
-    if ~isempty(segFile)
-        S = load(segFile);
-        if isfield(S,'Seg')
-            Seg = S.Seg;
-            if isfield(Seg,'region') && isstruct(Seg.region) && isfield(Seg.region,'labels')
-                labs0 = double(Seg.region.labels(:));
-                acr0 = {};
-                nam0 = {};
-                if isfield(Seg.region,'acronyms') && ~isempty(Seg.region.acronyms), acr0 = cellstr(Seg.region.acronyms(:)); end
-                if isfield(Seg.region,'names') && ~isempty(Seg.region.names), nam0 = cellstr(Seg.region.names(:)); end
-                for k = 1:n
-                    idx = find(abs(labs0) == abs(labels(k)),1,'first');
-                    if ~isempty(idx)
-                        if idx <= numel(acr0) && ~isempty(strtrim(char(acr0{idx})))
-                            abbr{k} = strtrim(char(acr0{idx}));
-                        end
-                        if idx <= numel(nam0) && ~isempty(strtrim(char(nam0{idx})))
-                            fullNames{k} = strtrim(char(nam0{idx}));
-                        end
-                    end
-                end
-            end
-        end
-    end
-catch
-end
-end
-
-function fc_open_file_external(fileName)
-try
-    if exist(fileName,'file')
-        if ispc
-            winopen(fileName);
-        elseif ismac
-            system(['open "' fileName '" &']);
-        else
-            system(['xdg-open "' fileName '" &']);
-        end
-    end
-catch
-    try, edit(fileName); catch, end
-end
-end
 
 
 
@@ -9677,9 +9434,6 @@ for ii = 1:numel(names)
 end
 end
 
-function [map2,note] = deConfUSIon_FCGA_findMapRecursive_SAFE_20260617(X,prefix,depth)
-map2 = []; note = '';
-end
 
 function sliceResults = deConfUSIon_FCGA_findSliceResults_SAFE_20260617()
 sliceResults = [];
@@ -9698,9 +9452,6 @@ for ii = 1:numel(cands)
 end
 end
 
-function sr = deConfUSIon_FCGA_findSliceRecursive_SAFE_20260617(X,depth)
-sr = [];
-end
 % FC_GA_EXPORT_ENRICH_SAFE_20260617_END
 
 

@@ -69,6 +69,11 @@ end
             if isfield(S,f)
                 meta.rawMetadata.(f) = S.(f);
             end
+
+        % DECONF_VOXELSIZE_V1: surface voxelSize at top level of meta
+        if isfield(meta.rawMetadata,'voxelSize')
+            try, meta.voxelSize = double(meta.rawMetadata.voxelSize(:)).'; catch, end
+        end
         end
 
         % -------------------------------------------------

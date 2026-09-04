@@ -74,6 +74,12 @@ end
         % GUI callbacks and object behaviour
         % -----------------------------------------------------------------
         localSetObjPropIfExists(pp, 'total_frames', cfg.n_frames);
+        localSetObjPropIfExists(pp, 'probe_type', cfg.probe_type);
+        localSetObjPropIfExists(pp, 'tr_unit_s', localGetTRUnit(cfg));
+
+        localGuiLog(cfg, sprintf('Probe type: %s | TR = nblocksImage x %.3f s = %.3f s', ...
+            cfg.probe_type, localGetTRUnit(cfg), ...
+            localCalcTRSec(cfg.nblocksImage, localGetTRUnit(cfg))));
 
         if isfield(cfg, 'gui') && isstruct(cfg.gui)
             if isfield(cfg.gui, 'frameFcn')
@@ -240,6 +246,10 @@ if cfg.motor.enable && strcmpi(localGetMotorAcqMode(cfg), 'continuous')
     localSetObjPropIfExists(pp, 'motor_axis', motorAxis);
     localSetObjPropIfExists(pp, 'motor_settle_pause_s', cfg.motor.settle_pause_s);
 
+    % Do not block the frame callback while the stage travels.
+    localSetObjPropIfExists(pp, 'motor_wait_until_idle', ...
+        logical(cfg.motor.wait_until_idle_in_scan));
+
     localSetObjPropIfExists(pp, 'motor_use_explicit_plan', true);
     localSetObjPropIfExists(pp, 'motor_move_frames', continuousMotorPlan.frames);
     localSetObjPropIfExists(pp, 'motor_move_target_abs_mm', continuousMotorPlan.targets_abs_mm);
@@ -341,6 +351,24 @@ splitLastNameFile = '';
 splitLastMd = struct();
 splitLastTrial = NaN;
 
+% -------------------------------------------------------------------------
+% FAST SLICE PIPELINE STATE
+%
+% When a move to the next slice has already been issued (during the save of
+% the previous slice), motorPrefetchTargetMM holds that target. The next
+% iteration then only has to wait for the stage to report idle instead of
+% issuing the move from scratch.
+%
+% NaN means "no move is in flight".
+% -------------------------------------------------------------------------
+motorPrefetchTargetMM = NaN;
+useFastMotorPipeline = isSplitMotor && logical(cfg.motor.fast_pipeline);
+
+if useFastMotorPipeline
+    localGuiLog(cfg, ...
+        'Fast slice pipeline ON: next slice move overlaps the current file save.');
+end
+
 for iTrial = 1:cfg.n_trials
 
     for iMotor = 1:nMotorLoopThisRun
@@ -386,12 +414,27 @@ for iTrial = 1:cfg.n_trials
 
     requestedMotorAbsMM = scanMotorPositionsAbsMM(iSliceIndex);
 
-    localGuiStatus(cfg, sprintf( ...
-        'Split mode: moving motor slice %d/%d, t%03d before acquisition...', ...
-        iSliceIndex, nMotorPositionsThisRun, iTimeIndex), 'notready');
+    % ---------------------------------------------------------
+    % If the move to this slice was already issued while the
+    % previous file was being saved, the stage has been travelling
+    % during that time. Only the remaining travel is waited on here,
+    % so acquisition starts essentially the moment the stage lands.
+    % ---------------------------------------------------------
+    if useFastMotorPipeline && ~isnan(motorPrefetchTargetMM) && ...
+            abs(motorPrefetchTargetMM - requestedMotorAbsMM) < 1e-9
 
-    [actualMotorAbsMM, ~] = localMoveMotorBeforeStableScan( ...
-        cfg, motorAxis, requestedMotorAbsMM, iSliceIndex, nMotorPositionsThisRun);
+        actualMotorAbsMM = localFinishMotorMove(cfg, motorAxis, requestedMotorAbsMM);
+
+    else
+        localGuiStatus(cfg, sprintf( ...
+            'Split mode: moving motor slice %d/%d, t%03d before acquisition...', ...
+            iSliceIndex, nMotorPositionsThisRun, iTimeIndex), 'notready');
+
+        [actualMotorAbsMM, ~] = localMoveMotorBeforeStableScan( ...
+            cfg, motorAxis, requestedMotorAbsMM, iSliceIndex, nMotorPositionsThisRun);
+    end
+
+    motorPrefetchTargetMM = NaN;
 
     localGuiMotor(cfg, iSliceIndex, nMotorPositionsThisRun, actualMotorAbsMM, 0);
 
@@ -552,8 +595,12 @@ if useProcessRF
     else
         localGuiLog(cfg, 'Using processRF callback for live GUI frame/time updates only.');
     end
-[I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThisAcq, ...
-    'processRF', @(rf)localProcessRFBridge(pp, rf));
+    % Pass the method handle directly, exactly as the OpenfUS reference
+    % script does (SCAN.doppler(..., 'processRF', @pp.newImage)). This
+    % keeps the frame index that echoScan supplies intact and avoids an
+    % extra anonymous-function call on every frame.
+    [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThisAcq, ...
+        'processRF', @pp.newImage);
 else
     localGuiLog(cfg, 'Using plain SCAN.doppler without processRF callback.');
 
@@ -563,7 +610,7 @@ end
  acqElapsedSec = toc(acqTic);
 acqEndDatenum = now;
 
-requestedDtSec = localCalcTRSec(cfg.nblocksImage);
+requestedDtSec = localCalcTRSec(cfg.nblocksImage, localGetTRUnit(cfg));
 actualFrames = localGetAcquiredFrameCount(I, nFramesThisAcq);
 actualMeanDtSec = acqElapsedSec / max(1, actualFrames);
 
@@ -600,6 +647,37 @@ catch ME
     rethrow(ME);
 end
 
+        % -------------------------------------------------------------
+        % FAST SLICE PIPELINE
+        %
+        % The scan for this slice is finished and the data is in memory.
+        % Issue the move to the NEXT slice right now, without waiting for
+        % it, so the stage travels while the metadata is assembled and the
+        % MAT file is written. The next iteration only waits for whatever
+        % travel time is left.
+        %
+        % Only within-trial moves are prefetched. At a trial boundary the
+        % configured inter-trial pause applies anyway.
+        % -------------------------------------------------------------
+        if useFastMotorPipeline && (iMotor < nMotorLoopThisRun)
+            try
+                nextBlockIndex = iMotor + 1;
+                nextSliceIndex = mod(nextBlockIndex - 1, nMotorPositionsThisRun) + 1;
+                nextTargetAbsMM = scanMotorPositionsAbsMM(nextSliceIndex);
+
+                if localStartMotorMoveAsync(cfg, motorAxis, nextTargetAbsMM)
+                    motorPrefetchTargetMM = nextTargetAbsMM;
+                else
+                    % Asynchronous move unsupported on this Zaber build.
+                    % The next iteration performs a normal blocking move.
+                    motorPrefetchTargetMM = NaN;
+                end
+            catch MEpre
+                motorPrefetchTargetMM = NaN;
+                localGuiLog(cfg, sprintf('Motor prefetch warning: %s', MEpre.message));
+            end
+        end
+
           % -------------------------------------------------------------
         % Add acquisition + motor metadata
         % -------------------------------------------------------------
@@ -611,6 +689,53 @@ end
             end
 
             md.requested_frames_this_file = nFramesThisAcq;
+
+            % Probe bookkeeping, so downstream analysis can reconstruct TR
+            % without guessing which probe was used.
+            md.probe_type = cfg.probe_type;
+            md.tr_unit_s = localGetTRUnit(cfg);
+            md.nblocksImage = cfg.nblocksImage;
+            md.data_size = size(I);
+            md.data_ndims = numel(size(I));
+            md.is_volumetric = localIs3DProbe(cfg);
+
+            % -------------------------------------------------------------
+            % EXPLICIT GEOMETRY
+            %
+            % Never make a loader infer which dimension is which. For a 3D
+            % probe the array is [depth_z, width_x, slice_y, time], e.g.
+            % [80 64 54 2500] = 54 slices and 2500 volumes. A loader written
+            % for 2D data sees [Z X T] and mistakes dim 2 (64) for the slice
+            % count. These geom_* fields state the answer outright.
+            %
+            % The geom_ prefix avoids colliding with any field the scanner
+            % already puts in md.
+            % -------------------------------------------------------------
+            szI = size(I);
+            md.geom_data_size = szI;
+            md.geom_time_dim = numel(szI);
+            md.geom_n_time_frames = szI(end);
+
+            if numel(szI) >= 4
+                md.geom_dim_order = '[depth_z, width_x, slice_y, time]';
+                md.geom_slice_dim = 3;
+                md.geom_n_depth_z = szI(1);
+                md.geom_n_width_x = szI(2);
+                md.geom_n_slices  = szI(3);
+            else
+                md.geom_dim_order = '[depth_z, width_x, time]';
+                md.geom_slice_dim = NaN;   % single plane per file
+                md.geom_n_depth_z = szI(1);
+
+                if numel(szI) >= 2
+                    md.geom_n_width_x = szI(2);
+                else
+                    md.geom_n_width_x = NaN;
+                end
+
+                md.geom_n_slices = 1;
+            end
+
             md.acq_start_datenum = acqStartDatenum;
             md.acq_end_datenum = acqEndDatenum;
             md.acq_start_time_string = datestr(acqStartDatenum, 'yyyy-mm-dd HH:MM:SS.FFF');
@@ -660,7 +785,30 @@ md.motor_n_positions = nMotorPositionsThisRun;
             else
                 md.motor_rebuild_hint = 'No motor reconstruction needed.';
             end
-        catch
+
+            md.metadata_complete = true;
+
+        catch MEmeta
+            % -------------------------------------------------------------
+            % This block used to swallow errors silently. If any assignment
+            % above failed, md was left HALF-WRITTEN: the fields before the
+            % failure were present, the ones after were missing or stale
+            % from the scanner. That is exactly how mismatched geometry gets
+            % saved without any visible error.
+            %
+            % md is now explicitly marked incomplete and the failure is
+            % reported, so a bad file is obvious at acquisition time rather
+            % than during analysis.
+            % -------------------------------------------------------------
+            try
+                md.metadata_complete = false;
+                md.metadata_error = MEmeta.message;
+            catch
+            end
+
+            localGuiLog(cfg, sprintf( ...
+                'WARNING: metadata block failed (%s). Saved metadata may be incomplete.', ...
+                MEmeta.message));
         end
         
         [nameFile, nameShort] = localMakeSaveName(FS, cfg, sessionTag, motorPositionsAbsMM, motorHomeMM, iTrial);
@@ -906,7 +1054,7 @@ function [I, md, actualFrames, acqElapsedSec, requestedDtSec, actualMeanDtSec] =
             localGuiLog(cfg, 'Using processRF callback.');
 
             [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThis, ...
-                'processRF', @(rf)localProcessRFBridge(pp, rf));
+                'processRF', @pp.newImage);
         else
             localGuiLog(cfg, 'Using plain SCAN.doppler without processRF callback.');
 
@@ -922,7 +1070,7 @@ function [I, md, actualFrames, acqElapsedSec, requestedDtSec, actualMeanDtSec] =
 
     acqElapsedSec = toc(acqTic);
 
-    requestedDtSec = localCalcTRSec(cfg.nblocksImage);
+    requestedDtSec = localCalcTRSec(cfg.nblocksImage, localGetTRUnit(cfg));
     actualFrames = localGetAcquiredFrameCount(I, nFramesThis);
     actualMeanDtSec = acqElapsedSec / max(1, actualFrames);
 
@@ -977,6 +1125,26 @@ function cfg = localApplyDefaults(cfg)
 
     if ~isfield(cfg, 'nblocksImage') || isempty(cfg.nblocksImage)
         cfg.nblocksImage = 16;
+    end
+
+    % ---------------- Probe type ----------------
+    % '2D' = linear probe, TR unit 0.02 s per nblocksImage
+    % '3D' = volumetric probe, TR unit 0.03 s per nblocksImage
+    if ~isfield(cfg, 'probe_type') || isempty(cfg.probe_type) || ~ischar(cfg.probe_type)
+        cfg.probe_type = '2D';
+    end
+
+    if ~isempty(strfind(upper(cfg.probe_type), '3D'))
+        cfg.probe_type = '3D';
+        defaultTRUnit = 0.03;
+    else
+        cfg.probe_type = '2D';
+        defaultTRUnit = 0.02;
+    end
+
+    if ~isfield(cfg, 'tr_unit_s') || isempty(cfg.tr_unit_s) || ...
+            ~isnumeric(cfg.tr_unit_s) || ~isfinite(cfg.tr_unit_s) || cfg.tr_unit_s <= 0
+        cfg.tr_unit_s = defaultTRUnit;
     end
 
     if ~isfield(cfg, 'n_trials') || isempty(cfg.n_trials)
@@ -1217,8 +1385,28 @@ end
     end
 
     if ~isfield(cfg.motor, 'settle_pause_s') || isempty(cfg.motor.settle_pause_s)
-        cfg.motor.settle_pause_s = 0.05;  % reduced split-mode motor settling pause
+        cfg.motor.settle_pause_s = 0.02;  % minimal split-mode motor settling pause
     end
+
+    % ---------------------------------------------------------------------
+    % Fast slice pipeline (split mode)
+    %
+    % When true, the move to the NEXT slice is issued as soon as the current
+    % SCAN.doppler call returns, so the stage travels while the current MAT
+    % file is being written. The next acquisition then starts as soon as the
+    % stage reports idle, instead of after save + move + settle in series.
+    % ---------------------------------------------------------------------
+    if ~isfield(cfg.motor, 'fast_pipeline') || isempty(cfg.motor.fast_pipeline)
+        cfg.motor.fast_pipeline = true;
+    end
+    cfg.motor.fast_pipeline = logical(cfg.motor.fast_pipeline);
+
+    % In continuous mode, do not block the frame callback while the stage
+    % travels. Set false to let imaging continue during the move.
+    if ~isfield(cfg.motor, 'wait_until_idle_in_scan') || isempty(cfg.motor.wait_until_idle_in_scan)
+        cfg.motor.wait_until_idle_in_scan = false;
+    end
+    cfg.motor.wait_until_idle_in_scan = logical(cfg.motor.wait_until_idle_in_scan);
 end
 
 % =========================================================================
@@ -1291,6 +1479,19 @@ function localValidateConfig(cfg)
 
     if ~isscalar(cfg.nblocksImage) || ~isnumeric(cfg.nblocksImage) || cfg.nblocksImage < 1
         error('cfg.nblocksImage must be a positive scalar.');
+    end
+
+    if ~ischar(cfg.probe_type) || isempty(cfg.probe_type)
+        error('cfg.probe_type must be ''2D'' or ''3D''.');
+    end
+
+    if ~strcmpi(cfg.probe_type, '2D') && ~strcmpi(cfg.probe_type, '3D')
+        error('cfg.probe_type must be ''2D'' or ''3D'', not ''%s''.', cfg.probe_type);
+    end
+
+    if ~isscalar(cfg.tr_unit_s) || ~isnumeric(cfg.tr_unit_s) || ...
+            ~isfinite(cfg.tr_unit_s) || cfg.tr_unit_s <= 0
+        error('cfg.tr_unit_s must be a positive scalar (0.02 for 2D, 0.03 for 3D).');
     end
 
     if ~isscalar(cfg.n_trials) || ~isnumeric(cfg.n_trials) || cfg.n_trials < 1
@@ -1504,10 +1705,22 @@ end
 % Motor
 % =========================================================================
 function [connection, axis, homeMM] = localOpenMotor(comName)
-    import zaber.motion.ascii.Connection;
-    import zaber.motion.Units;
+    % IMPORTANT: no "import zaber.motion..." here.
+    %
+    % MATLAB resolves import statements when the FILE IS PARSED, not when
+    % the function runs. A static import therefore makes the whole file
+    % fail to load on any machine without the Zaber Motion toolbox, even
+    % if the motor is never used, and a try/catch around it does not help.
+    %
+    % Fully qualified names are resolved at call time instead, so this
+    % file always loads and only errors if the motor is actually opened.
 
-    connection = Connection.openSerialPort(comName);
+    if ~localIsZaberAvailable()
+        error(['Zaber Motion toolbox not found, so the motor cannot be opened.' sprintf('\n') ...
+               'Install the Zaber Motion Library for MATLAB, or disable the motor in the GUI.']);
+    end
+
+    connection = zaber.motion.ascii.Connection.openSerialPort(comName);
     deviceList = connection.detectDevices();
 
     if isempty(deviceList)
@@ -1516,7 +1729,40 @@ function [connection, axis, homeMM] = localOpenMotor(comName)
 
     device = deviceList(1);
     axis = device.getAxis(1);
-    homeMM = axis.getPosition(Units.LENGTH_MILLIMETRES);
+    homeMM = axis.getPosition(zaber.motion.Units.LENGTH_MILLIMETRES);
+end
+
+function tf = localIsZaberAvailable()
+    % Runtime check for the Zaber Motion toolbox.
+    % Kept separate so every motor entry point can guard itself cheaply.
+
+    persistent cachedTF
+
+    if ~isempty(cachedTF)
+        tf = cachedTF;
+        return;
+    end
+
+    tf = false;
+
+    try
+        if exist('zaber.motion.Units', 'class') == 8
+            tf = true;
+        end
+    catch
+    end
+
+    if ~tf
+        try
+            % Touching the class is the most reliable probe across versions.
+            zaber.motion.Units.LENGTH_MILLIMETRES;
+            tf = true;
+        catch
+            tf = false;
+        end
+    end
+
+    cachedTF = tf;
 end
 
 function positionsAbsMM = localBuildMotorPositions(homeMM, motorCfg)
@@ -1682,6 +1928,64 @@ function [actualPosMM, ok] = localMoveMotorBeforeStableScan(cfg, motorAxis, targ
 end
 
 % =========================================================================
+% Fast slice pipeline: non-blocking motor move + deferred wait
+% =========================================================================
+function ok = localStartMotorMoveAsync(cfg, motorAxis, targetAbsMM) %#ok<INUSL>
+    % Issue a move WITHOUT waiting for it to finish, so the caller can do
+    % useful work (saving the previous MAT file) while the stage travels.
+
+    ok = false;
+
+    if isempty(motorAxis)
+        return;
+    end
+
+    if isempty(targetAbsMM) || ~isnumeric(targetAbsMM) || isnan(targetAbsMM)
+        return;
+    end
+
+    try
+        % Zaber Motion: moveAbsolute(position, unit, waitUntilIdle)
+        motorAxis.moveAbsolute(targetAbsMM, ...
+            zaber.motion.Units.LENGTH_MILLIMETRES, false);
+        ok = true;
+
+    catch
+        % Older Zaber Motion builds reject the third argument.
+        % Nothing is issued here; the caller falls back to a blocking move.
+        ok = false;
+    end
+end
+
+function actualPosMM = localFinishMotorMove(cfg, motorAxis, targetAbsMM)
+    % Block until a previously issued asynchronous move has completed,
+    % apply the settle pause, then read back the position.
+
+    actualPosMM = targetAbsMM;
+
+    try
+        motorAxis.waitUntilIdle();
+    catch
+        % If waitUntilIdle is unavailable, the settle pause below is the
+        % only guard. Keep it conservative in that case.
+    end
+
+    try
+        if isfield(cfg, 'motor') && isfield(cfg.motor, 'settle_pause_s') && ...
+                isnumeric(cfg.motor.settle_pause_s) && cfg.motor.settle_pause_s > 0
+            pause(cfg.motor.settle_pause_s);
+        end
+    catch
+    end
+
+    try
+        actualPosMM = motorAxis.getPosition(zaber.motion.Units.LENGTH_MILLIMETRES);
+    catch
+        actualPosMM = targetAbsMM;
+    end
+end
+
+% =========================================================================
 % StimBox serial open
 % =========================================================================
 function port = localOpenStimBoxPort(comName, baudRate)
@@ -1715,6 +2019,7 @@ end
 % Save names and journal text
 % =========================================================================
 function [nameFile, nameShort] = localMakeSaveName(FS, cfg, sessionTag, motorPositionsAbsMM, motorHomeMM, iTrial) %#ok<INUSD>
+    % sessionTag is used as the cache key for the scan index counter.
     % Save path:
     %   Data\<save_owner>\<xp_name>\<xp_name>_scanN[_StimBox][_ElectricalStim][_Motor].mat
     %
@@ -1769,7 +2074,7 @@ end
 deviceSuffix = localBuildDeviceSuffix(cfg);
 
 % Scan index is counted inside the folder where files are saved.
-scanIdx = localGetNextScanIndex(saveFolder, cfg.xp_name);
+scanIdx = localGetNextScanIndex(saveFolder, cfg.xp_name, sessionTag);
 
     if isempty(deviceSuffix)
         nameShort = sprintf('%s_scan%d.mat', cfg.xp_name, scanIdx);
@@ -1804,7 +2109,117 @@ function [nameFileOut, nameShortOut] = localMakeFileNameUnique(nameFileIn)
 end
 
 
+function localSaveAcqInfo(nameFile, md, cfg)
+    % -------------------------------------------------------------------
+    % The data file holds only I, metadata and events, matching the
+    % scanner GUI exactly. A loader that scans variables would otherwise
+    % pick md over metadata and misread the geometry.
+    %
+    % The acquisition bookkeeping in md (timing QC, motor state, probe
+    % type, trigger schedule) is still worth keeping, so it is written
+    % beside the data file as <name>_acqinfo.mat.
+    %
+    % A failure here must never lose the scan, so it only warns.
+    % -------------------------------------------------------------------
+
+    try
+        [folderPath, baseName, ~] = fileparts(nameFile);
+        acqFile = fullfile(folderPath, [baseName '_acqinfo.mat']);
+
+        save(acqFile, 'md', '-v7');
+
+    catch MEacq
+        localGuiLog(cfg, sprintf( ...
+            'WARNING: could not write acquisition info sidecar: %s', MEacq.message));
+    end
+end
+
+function [metadataOut, eventsOut] = localBuildCompanyVars(md)
+    % -------------------------------------------------------------------
+    % SAVE-FORMAT COMPATIBILITY
+    %
+    % The scanner GUI saves three variables:
+    %       I, metadata, events
+    % where "metadata" holds ONLY the scanner's own fields
+    % (imageDim, imageSize, imageType, origen, t0, tag, time, voxelSize).
+    %
+    % This script previously saved I and md, where md was the scanner
+    % metadata with ~40 extra acquisition fields merged in. Any loader
+    % looking for a variable called "metadata" found nothing and fell
+    % back to guessing the geometry, which is why a [80 64 54 90] volume
+    % displayed as 64 slices instead of 54.
+    %
+    % Here md is split back apart:
+    %   metadata -> scanner-native fields only, byte-compatible with the
+    %               GUI format
+    %   events   -> taken from the scanner tag field, or an empty struct
+    %               matching what the GUI writes
+    %
+    % The full md is still saved alongside, so nothing is lost.
+    % -------------------------------------------------------------------
+
+    % Fields this toolbox adds. Everything else is treated as scanner-native,
+    % so a future scanner field is preserved automatically.
+    dropExact = { ...
+        'acquisition_mode', 'probe_type', 'tr_unit_s', 'nblocksImage', ...
+        'data_size', 'data_ndims', 'is_volumetric', ...
+        'timeIndex', 'sliceIndex'};
+
+    dropPrefix = {'geom_', 'motor_', 'acq_', 'actual_', 'requested_', 'metadata_'};
+
+    metadataOut = struct();
+
+    if ~isstruct(md) || numel(md) ~= 1
+        eventsOut = localEmptyEvents();
+        return;
+    end
+
+    fn = fieldnames(md);
+
+    for i = 1:numel(fn)
+        thisName = fn{i};
+
+        if any(strcmp(thisName, dropExact))
+            continue;
+        end
+
+        skipThis = false;
+        for k = 1:numel(dropPrefix)
+            if strncmp(thisName, dropPrefix{k}, numel(dropPrefix{k}))
+                skipThis = true;
+                break;
+            end
+        end
+
+        if skipThis
+            continue;
+        end
+
+        metadataOut.(thisName) = md.(thisName);
+    end
+
+    % The scanner stores event marks in the tag field, and the GUI writes
+    % the same structure out as a separate "events" variable.
+    if isfield(md, 'tag')
+        eventsOut = md.tag;
+    else
+        eventsOut = localEmptyEvents();
+    end
+end
+
+function e = localEmptyEvents()
+    % Matches the GUI format exactly: image is an empty double, text an
+    % empty cell.
+    e = struct();
+    e.image = [];
+    e.text = {};
+end
+
 function localReliableSaveMat(nameFile, I, md, cfg)
+
+    % Rebuild the scanner-native variables so the file matches the GUI format.
+    [metadata, events] = localBuildCompanyVars(md);
+
     [saveFolder, saveBase, saveExt] = fileparts(nameFile);
 
     if ~exist(saveFolder, 'dir')
@@ -1823,7 +2238,7 @@ function localReliableSaveMat(nameFile, I, md, cfg)
                 delete(tmpFile);
             end
 
-            save(tmpFile, 'I', 'md', '-v7.3');
+            save(tmpFile, 'I', 'metadata', 'events', '-v7.3');
 
             if ~exist(tmpFile, 'file')
                 error('Temporary MAT file was not created.');
@@ -1841,8 +2256,19 @@ function localReliableSaveMat(nameFile, I, md, cfg)
                 error('Temporary MAT file created, but variable I is missing.');
             end
 
-            if ~ismember('md', varNames)
-                error('Temporary MAT file created, but variable md is missing.');
+            % The loader reads "metadata" and "events".
+            if ~ismember('metadata', varNames)
+                error('Temporary MAT file created, but variable metadata is missing.');
+            end
+
+            if ~ismember('events', varNames)
+                error('Temporary MAT file created, but variable events is missing.');
+            end
+
+            % md must NOT be here: a loader that scans variables picks md
+            % over metadata and misreads the geometry.
+            if ismember('md', varNames)
+                error('Temporary MAT file still contains md.');
             end
 
             [ok, msg] = movefile(tmpFile, nameFile, 'f');
@@ -1857,9 +2283,11 @@ function localReliableSaveMat(nameFile, I, md, cfg)
             varsFinal = whos('-file', nameFile);
             finalNames = {varsFinal.name};
 
-            if ~ismember('I', finalNames) || ~ismember('md', finalNames)
-                error('Final MAT file verification failed: I or md missing.');
+            if ~ismember('I', finalNames) || ~ismember('metadata', finalNames) || ~ismember('events', finalNames)
+                error('Final MAT file verification failed: I, metadata or events missing.');
             end
+
+            localSaveAcqInfo(nameFile, md, cfg);
 
             localGuiLog(cfg, sprintf('Reliable save verified: %s', nameFile));
             return;
@@ -1883,9 +2311,18 @@ function localReliableSaveMat(nameFile, I, md, cfg)
 end
 
 function localFastSaveMat(nameFile, I, md, cfg)
-    % Fast save for split-motor tiny files.
+
+    % Rebuild the scanner-native variables so the file matches the GUI format.
+    [metadata, events] = localBuildCompanyVars(md);
+    % Fast save for split-motor slice files.
     % Uses -v7 first because it is much faster than -v7.3 for small files.
     % Falls back to -v7.3 if needed.
+    %
+    % 3D PROBE NOTE:
+    % -v7 cannot store a variable larger than 2 GB. Volumetric slice files
+    % can exceed that. Rather than failing and retrying (which costs a full
+    % wasted write), the size is checked up front and -v7.3 is used
+    % directly for large arrays.
 
     [saveFolder, ~, ~] = fileparts(nameFile);
 
@@ -1893,12 +2330,39 @@ function localFastSaveMat(nameFile, I, md, cfg)
         mkdir(saveFolder);
     end
 
+    useV73Directly = false;
+
     try
-        save(nameFile, 'I', 'md', '-v7');
+        infoI = whos('I');
+        % Stay well under the 2 GB limit.
+        if ~isempty(infoI) && infoI.bytes > 1.5e9
+            useV73Directly = true;
+        end
+    catch
+    end
+
+    if useV73Directly
+        try
+            localGuiLog(cfg, 'Large volume detected: saving with -v7.3.');
+            save(nameFile, 'I', 'metadata', 'events', '-v7.3');
+            localSaveAcqInfo(nameFile, md, cfg);
+            return;
+        catch MEbig
+            localGuiLog(cfg, sprintf('Large -v7.3 save failed, using reliable save: %s', MEbig.message));
+            localReliableSaveMat(nameFile, I, md, cfg);
+            return;
+        end
+    end
+
+    try
+        save(nameFile, 'I', 'metadata', 'events', '-v7');
+        localSaveAcqInfo(nameFile, md, cfg);
+        return;
     catch ME1
         try
             localGuiLog(cfg, sprintf('Fast -v7 save failed, trying -v7.3: %s', ME1.message));
-            save(nameFile, 'I', 'md', '-v7.3');
+            save(nameFile, 'I', 'metadata', 'events', '-v7.3');
+            localSaveAcqInfo(nameFile, md, cfg);
         catch ME2
             localGuiLog(cfg, sprintf('Fast save failed, using reliable save: %s', ME2.message));
             localReliableSaveMat(nameFile, I, md, cfg);
@@ -2054,10 +2518,32 @@ function suffix = localBuildDeviceSuffix(cfg)
     end
 end
 
-function scanIdx = localGetNextScanIndex(folderPath, expName)
+function scanIdx = localGetNextScanIndex(folderPath, expName, sessionKey)
     % IMPORTANT:
     % Use one common scan counter across ALL scan files in this experiment folder,
     % regardless of device suffix such as _Motor, _StimBox, _SB_M, etc.
+    %
+    % SPEED NOTE (split motor mode):
+    % Scanning the folder with dir() before every slice file gets slower as
+    % the session grows, which shows up as dead time between slices. The
+    % index is therefore resolved from disk once per run and then simply
+    % incremented in memory. sessionKey changes every run, so a new run
+    % always re-reads the folder. Collisions remain impossible because
+    % localMakeFileNameUnique still checks the final path.
+
+    persistent cachedKey cachedIdx
+
+    if nargin < 3 || isempty(sessionKey)
+        sessionKey = '';
+    end
+
+    thisKey = [sessionKey '|' folderPath '|' expName];
+
+    if ~isempty(cachedKey) && ~isempty(cachedIdx) && strcmp(cachedKey, thisKey)
+        cachedIdx = cachedIdx + 1;
+        scanIdx = cachedIdx;
+        return;
+    end
 
     d = dir(fullfile(folderPath, [expName '_scan*.mat']));
     scanNums = [];
@@ -2081,6 +2567,9 @@ function scanIdx = localGetNextScanIndex(folderPath, expName)
     else
         scanIdx = max(scanNums) + 1;
     end
+
+    cachedKey = thisKey;
+    cachedIdx = scanIdx;
 end
 
 function txt = localMakeJournalText(nameShort, cfg, motorPositionsAbsMM, motorHomeMM, iTrial)
@@ -2112,7 +2601,7 @@ function localWriteScanInfoText(nameFile, cfg, iTrial, md)
 
     c = onCleanup(@() fclose(fid)); %#ok<NASGU>
 
-    trSec = localCalcTRSec(cfg.nblocksImage);
+    trSec = localCalcTRSec(cfg.nblocksImage, localGetTRUnit(cfg));
 
     fprintf(fid, 'Scan information\n');
     fprintf(fid, '================\n\n');
@@ -2134,6 +2623,8 @@ end
     fprintf(fid, 'Frames per trial: %s\n', localNumToStr(cfg.n_frames));
     fprintf(fid, 'Number of trials: %s\n', localNumToStr(cfg.n_trials));
     fprintf(fid, 'nblocksImage: %s\n', localNumToStr(cfg.nblocksImage));
+    fprintf(fid, 'Probe type: %s\n', localSafeText(cfg.probe_type));
+    fprintf(fid, 'TR unit (s per block): %s\n', localNumToStr(localGetTRUnit(cfg)));
     fprintf(fid, 'TR (s): %s\n', localNumToStr(trSec));
     fprintf(fid, 'Frame rate (Hz): %s\n', localNumToStr(1 / trSec));
     fprintf(fid, 'Pause between trials (s): %s\n', localNumToStr(cfg.time_pause));
@@ -2273,7 +2764,7 @@ function localWriteSplitSessionSummaryText(cfg, splitSessionRows, lastNameFile, 
 
     c = onCleanup(@() fclose(fid)); %#ok<NASGU>
 
-    trSec = localCalcTRSec(cfg.nblocksImage);
+    trSec = localCalcTRSec(cfg.nblocksImage, localGetTRUnit(cfg));
 
     fprintf(fid, 'Split motor session summary\n');
     fprintf(fid, '===========================\n\n');
@@ -2290,6 +2781,8 @@ function localWriteSplitSessionSummaryText(cfg, splitSessionRows, lastNameFile, 
     fprintf(fid, 'Frames per trial total: %s\n', localNumToStr(cfg.n_frames));
     fprintf(fid, 'Number of trials: %s\n', localNumToStr(cfg.n_trials));
     fprintf(fid, 'nblocksImage: %s\n', localNumToStr(cfg.nblocksImage));
+    fprintf(fid, 'Probe type: %s\n', localSafeText(cfg.probe_type));
+    fprintf(fid, 'TR unit (s per block): %s\n', localNumToStr(localGetTRUnit(cfg)));
     fprintf(fid, 'Requested TR (s): %s\n', localNumToStr(trSec));
     fprintf(fid, 'Requested frame rate (Hz): %s\n', localNumToStr(1 / trSec));
 
@@ -2375,7 +2868,7 @@ end
 % Summary printing
 % =========================================================================
 function localPrintSummary(cfg, motorHomeMM, motorPositionsAbsMM, stimboxFrames, pulsepalTriggerFrames, motorPlan)
-    trSec = localCalcTRSec(cfg.nblocksImage);
+    trSec = localCalcTRSec(cfg.nblocksImage, localGetTRUnit(cfg));
     fps = 1 / trSec;
 
     disp(' ');
@@ -2385,7 +2878,9 @@ function localPrintSummary(cfg, motorHomeMM, motorPositionsAbsMM, stimboxFrames,
     fprintf('- Frames per trial: %d\n', cfg.n_frames);
     fprintf('- Number of trials: %d\n', cfg.n_trials);
     fprintf('- nblocksImage: %d\n', cfg.nblocksImage);
-    fprintf('- TR (2D probe assumption): %.3f s\n', trSec);
+    fprintf('- Probe type: %s\n', cfg.probe_type);
+    fprintf('- TR (%s probe, %.3f s per block): %.3f s\n', ...
+        cfg.probe_type, localGetTRUnit(cfg), trSec);
     fprintf('- Frame rate: %.3f fps\n', fps);
 
     fprintf('- StimBox enabled: %d\n', logical(cfg.stimbox.enable));
@@ -2443,8 +2938,54 @@ function localPrintSummary(cfg, motorHomeMM, motorPositionsAbsMM, stimboxFrames,
     disp(' ');
 end
 
-function trSec = localCalcTRSec(nblocksImage)
-    trSec = nblocksImage * 0.02;
+function trSec = localCalcTRSec(nblocksImage, trUnitSec)
+    % TR = nblocksImage x (seconds per block unit)
+    %
+    %   2D probe : 0.02 s per unit
+    %   3D probe : 0.03 s per unit
+    %
+    % trUnitSec is optional so that any older call site still works.
+
+    if nargin < 2 || isempty(trUnitSec) || ~isnumeric(trUnitSec) || ...
+            ~isfinite(trUnitSec) || trUnitSec <= 0
+        trUnitSec = 0.02;
+    end
+
+    trSec = nblocksImage * trUnitSec;
+end
+
+function trUnitSec = localGetTRUnit(cfg)
+    % Resolve seconds-per-block from cfg, preferring an explicit value.
+
+    trUnitSec = 0.02;
+
+    try
+        if isfield(cfg, 'tr_unit_s') && ~isempty(cfg.tr_unit_s) && ...
+                isnumeric(cfg.tr_unit_s) && isfinite(cfg.tr_unit_s) && cfg.tr_unit_s > 0
+            trUnitSec = cfg.tr_unit_s;
+            return;
+        end
+    catch
+    end
+
+    try
+        if isfield(cfg, 'probe_type') && ~isempty(cfg.probe_type) && ...
+                ischar(cfg.probe_type) && ~isempty(strfind(upper(cfg.probe_type), '3D'))
+            trUnitSec = 0.03;
+        end
+    catch
+    end
+end
+
+function tf = localIs3DProbe(cfg)
+    tf = false;
+    try
+        if isfield(cfg, 'probe_type') && ischar(cfg.probe_type) && ...
+                ~isempty(strfind(upper(cfg.probe_type), '3D'))
+            tf = true;
+        end
+    catch
+    end
 end
 
 function localSafePause(t)
@@ -2454,15 +2995,33 @@ function localSafePause(t)
 end
 
 function n = localGetAcquiredFrameCount(I, fallbackN)
+    % Number of acquired frames / volumes.
+    %
+    %   2D probe : I is [Z X T]      -> last dimension is time
+    %   3D probe : I is [Z X Y T]    -> last dimension is still time
+    %
+    % Time is the trailing dimension in both cases, so size(I, end) is used.
+    % A singleton trailing dimension is the one trap: MATLAB drops it, so
+    % a single-frame acquisition reports the wrong count. The fallback
+    % covers that, and any implausible value is rejected.
+
     n = fallbackN;
 
     try
         sz = size(I);
+
         if numel(sz) >= 3
-            n = sz(end);
+            candidate = sz(end);
+
+            % Guard against a dropped singleton time dimension.
+            if numel(sz) == 3 && fallbackN == 1
+                candidate = fallbackN;
+            end
+
+            n = candidate;
         end
 
-        if isempty(n) || ~isnumeric(n) || isnan(n) || n < 1
+        if isempty(n) || ~isnumeric(n) || ~isscalar(n) || isnan(n) || n < 1
             n = fallbackN;
         end
     catch

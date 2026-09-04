@@ -358,7 +358,11 @@ axis(ax, 'image');
 axis(ax, 'off');
 % ===== 3D PROBE ASPECT FIX (nZ>1 only; 2D untouched) =====
 if exist('nZ','var') && nZ > 1
-    probeViewAspect = 1.0;   % <-- EDIT: >1 makes the tall probe image wider/shorter
+    probeViewAspect = 1.0;   % DECONF_ASPECT_V1
+    try
+        if exist('par','var'), probeViewAspect = deConfUSIon_view_aspect(par);
+        else,                  probeViewAspect = deConfUSIon_view_aspect(); end
+    catch, probeViewAspect = 1.0; end
     if exist('par','var') && isstruct(par) && isfield(par,'probeViewAspect') ...
             && isscalar(par.probeViewAspect) && isfinite(par.probeViewAspect) && par.probeViewAspect > 0
         probeViewAspect = double(par.probeViewAspect);
@@ -900,7 +904,16 @@ end
 %% ==========================================================
 % CALLBACKS
 %% ==========================================================
-function onWindowEdited(~,~), computeSCM(); end
+function onWindowEdited(~,~)
+    computeSCM();
+    redrawROIsForCurrentSlice();
+    roi.isFrozen = false;
+    try, set(hLiveRect, 'Visible', 'off'); catch, end
+    try, set(hLivePSC, 'Visible', 'off'); catch, end
+    try, set(hRoiCoordTxt, 'Visible', 'off', 'String', ''); catch, end
+    applyTimecourseAxisMode();
+end
+
 function roiXYNoop(~,~), end
 
 function sliceChanged(~,~)
@@ -1317,13 +1330,6 @@ end
     end
 end
 
-function clearMaskCB(~,~) %#ok<DEFNU>
-    passedMask = [];
-    passedMaskIsInclude = true;
-    mask2D = true(nY, nX);
-    set(info1, 'String', 'Overlay mask cleared.', 'TooltipString', '');
-    computeSCM();
-end
 
 function loadNewUnderlayCB(~,~)
     ensureUnderlayStateFields();
@@ -2007,6 +2013,10 @@ function exportROIsCB(~,~)
             fprintf(fid, '# ROI_MARKER_ID: %d\n', r.id);
             fprintf(fid, '# SLICE: %d\n', r.z);
             fprintf(fid, '# BaselineWindow: %s\n', getStr(ebBase));
+            fprintf(fid, '# PSC_REBASED: 1\n');
+            fprintf(fid, '# PSC_REBASE_METHOD: subtract_mean_selected_baseline_from_input_PSC\n');
+            fprintf(fid, '# PSC_BASELINE_TARGET: mean_selected_baseline_equals_0_percent\n');
+
             fprintf(fid, '# SignalWindow: %s\n', getStr(ebSig));
             fprintf(fid, '# x1 x2 y1 y2\n%d %d %d %d\n', r.x1,r.x2,r.y1,r.y2);
             fprintf(fid, '# color_rgb\n%.6f %.6f %.6f\n', r.color(1),r.color(2),r.color(3));
@@ -4103,8 +4113,15 @@ function tc = computeRoiPSC_atSlice(zSel, x1, x2, y1, y2)
             zSel = clamp(round(zSel),1,nZ);
             blk = PSC(y1:y2, x1:x2, zSel, :);
         end
+
         tc = squeeze(mean(mean(blk, 1), 2));
         tc = tc(:).';
+
+        % ROI traces must use the SAME selected baseline as the SCM map.
+        % PSC is already percent signal change, so we subtract the
+        % selected-baseline mean rather than calculating %SC again.
+        tc = rebaselineRoiPSC_toSelectedWindow(tc);
+
     catch
         tc = [];
     end
@@ -4112,17 +4129,58 @@ end
 
 function tc = computeRoiPSC_idx(zSel, x1, x2, y1, y2, idx)
     try
-        if ndims(PSC) == 3
-            blk = PSC(y1:y2, x1:x2, idx);
-        else
-            zSel = clamp(round(zSel),1,nZ);
-            blk = PSC(y1:y2, x1:x2, zSel, idx);
+        % Hover / partial traces are derived from the same corrected
+        % full ROI trace. This prevents display/export inconsistencies.
+        tcAll = computeRoiPSC_atSlice(zSel, x1, x2, y1, y2);
+
+        if isempty(tcAll)
+            tc = [];
+            return;
         end
-        tc = squeeze(mean(mean(blk, 1), 2));
-        tc = tc(:).';
+
+        idx = round(double(idx(:).'));
+        idx = idx(isfinite(idx) & idx >= 1 & idx <= numel(tcAll));
+        tc = tcAll(idx);
     catch
         tc = [];
     end
+end
+
+function tc = rebaselineRoiPSC_toSelectedWindow(tc)
+    if isempty(tc)
+        return;
+    end
+
+    [b0,b1] = parseRangeSafe(getStr(ebBase), 30, 240);
+
+    if ~isVolMode
+        b0i = clamp(round(b0/TR)+1, 1, nT);
+        b1i = clamp(round(b1/TR)+1, 1, nT);
+    else
+        b0i = clamp(round(b0), 1, nT);
+        b1i = clamp(round(b1), 1, nT);
+    end
+
+    if b1i < b0i
+        tmp = b0i;
+        b0i = b1i;
+        b1i = tmp;
+    end
+
+    bvals = double(tc(b0i:b1i));
+    bvals = bvals(isfinite(bvals));
+
+    if isempty(bvals)
+        tc(:) = NaN;
+        return;
+    end
+
+    b = mean(bvals);
+
+    % Keep SCM_gui semantics:
+    % map = signal mean - selected baseline mean.
+    % Therefore ROI PSC is shifted by exactly the same baseline.
+    tc = double(tc) - b;
 end
 
 function redrawROIsForCurrentSlice()
@@ -5130,173 +5188,12 @@ end
 end
 
 
-function [Ubg, pickedField] = readMaskEditorUnderlayStackStrict(fullf)
-    Ubg = [];
-    pickedField = '';
-
-    if isempty(fullf) || exist(fullf,'file') ~= 2
-        return;
-    end
-
-    try
-        S0 = load(fullf);
-    catch
-        return;
-    end
-
-    sources = {};
-    sourceNames = {};
-
-    if isfield(S0,'maskBundle') && isstruct(S0.maskBundle)
-        sources{end+1} = S0.maskBundle;
-        sourceNames{end+1} = 'maskBundle';
-    end
-
-    sources{end+1} = S0;
-    sourceNames{end+1} = 'top';
-
-    % Strict priority:
-    % These are real underlay fields.
-    % Do NOT add mask / loadedMask / overlayMask here.
-    pref = { ...
-        'sliceUnderlayRaw', ...
-        'sliceUnderlayProcessed', ...
-        'anatomical_reference_raw', ...
-        'anatomical_reference', ...
-        'brainImage'};
-
-    for ss = 1:numel(sources)
-        R = sources{ss};
-
-        for kk = 1:numel(pref)
-            fn = pref{kk};
-
-            if isfield(R,fn) && ~isempty(R.(fn)) && ...
-                    (isnumeric(R.(fn)) || islogical(R.(fn)))
-
-                U = squeeze(double(R.(fn)));
-
-                if isValidStrictBundleUnderlay(U)
-                    Ubg = prepareStrictBundleUnderlay(U);
-                    pickedField = [sourceNames{ss} '.' fn];
-                    return;
-                else
-                    fprintf('[SCM] Rejected bundle underlay candidate %s.%s with size %s\n', ...
-                        sourceNames{ss}, fn, mat2str(size(U)));
-                end
-            end
-        end
-    end
-end
 
 
-function tf = isValidStrictBundleUnderlay(U)
-    tf = false;
-
-    try
-        if isempty(U)
-            return;
-        end
-
-        U = squeeze(U);
-
-        % ---------------------------------------------------------
-        % Single-slice SCM:
-        % 2D underlay is okay.
-        % ---------------------------------------------------------
-        if nZ == 1
-            if ndims(U) == 2 && size(U,1) == nY && size(U,2) == nX
-                tf = true;
-                return;
-            end
-
-            if ndims(U) == 3 && size(U,1) == nY && size(U,2) == nX
-                % Could be RGB or Y X 1 after squeeze.
-                tf = true;
-                return;
-            end
-        end
-
-        % ---------------------------------------------------------
-        % Multi-slice / Step Motor SCM:
-        % 2D underlay is NOT okay because it would be reused for all slices.
-        % Require true Y X Z stack.
-        % ---------------------------------------------------------
-        if nZ > 1
-            if ndims(U) == 3 && ...
-                    size(U,1) == nY && ...
-                    size(U,2) == nX && ...
-                    size(U,3) == nZ
-
-                tf = true;
-                return;
-            end
-
-            % RGB stack: Y X 3 Z
-            if ndims(U) == 4 && ...
-                    size(U,1) == nY && ...
-                    size(U,2) == nX && ...
-                    size(U,3) == 3 && ...
-                    size(U,4) == nZ
-
-                tf = true;
-                return;
-            end
-        end
-
-    catch
-        tf = false;
-    end
-end
 
 
-function Uout = prepareStrictBundleUnderlay(U)
-    U = squeeze(double(U));
-    U(~isfinite(U)) = 0;
-
-    if ndims(U) == 2
-        Uout = U;
-        return;
-    end
-
-    if ndims(U) == 3
-        Uout = U;
-        return;
-    end
-
-    % RGB stack: Y X 3 Z -> grayscale Y X Z
-    if ndims(U) == 4 && size(U,3) == 3 && size(U,4) == nZ
-        Uout = zeros(nY,nX,nZ);
-
-        for zz0 = 1:nZ
-            RGB = squeeze(U(:,:,:,zz0));
-            Uout(:,:,zz0) = 0.2989 .* RGB(:,:,1) + ...
-                             0.5870 .* RGB(:,:,2) + ...
-                             0.1140 .* RGB(:,:,3);
-        end
-
-        return;
-    end
-
-    error('Unsupported bundle underlay size: %s', mat2str(size(U)));
-end
 
 
-function forceLoadedBundleUnderlayToGrayStackIfNeeded()
-    ensureUnderlayStateFields();
-
-    try
-        if nZ > 1 && ndims(bg) == 3 && size(bg,3) == nZ
-            % Important for nZ == 3:
-            % Prevent SCM from mistaking Y X 3 grayscale slices for one RGB image.
-            state.isColorUnderlay = false;
-            state.regionLabelUnderlay = [];
-            state.regionColorLUT = [];
-            state.regionInfo = struct();
-        end
-    catch
-    end
-end
 
 function [M, maskIsInclude, pickedField] = readMask(f, mode)
     if nargin < 2 || isempty(mode), mode = 'overlayPreferred'; end %#ok<NASGU>
@@ -6227,259 +6124,10 @@ function setTitleAtlasStepMotor(report)
 end
 
 
-function [Uatlas, msg] = buildStepMotorAtlasUnderlay(origUnderlay, currentUnderlay, regList, report, Xnative, Xatlas)
-
-    Uatlas = [];
-    msg = 'none';
-
-    if isempty(Xatlas)
-        return;
-    end
-
-    yy = size(Xatlas,1);
-    xx = size(Xatlas,2);
-
-    if ndims(Xatlas) == 4
-        zz = size(Xatlas,3);
-    else
-        zz = 1;
-    end
-
-    % ---------------------------------------------------------
-    % Use exactly the transforms that were actually used for
-    % the functional warp.
-    % ---------------------------------------------------------
-    usedRegList = [];
-
-    try
-        if isfield(report,'usedRegList') && ~isempty(report.usedRegList)
-            usedRegList = report.usedRegList;
-        end
-    catch
-        usedRegList = [];
-    end
-
-    if isempty(usedRegList)
-        usedRegList = regList;
-    end
-
-    % ---------------------------------------------------------
-    % BEST CASE:
-    % Use atlas/histology/vascular underlay stored inside the
-    % same Registration2D MAT files.
-    %
-    % This is the Step Motor equivalent of the working single-slice
-    % behavior:
-    %
-    %   PSC = warpFunctionalSeriesToAtlas(origPSC,T);
-    %   bg  = atlas histology underlay directly;
-    %
-    % No extra warp is applied to atlas histology.
-    % ---------------------------------------------------------
-    try
-        [UfromReg, okReg] = buildStepMotorAtlasUnderlayFromRegFiles(usedRegList, yy, xx, zz);
-
-        if okReg && hasUsableUnderlaySignal(UfromReg)
-            Uatlas = UfromReg;
-            msg = 'used per-slice atlas/histology underlays from Registration2D files';
-            return;
-        end
-    catch
-        Uatlas = [];
-    end
-
-    % ---------------------------------------------------------
-    % If current underlay already truly matches the atlas display
-    % dimensions, keep it.
-    %
-    % The stricter underlayMatchesTargetDims prevents a single
-    % RGB [Y X 3] histology image from being mistaken for a
-    % 3-slice Step Motor stack.
-    % ---------------------------------------------------------
-    if underlayMatchesTargetDims(currentUnderlay, yy, xx, zz)
-        Uatlas = currentUnderlay;
-        msg = 'kept existing atlas-space underlay';
-        return;
-    end
-
-    if underlayMatchesTargetDims(origUnderlay, yy, xx, zz)
-        Uatlas = origUnderlay;
-        msg = 'used existing atlas-space original underlay';
-        return;
-    end
-
-    % ---------------------------------------------------------
-    % FALLBACK:
-    % Warp the original native Doppler/anatomical underlay
-    % slice-by-slice with the same transforms.
-    % ---------------------------------------------------------
-    [Ustack, ok] = prepareNativeUnderlayStackForStepMotor(origUnderlay, Xnative);
-
-    if ok
-        try
-            Uatlas = warpNativeUnderlayStackToAtlasStepMotor(Ustack, usedRegList, report);
-            if hasUsableUnderlaySignal(Uatlas)
-                msg = 'warped original native underlay slice-by-slice';
-                return;
-            end
-        catch
-            Uatlas = [];
-        end
-    end
-
-    % ---------------------------------------------------------
-    % Second fallback:
-    % Try current displayed underlay only if it is native-space.
-    % ---------------------------------------------------------
-    [Ustack, ok] = prepareNativeUnderlayStackForStepMotor(currentUnderlay, Xnative);
-
-    if ok
-        try
-            Uatlas = warpNativeUnderlayStackToAtlasStepMotor(Ustack, usedRegList, report);
-            if hasUsableUnderlaySignal(Uatlas)
-                msg = 'warped current native underlay slice-by-slice';
-                return;
-            end
-        catch
-           Uatlas = makeFunctionalContrastFallbackUnderlay(Xatlas);
-    msg = 'functional contrast fallback';
-        end
-    end
-    end 
    
 
-function [Uatlas, ok] = buildStepMotorAtlasUnderlayFromRegFiles(usedRegList, yy, xx, zz)
-
-    Uatlas = [];
-    ok = false;
-
-    if isempty(usedRegList)
-        return;
-    end
-
-    nUse = min(numel(usedRegList), zz);
-
-    Utmp = zeros(yy, xx, nUse, 'single');
-    got = false(1, nUse);
-
-    for rr = 1:nUse
-
-        T = usedRegList(rr).T;
-
-        outSize2 = [yy xx];
-        try
-            if isfield(T,'outSize') && ~isempty(T.outSize) && numel(T.outSize) >= 2
-                outSize2 = round(double(T.outSize(1:2)));
-            end
-        catch
-            outSize2 = [yy xx];
-        end
-
-        if any(outSize2 ~= [yy xx])
-            % Functional output and underlay output must agree.
-            continue;
-        end
-
-        Uplane = extractAtlasUnderlayPlaneFromRegistrationFile(usedRegList(rr).file, T, outSize2);
-
-        if isempty(Uplane)
-            continue;
-        end
-
-        Uplane = fitPlaneToSizeLocal(Uplane, yy, xx);
-        Uplane(~isfinite(Uplane)) = 0;
-
-        if hasUsableUnderlaySignal(Uplane)
-            Utmp(:,:,rr) = single(Uplane);
-            got(rr) = true;
-        end
-    end
-
-    if all(got)
-        Uatlas = double(Utmp);
-        ok = true;
-    end
-end
 
 
-function Uplane = extractAtlasUnderlayPlaneFromRegistrationFile(matFile, T, outSize2)
-
-    Uplane = [];
-
-    if isempty(matFile) || exist(matFile,'file') ~= 2
-        return;
-    end
-
-    try
-        S = load(matFile);
-    catch
-        return;
-    end
-
-    % Prefer fields that are likely atlas/histology/vascular display images.
-    pref = { ...
-        'atlasUnderlayRGB', ...
-        'atlasUnderlay', ...
-        'atlasImage', ...
-        'histology', ...
-        'histologyImage', ...
-        'vascular', ...
-        'vascularImage', ...
-        'brainImage', ...
-        'underlay', ...
-        'bg', ...
-        'fixedImage', ...
-        'fixed', ...
-        'img', ...
-        'I', ...
-        'Data'};
-
-    % First search top-level fields.
-    for ii = 1:numel(pref)
-        if isfield(S, pref{ii})
-            Uplane = acceptAtlasUnderlayCandidate(S.(pref{ii}), T, outSize2);
-            if ~isempty(Uplane)
-                return;
-            end
-        end
-    end
-
-    % Then search common registration structs.
-    wrappers = {'Transf','Reg2D','RegOut','Registration2D'};
-
-    for ww = 1:numel(wrappers)
-        if isfield(S, wrappers{ww}) && isstruct(S.(wrappers{ww}))
-            R = S.(wrappers{ww});
-
-            for ii = 1:numel(pref)
-                if isfield(R, pref{ii})
-                    Uplane = acceptAtlasUnderlayCandidate(R.(pref{ii}), T, outSize2);
-                    if ~isempty(Uplane)
-                        return;
-                    end
-                end
-            end
-
-            fnR = fieldnames(R);
-            for ii = 1:numel(fnR)
-                Uplane = acceptAtlasUnderlayCandidate(R.(fnR{ii}), T, outSize2);
-                if ~isempty(Uplane)
-                    return;
-                end
-            end
-        end
-    end
-
-    % Last pass: scan all top-level numeric fields.
-    % Small matrices such as A/M/T are rejected inside acceptAtlasUnderlayCandidate.
-    fn = fieldnames(S);
-    for ii = 1:numel(fn)
-        Uplane = acceptAtlasUnderlayCandidate(S.(fn{ii}), T, outSize2);
-        if ~isempty(Uplane)
-            return;
-        end
-    end
-end
 
 
 function Uplane = acceptAtlasUnderlayCandidate(v, T, outSize2)
@@ -6591,99 +6239,6 @@ function Uplane = acceptAtlasUnderlayCandidate(v, T, outSize2)
         end
     end
 end
-function T = repairSimpleCoronal2DTransformForSCM(T)
-    % Rebuild simple_coronal_2d transform for MATLAB imwarp/affine2d.
-    %
-    % Reason:
-    % Registration GUI stores sourceSize/outputSize and manual parameters.
-    % Directly using A can miss the initial source->atlas canvas scaling.
-    %
-    % MATLAB affine2d uses row-vector convention:
-    % [x y 1] * A = [x2 y2 1]
-
-    try
-        if ~isfield(T,'type') || ~strcmpi(char(T.type), 'simple_coronal_2d')
-            return;
-        end
-
-        if ~isfield(T,'sourceSize') || isempty(T.sourceSize) || numel(T.sourceSize) < 2
-            return;
-        end
-
-        if ~isfield(T,'outputSize') || isempty(T.outputSize) || numel(T.outputSize) < 2
-            return;
-        end
-
-        srcSize = round(double(T.sourceSize(1:2)));   % [Y X]
-        outSize = round(double(T.outputSize(1:2)));   % [Y X]
-
-        srcY = srcSize(1);
-        srcX = srcSize(2);
-        outY = outSize(1);
-        outX = outSize(2);
-
-        if any(srcSize < 1) || any(outSize < 1)
-            return;
-        end
-
-        tx = 0;
-        ty = 0;
-        rotDeg = 0;
-        sx = 1;
-        sy = 1;
-
-        if isfield(T,'tx') && ~isempty(T.tx) && isfinite(T.tx), tx = double(T.tx); end
-        if isfield(T,'ty') && ~isempty(T.ty) && isfinite(T.ty), ty = double(T.ty); end
-        if isfield(T,'rotDeg') && ~isempty(T.rotDeg) && isfinite(T.rotDeg), rotDeg = double(T.rotDeg); end
-        if isfield(T,'sx') && ~isempty(T.sx) && isfinite(T.sx), sx = double(T.sx); end
-        if isfield(T,'sy') && ~isempty(T.sy) && isfinite(T.sy), sy = double(T.sy); end
-
-        % ---------------------------------------------------------
-        % Important:
-        % Use anisotropic base scaling by default:
-        % native source [267 256] -> atlas canvas [160 228].
-        %
-        % This matches a GUI where the source image was first displayed
-        % across the atlas canvas before manual sx/sy/rotation/translation.
-        % ---------------------------------------------------------
-        baseSx = outX / srcX;
-        baseSy = outY / srcY;
-
-        cxSrc = (srcX + 1) / 2;
-        cySrc = (srcY + 1) / 2;
-        cxOut = (outX + 1) / 2;
-        cyOut = (outY + 1) / 2;
-
-        A_centerSrc = [1 0 0; 0 1 0; -cxSrc -cySrc 1];
-        A_base      = [baseSx 0 0; 0 baseSy 0; 0 0 1];
-        A_manual    = [sx 0 0; 0 sy 0; 0 0 1];
-
-        c = cosd(rotDeg);
-        s = sind(rotDeg);
-
-        % Row-vector rotation.
-        A_rot = [c s 0; -s c 0; 0 0 1];
-
-        A_toOut = [1 0 0; 0 1 0; cxOut + tx cyOut + ty 1];
-
-        A_scm = A_centerSrc * A_base * A_manual * A_rot * A_toOut;
-
-        T.warpA = A_scm;
-        T.outSize = outSize;
-        T.outputSize = outSize;
-        T.scmRebuiltFromSimpleCoronal2D = true;
-
-        fprintf('\n[SCM] Rebuilt simple_coronal_2d transform for imwarp.\n');
-        fprintf('[SCM] sourceSize = [%d %d], outputSize = [%d %d]\n', srcY, srcX, outY, outX);
-        fprintf('[SCM] baseSx/baseSy = %.6f / %.6f\n', baseSx, baseSy);
-        fprintf('[SCM] tx/ty/rot/sx/sy = %.4f / %.4f / %.4f / %.4f / %.4f\n', tx, ty, rotDeg, sx, sy);
-        fprintf('[SCM] MATLAB affine2d matrix:\n');
-        disp(A_scm);
-
-    catch ME
-        warning('[SCM] Could not rebuild simple_coronal_2d transform: %s', ME.message);
-    end
-end
 
 function G = rgbToGrayLocal(RGB)
 
@@ -6722,146 +6277,8 @@ function U2 = fitPlaneToSizeLocal(U2, yy, xx)
         U2 = tmp;
     end
 end
-function [Uatlas, msg] = buildStepMotorFixedAtlasUnderlayOnly(usedRegList, outSize2, currentUnderlay)
-    % Use ONLY fixed atlas/histology target images.
-    % Never warp native underlay here.
-
-    Uatlas = [];
-    msg = 'none';
-
-    if isempty(usedRegList) || isempty(outSize2)
-        return;
-    end
-
-    yy = round(outSize2(1));
-    xx = round(outSize2(2));
-    nUse = numel(usedRegList);
-
-    % ---------------------------------------------------------
-    % First: if current underlay already is a true atlas-space stack,
-    % keep it. Do NOT transform it.
-    % ---------------------------------------------------------
-    try
-        U = squeeze(currentUnderlay);
-
-        if ~isempty(U)
-            if ndims(U) == 2 && nUse == 1 && size(U,1) == yy && size(U,2) == xx
-                Uatlas = double(U);
-                msg = 'kept current fixed atlas underlay';
-                return;
-            end
-
-            if ndims(U) == 3 && size(U,1) == yy && size(U,2) == xx
-                % Avoid mistaking one RGB image [Y X 3] for 3 Step Motor slices.
-                if size(U,3) == nUse && ~state.isColorUnderlay
-                    Uatlas = double(U);
-                    msg = 'kept current fixed atlas underlay stack';
-                    return;
-                end
-            end
-        end
-    catch
-    end
-
-    % ---------------------------------------------------------
-    % Second: read fixed target underlays saved inside Reg2D files.
-    % This only accepts fields that look like target/fixed/atlas images.
-    % It intentionally does NOT use sourcePath / brainImage / source image.
-    % ---------------------------------------------------------
-    Utmp = zeros(yy, xx, nUse, 'single');
-    got = false(1, nUse);
-
-    for rr = 1:nUse
-        try
-            T = usedRegList(rr).T;
-            Uplane = extractFixedAtlasUnderlayFromReg2DFile(usedRegList(rr).file, T, [yy xx]);
-
-            if isempty(Uplane)
-                continue;
-            end
-
-            Uplane = fitPlaneToSizeLocal(Uplane, yy, xx);
-            Uplane(~isfinite(Uplane)) = 0;
-
-            if hasUsableUnderlaySignal(Uplane)
-                Utmp(:,:,rr) = single(Uplane);
-                got(rr) = true;
-            end
-        catch
-        end
-    end
-
-    if all(got)
-        Uatlas = double(Utmp);
-        msg = 'used fixed atlas/histology underlays saved in Registration2D files';
-        return;
-    end
-end
 
 
-function Uplane = extractFixedAtlasUnderlayFromReg2DFile(matFile, T, outSize2)
-    % Strict target/fixed underlay extraction.
-    % Do not accept generic source fields like brainImage, I, Data, bg.
-
-    Uplane = [];
-
-    if isempty(matFile) || exist(matFile,'file') ~= 2
-        return;
-    end
-
-    try
-        S = load(matFile);
-    catch
-        return;
-    end
-
-    pref = { ...
-        'fixedImage', ...
-        'fixedUnderlay', ...
-        'targetImage', ...
-        'targetUnderlay', ...
-        'atlasFixedImage', ...
-        'atlasImage', ...
-        'atlasImage2D', ...
-        'atlasSliceImage', ...
-        'atlasUnderlay', ...
-        'atlasUnderlay2D', ...
-        'histologyFixed', ...
-        'histologyImage', ...
-        'histologyUnderlay', ...
-        'vascularFixed', ...
-        'vascularImage', ...
-        'regionsFixed', ...
-        'regionsImage'};
-
-    % Top-level target fields.
-    for ii = 1:numel(pref)
-        if isfield(S, pref{ii})
-            Uplane = acceptFixedAtlasCandidate(S.(pref{ii}), T, outSize2);
-            if ~isempty(Uplane)
-                return;
-            end
-        end
-    end
-
-    % Common registration structs.
-    wrappers = {'Transf','Reg2D','RegOut','Registration2D'};
-
-    for ww = 1:numel(wrappers)
-        if isfield(S, wrappers{ww}) && isstruct(S.(wrappers{ww}))
-            R = S.(wrappers{ww});
-
-            for ii = 1:numel(pref)
-                if isfield(R, pref{ii})
-                    Uplane = acceptFixedAtlasCandidate(R.(pref{ii}), T, outSize2);
-                    if ~isempty(Uplane)
-                        return;
-                    end
-                end
-            end
-        end
-    end
-end
 
 
 function Uplane = acceptFixedAtlasCandidate(v, T, outSize2)
@@ -6957,222 +6374,8 @@ function Uplane = acceptFixedAtlasCandidate(v, T, outSize2)
     end
 end
 
-function [Uatlas, msg] = keepAlreadyLoadedAtlasUnderlayIfPossible(Uin, outSize2, nUse)
 
-    Uatlas = [];
-    msg = 'none';
 
-    try
-        if isempty(Uin) || isempty(outSize2) || numel(outSize2) < 2
-            return;
-        end
-
-        yy = round(outSize2(1));
-        xx = round(outSize2(2));
-
-        U = squeeze(double(Uin));
-        U(~isfinite(U)) = 0;
-
-        if isempty(U)
-            return;
-        end
-
-        % Case 1: one 2D atlas/histology underlay.
-               if ndims(U) == 2
-            if size(U,1) == yy && size(U,2) == xx
-                if nUse <= 1
-                    Uatlas = U;
-                    msg = 'kept already-loaded atlas underlay';
-                    return;
-                else
-                    % Do NOT reuse one 2D underlay for all step-motor slices.
-                    % Each source slice has its own atlas slice/background.
-                    Uatlas = [];
-                    msg = 'single 2D underlay not reused for step-motor stack';
-                    return;
-                end
-            end
-        end
-
-        % Case 2: grayscale atlas stack [Y X Z].
-        if ndims(U) == 3
-            if size(U,1) == yy && size(U,2) == xx
-                if size(U,3) == nUse
-                    Uatlas = U;
-                    msg = 'kept already-loaded atlas underlay stack';
-                    return;
-                end
-
-                % Avoid interpreting RGB [Y X 3] as a 3-slice stack unless
-                % SCM currently treats it as grayscale.
-                if size(U,3) == 3 && nUse == 3 && ~state.isColorUnderlay
-                    Uatlas = U;
-                    msg = 'kept already-loaded 3-slice atlas underlay stack';
-                    return;
-                end
-            end
-        end
-
-        % Case 3: RGB atlas image [Y X 3], single fixed underlay.
-        if ndims(U) == 3 && size(U,3) == 3 && state.isColorUnderlay
-            if size(U,1) == yy && size(U,2) == xx
-                Ugray = rgbToGrayLocal(U);
-                if nUse <= 1
-                    Uatlas = Ugray;
-                else
-                    Uatlas = repmat(Ugray, [1 1 nUse]);
-                end
-                msg = 'kept already-loaded RGB atlas underlay as grayscale';
-                return;
-            end
-        end
-
-    catch
-        Uatlas = [];
-        msg = 'already-loaded underlay could not be reused';
-    end
-end
-
-function [Uatlas, msg] = askStepMotorFixedAtlasUnderlayStack(outSize2, nUse)
-    % Manual fallback: user selects fixed atlas/histology images.
-    % These are NOT warped. They are only used as the background target.
-
-    Uatlas = [];
-    msg = 'none';
-
-    if isempty(outSize2) || numel(outSize2) < 2
-        return;
-    end
-
-    yy = round(outSize2(1));
-    xx = round(outSize2(2));
-
-    try
-        startPath = getTransformStartPath();
-
-        oldDir = pwd;
-        cleanupObj = onCleanup(@()scmSafeCdBack(oldDir)); %#ok<NASGU>
-        try, cd(startPath); catch, end
-
-        [f,p] = uigetfile( ...
-            {'*.mat;*.nii;*.nii.gz;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp', ...
-             'Fixed atlas/histology underlay files'}, ...
-            sprintf('Select %d fixed atlas/histology underlay file(s)', nUse), ...
-            'MultiSelect', 'on');
-
-        if isequal(f,0)
-            return;
-        end
-
-        if ischar(f)
-            f = {f};
-        end
-
-        if numel(f) == 1
-            fullf = fullfile(p, f{1});
-            [Uraw, ~] = readUnderlayFile(fullf);
-            Uraw = squeeze(double(Uraw));
-
-            if ndims(Uraw) == 2
-                if nUse == 1
-                    Uatlas = fitPlaneToSizeLocal(Uraw, yy, xx);
-                    msg = 'selected one fixed atlas/histology underlay';
-                    return;
-                else
-                    Uplane = fitPlaneToSizeLocal(Uraw, yy, xx);
-                    Uatlas = repmat(Uplane, [1 1 nUse]);
-                    msg = 'selected one fixed atlas/histology underlay and reused it for all slices';
-                    return;
-                end
-            end
-
-            if ndims(Uraw) == 3
-                if size(Uraw,3) == 3 && nUse ~= 3
-                    Uatlas = fitPlaneToSizeLocal(rgbToGrayLocal(Uraw), yy, xx);
-                    if nUse > 1
-                        Uatlas = repmat(Uatlas, [1 1 nUse]);
-                    end
-                    msg = 'selected RGB fixed atlas/histology underlay';
-                    return;
-                end
-
-                if size(Uraw,3) == nUse
-                    Uatlas = zeros(yy, xx, nUse);
-                    for zz0 = 1:nUse
-                        Uatlas(:,:,zz0) = fitPlaneToSizeLocal(Uraw(:,:,zz0), yy, xx);
-                    end
-                    msg = 'selected fixed atlas/histology underlay stack';
-                    return;
-                end
-            end
-        end
-
-        nFiles = numel(f);
-        nStack = min(nFiles, nUse);
-        Uatlas = zeros(yy, xx, nUse);
-
-        for rr = 1:nStack
-            fullf = fullfile(p, f{rr});
-            [Uraw, ~] = readUnderlayFile(fullf);
-            Uraw = squeeze(double(Uraw));
-
-            if ndims(Uraw) == 3 && size(Uraw,3) == 3
-                Uraw = rgbToGrayLocal(Uraw);
-            elseif ndims(Uraw) > 2
-                Uraw = Uraw(:,:,1);
-            end
-
-            Uatlas(:,:,rr) = fitPlaneToSizeLocal(Uraw, yy, xx);
-        end
-
-        if nStack < nUse
-            for rr = nStack+1:nUse
-                Uatlas(:,:,rr) = Uatlas(:,:,nStack);
-            end
-        end
-
-        msg = 'selected fixed atlas/histology underlay files manually';
-
-    catch ME
-        warning('[SCM] Could not select fixed atlas underlay: %s', ME.message);
-        Uatlas = [];
-        msg = 'manual fixed atlas underlay selection failed';
-    end
-end
-
-function forceStepMotorAtlasGrayUnderlay()
-
-    ensureUnderlayStateFields();
-
-    % Step Motor atlas underlay should be treated as a grayscale Z-stack.
-    % This prevents RGB single-plane histology from being interpreted as
-    % three Step Motor slices.
-    state.isColorUnderlay = false;
-    state.regionLabelUnderlay = [];
-    state.regionColorLUT = [];
-    state.regionInfo = struct();
-
-    % Use simple robust grayscale display.
-    % Avoid vessel enhancement and avoid odd color interpretation.
-    uState.mode = 2;
-    uState.brightness = 0;
-    uState.contrast = 1;
-    uState.gamma = 1;
-
-    try
-        set(popUnder, 'Value', uState.mode);
-        set(slBri, 'Value', uState.brightness);
-        set(slCon, 'Value', uState.contrast);
-        set(slGam, 'Value', uState.gamma);
-
-        set(txtBri, 'String', sprintf('%.2f', uState.brightness));
-        set(txtCon, 'String', sprintf('%.2f', uState.contrast));
-        set(txtGam, 'String', sprintf('%.2f', uState.gamma));
-
-        updateUnderlayControlsEnable();
-    catch
-    end
-end
 
 function X2 = prepareFunctionalSliceForReg2D(X2, T, zSrc)
     % Ensure functional slice matches the source image used during registration.
@@ -7216,160 +6419,8 @@ function X2 = prepareFunctionalSliceForReg2D(X2, T, zSrc)
            'Register the exact SCM/PSC native underlay or fix the MaskEditor source dimensions.'], ...
            zSrc, thisSize(1), thisSize(2), srcSize(1), srcSize(2));
 end
-function [Ustack, ok] = prepareNativeUnderlayStackForStepMotor(Uin, Xnative)
-
-    Ustack = [];
-    ok = false;
-
-    if isempty(Uin) || isempty(Xnative)
-        return;
-    end
-
-    if ndims(Xnative) == 4
-        inY = size(Xnative,1);
-        inX = size(Xnative,2);
-        nSrc = size(Xnative,3);
-        nTT  = size(Xnative,4);
-    elseif ndims(Xnative) == 3
-        inY = size(Xnative,1);
-        inX = size(Xnative,2);
-        nSrc = 1;
-        nTT  = size(Xnative,3);
-    else
-        return;
-    end
-
-    U = squeeze(double(Uin));
-    U(~isfinite(U)) = 0;
-
-    if isempty(U)
-        return;
-    end
-
-    % Case 1: single 2D native underlay.
-    if ndims(U) == 2
-        if size(U,1) == inY && size(U,2) == inX
-            if nSrc == 1
-                Ustack = reshape(U, inY, inX, 1);
-            else
-                Ustack = repmat(reshape(U, inY, inX, 1), [1 1 nSrc]);
-            end
-            ok = true;
-            return;
-        end
-    end
-
-    % Case 2: 3D underlay stack.
-    if ndims(U) == 3
-
-        if size(U,1) ~= inY || size(U,2) ~= inX
-            return;
-        end
-
-      % RGB single-plane underlay: convert to grayscale and replicate if needed.
-if size(U,3) == 3 && state.isColorUnderlay
-    Ugray = rgbToGrayLocal(U);
-            if nSrc == 1
-                Ustack = reshape(Ugray, inY, inX, 1);
-            else
-                Ustack = repmat(reshape(Ugray, inY, inX, 1), [1 1 nSrc]);
-            end
-            ok = true;
-            return;
-        end
-
-        % Proper Y x X x Z native stack.
-        if size(U,3) == nSrc
-            Ustack = U;
-            ok = true;
-            return;
-        end
-
-        % Single-slice movie underlay Y x X x T.
-        if nSrc == 1 && size(U,3) == nTT
-            Ustack = reshape(mean(U,3), inY, inX, 1);
-            ok = true;
-            return;
-        end
-
-        % Mismatched slice count but same XY: resample slice index list.
-        if size(U,3) > 1
-            zIdx = round(linspace(1, size(U,3), nSrc));
-            zIdx = max(1, min(size(U,3), zIdx));
-            Ustack = U(:,:,zIdx);
-            ok = true;
-            return;
-        end
-    end
-
-    % Case 3: 4D underlay.
-    if ndims(U) == 4
-
-        if size(U,1) ~= inY || size(U,2) ~= inX
-            return;
-        end
-
-        % Native movie stack Y x X x Z x T.
-        if size(U,3) == nSrc
-            Ustack = mean(U,4);
-            ok = true;
-            return;
-        end
-
-% RGB stack Y x X x 3 x Z.
-if size(U,3) == 3 && size(U,4) == nSrc
-    Ugray = zeros(inY, inX, nSrc);
-    for zz0 = 1:nSrc
-        Ugray(:,:,zz0) = rgbToGrayLocal(squeeze(U(:,:,:,zz0)));
-    end
-    Ustack = Ugray;
-    ok = true;
-    return;
-end
-    end
-end
 
 
-function Uatlas = warpNativeUnderlayStackToAtlasStepMotor(Ustack, usedRegList, report)
-
-    if isempty(Ustack)
-        Uatlas = [];
-        return;
-    end
-
-    if isfield(report,'outSize') && ~isempty(report.outSize)
-        outSize2 = round(double(report.outSize(1:2)));
-    else
-        T0 = usedRegList(1).T;
-        outSize2 = round(double(T0.outSize(1:2)));
-    end
-
-    nUse = numel(usedRegList);
-    Uatlas = zeros([outSize2 nUse], 'single');
-
-    for rr = 1:nUse
-
-        T = usedRegList(rr).T;
-        A = double(T.warpA);
-
-        if ~isequal(size(A), [3 3])
-            error('Underlay Step Motor warp expects 2D 3x3 affine transforms.');
-        end
-
-        zSrc = usedRegList(rr).sourceIdx;
-        zSrc = max(1, min(size(Ustack,3), round(zSrc)));
-A = apply2DWarpDirectionToMatrix(A, T);
-        tform2 = affine2d(A);
-        Rout2 = imref2d(outSize2);
-
-        Uplane = single(Ustack(:,:,zSrc));
-        Uplane(~isfinite(Uplane)) = 0;
-
-        Uatlas(:,:,rr) = imwarp(Uplane, tform2, 'linear', 'OutputView', Rout2);
-    end
-
-    Uatlas = double(Uatlas);
-end
 
 
 function tf = hasUsableUnderlaySignal(U)

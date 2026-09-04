@@ -41,7 +41,7 @@ end
 %{
 %%%FUSI_STUDIO_SOURCE_BEGIN%%%
 function fusi_studio_runtime
-clc;
+% clc;  % disabled by cleanup - keeps Command Window log
 
 %% =========================================================
 %  SECTION A - INTERNAL STATE & GUI CONSTRUCTION - Update

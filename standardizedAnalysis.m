@@ -604,29 +604,6 @@ if ~any(strcmpi({steps.name},'Drift Compensation'))
 end
 end
 
-function steps = makeFastSteps()
-steps = makeDefaultSteps();
-for kk = 1:numel(steps)
-    steps(kk).run = false;
-end
-
-wanted = {'Motor','Imregdemons','Video GUI','Time-Course Viewer','SCM GUI'};
-for ww = 1:numel(wanted)
-    idx = find(strcmpi({steps.name},wanted{ww}),1,'first');
-    if ~isempty(idx)
-        steps(idx).run = true;
-    end
-end
-
-% Keep only the first SCM GUI ticked in the fast path; the later post-atlas
-% SCM pass belongs to the detailed workflow.
-scmIdx = find(strcmpi({steps.name},'SCM GUI'));
-if numel(scmIdx) > 1
-    for ii = 2:numel(scmIdx)
-        steps(scmIdx(ii)).run = false;
-    end
-end
-end
 function st = emptyStep()
 st = struct('run',false,'order',0,'name','','desc','', ...
     'slices',NaN,'nsub',NaN,'base1',NaN,'base2',NaN, ...

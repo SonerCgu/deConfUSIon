@@ -118,9 +118,6 @@ classdef moveimage < handle
             tf = (M.flagmove == 1);
         end
 
-        function rearmCallbacks(M)
-            M.armCallbacks();
-        end
     end
 
     methods(Access=private)

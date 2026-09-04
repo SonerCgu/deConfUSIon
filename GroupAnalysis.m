@@ -3889,31 +3889,7 @@ catch
 end
 end
 
-function hardClearAxLocal(ax,styleName,showGrid,ttl)
-try
-    cla(ax,'reset');
-catch
-    cla(ax);
-end
-[bg,fg] = previewColorsLocal(styleName);
-set(ax,'Color',bg,'XColor',fg,'YColor',fg);
-if showGrid
-    grid(ax,'on');
-else
-    grid(ax,'off');
-end
-title(ax,ttl,'Color',fg,'FontWeight','bold');
-end
 
-function [bg,fg] = previewColorsLocal(styleName)
-if strcmpi(styleName,'Light')
-    bg = [1 1 1];
-    fg = [0 0 0];
-else
-    bg = [0 0 0];
-    fg = [1 1 1];
-end
-end
 
 function fcNoDataLocal(ax,titleStr,C)
 cla(ax);
@@ -4169,245 +4145,12 @@ end
 end
 
 
-function [mapNow, winInfoTxt] = GA_buildPreviewMapFromBundle_STANDALONE(S0, G)
-% Standalone fallback helper for GroupAnalysis map preview.
-winInfoTxt = '';
-mapNow = [];
 
-if nargin < 2 || ~isstruct(G)
-    error('Invalid group bundle struct.');
-end
 
-useGlobal = false;
-try
-    useGlobal = isfield(S0,'mapUseGlobalWindows') && logical(S0.mapUseGlobalWindows);
-catch
-    useGlobal = false;
-end
 
-src = 'Recompute from exported PSC';
-try
-    if isfield(S0,'mapSource') && ~isempty(S0.mapSource)
-        src = GA_strtrimSafe_STANDALONE(S0.mapSource);
-    end
-catch
-end
 
-sigma = 0;
-try, sigma = double(S0.mapSigma); catch, end
-if ~isfinite(sigma), sigma = 0; end
 
-hasPSC = isfield(G,'pscAtlas4D') && ~isempty(G.pscAtlas4D);
-hasMap = isfield(G,'scmMapAtlas') && ~isempty(G.scmMapAtlas);
 
-if useGlobal
-    if hasPSC
-        bw = double(S0.mapGlobalBaseSec(:)');
-        sw = double(S0.mapGlobalSigSec(:)');
-        mapNow = GA_recomputeScmFromPSC_STANDALONE(G, bw, sw, sigma);
-        winInfoTxt = sprintf('base %.0f-%.0fs | sig %.0f-%.0fs', bw(1), bw(2), sw(1), sw(2));
-    elseif hasMap
-        mapNow = GA_squeezeMap2D_STANDALONE(G.scmMapAtlas);
-        winInfoTxt = 'exported SCM fallback; no PSC series';
-    else
-        error('Bundle has neither pscAtlas4D nor scmMapAtlas.');
-    end
-elseif strcmpi(src,'Use exported SCM map')
-    if hasMap
-        mapNow = GA_squeezeMap2D_STANDALONE(G.scmMapAtlas);
-        winInfoTxt = 'exported SCM map';
-    elseif hasPSC
-        [bw, sw] = GA_defaultBundleWindows_STANDALONE(G, S0);
-        mapNow = GA_recomputeScmFromPSC_STANDALONE(G, bw, sw, sigma);
-        winInfoTxt = sprintf('PSC fallback base %.0f-%.0fs | sig %.0f-%.0fs', bw(1), bw(2), sw(1), sw(2));
-    else
-        error('Bundle has neither exported map nor PSC series.');
-    end
-else
-    if hasPSC
-        [bw, sw] = GA_defaultBundleWindows_STANDALONE(G, S0);
-        mapNow = GA_recomputeScmFromPSC_STANDALONE(G, bw, sw, sigma);
-        winInfoTxt = sprintf('base %.0f-%.0fs | sig %.0f-%.0fs', bw(1), bw(2), sw(1), sw(2));
-    elseif hasMap
-        mapNow = GA_squeezeMap2D_STANDALONE(G.scmMapAtlas);
-        winInfoTxt = 'exported SCM fallback; no PSC series';
-    else
-        error('Bundle has neither pscAtlas4D nor scmMapAtlas.');
-    end
-end
-
-mapNow = double(mapNow);
-mapNow(~isfinite(mapNow)) = 0;
-end
-
-function [bw, sw] = GA_defaultBundleWindows_STANDALONE(G, S0)
-bw = [30 240];
-sw = [840 900];
-try
-    if isfield(G,'baseWindowSec') && numel(G.baseWindowSec) >= 2
-        bw = double(G.baseWindowSec(1:2));
-    elseif isfield(S0,'mapGlobalBaseSec') && numel(S0.mapGlobalBaseSec) >= 2
-        bw = double(S0.mapGlobalBaseSec(1:2));
-    end
-catch
-end
-try
-    if isfield(G,'sigWindowSec') && numel(G.sigWindowSec) >= 2
-        sw = double(G.sigWindowSec(1:2));
-    elseif isfield(S0,'mapGlobalSigSec') && numel(S0.mapGlobalSigSec) >= 2
-        sw = double(S0.mapGlobalSigSec(1:2));
-    end
-catch
-end
-if numel(bw) < 2 || any(~isfinite(bw)), bw = [30 240]; end
-if numel(sw) < 2 || any(~isfinite(sw)), sw = [840 900]; end
-if bw(2) <= bw(1), bw(2) = bw(1) + 1; end
-if sw(2) <= sw(1), sw(2) = sw(1) + 1; end
-end
-
-function map2 = GA_recomputeScmFromPSC_STANDALONE(G, baseWinSec, sigWinSec, sigma)
-if ~isfield(G,'pscAtlas4D') || isempty(G.pscAtlas4D)
-    error('Bundle has no pscAtlas4D.');
-end
-if ~isfield(G,'TR') || isempty(G.TR) || ~isfinite(G.TR) || G.TR <= 0
-    error('Bundle has no valid TR.');
-end
-
-PSC = double(G.pscAtlas4D);
-TR = double(G.TR);
-
-if ndims(PSC) == 3
-    PSCz = PSC;
-elseif ndims(PSC) == 4
-    zSel = round(size(PSC,3)/2);
-    try
-        if isfield(G,'atlasSliceIndex') && ~isempty(G.atlasSliceIndex) && isfinite(G.atlasSliceIndex)
-            zSel = round(G.atlasSliceIndex);
-        elseif isfield(G,'currentSlice') && ~isempty(G.currentSlice) && isfinite(G.currentSlice)
-            zSel = round(G.currentSlice);
-        end
-    catch
-    end
-    zSel = max(1, min(size(PSC,3), zSel));
-    PSCz = squeeze(PSC(:,:,zSel,:));
-else
-    error('pscAtlas4D must be [Y X T] or [Y X Z T].');
-end
-
-if ndims(PSCz) ~= 3
-    error('Selected PSC slice is not [Y X T].');
-end
-
-nT = size(PSCz,3);
-b0 = max(1, min(nT, round(baseWinSec(1)/TR) + 1));
-b1 = max(1, min(nT, round(baseWinSec(2)/TR) + 1));
-s0 = max(1, min(nT, round(sigWinSec(1)/TR) + 1));
-s1 = max(1, min(nT, round(sigWinSec(2)/TR) + 1));
-if b1 < b0, tmp = b0; b0 = b1; b1 = tmp; end
-if s1 < s0, tmp = s0; s0 = s1; s1 = tmp; end
-
-baseMap = mean(PSCz(:,:,b0:b1),3);
-sigMap  = mean(PSCz(:,:,s0:s1),3);
-map2 = sigMap - baseMap;
-
-if isfinite(sigma) && sigma > 0
-    map2 = GA_smooth2D_STANDALONE(map2, sigma);
-end
-
-mask2D = GA_extractMask2D_STANDALONE(G, size(map2));
-if ~isempty(mask2D)
-    try, map2(~mask2D) = 0; catch, end
-end
-
-map2(~isfinite(map2)) = 0;
-end
-
-function M2 = GA_squeezeMap2D_STANDALONE(M)
-M = double(M);
-if isempty(M), M2 = []; return; end
-if ndims(M) == 2
-    M2 = M;
-elseif ndims(M) == 3
-    if size(M,3) == 1
-        M2 = M(:,:,1);
-    else
-        z = max(1, round(size(M,3)/2));
-        M2 = M(:,:,z);
-    end
-else
-    error('Unsupported SCM map dimensionality.');
-end
-M2(~isfinite(M2)) = 0;
-end
-
-function mask2D = GA_extractMask2D_STANDALONE(G, szMap)
-mask2D = [];
-try
-    if isfield(G,'mask2DCurrentSlice') && ~isempty(G.mask2DCurrentSlice)
-        M = logical(G.mask2DCurrentSlice);
-        if isequal(size(M), szMap)
-            mask2D = M;
-            return;
-        end
-    end
-catch
-end
-try
-    if isfield(G,'maskAtlas') && ~isempty(G.maskAtlas)
-        M = logical(G.maskAtlas);
-        if ismatrix(M) && isequal(size(M), szMap)
-            mask2D = M;
-            return;
-        elseif ndims(M) == 3
-            zSel = round(size(M,3)/2);
-            try
-                if isfield(G,'atlasSliceIndex') && ~isempty(G.atlasSliceIndex) && isfinite(G.atlasSliceIndex)
-                    zSel = round(G.atlasSliceIndex);
-                elseif isfield(G,'currentSlice') && ~isempty(G.currentSlice) && isfinite(G.currentSlice)
-                    zSel = round(G.currentSlice);
-                end
-            catch
-            end
-            zSel = max(1, min(size(M,3), zSel));
-            M2 = M(:,:,zSel);
-            if isequal(size(M2), szMap)
-                mask2D = M2;
-                return;
-            end
-        end
-    end
-catch
-end
-end
-
-function B = GA_smooth2D_STANDALONE(A, sigma)
-try
-    B = imgaussfilt(A, sigma);
-    return;
-catch
-end
-if sigma <= 0
-    B = A;
-    return;
-end
-r = max(1, ceil(3*sigma));
-x = -r:r;
-g = exp(-(x.^2)/(2*sigma^2));
-g = g / sum(g);
-B = conv2(conv2(double(A), g, 'same'), g', 'same');
-end
-
-function s = GA_strtrimSafe_STANDALONE(x)
-try
-    if isempty(x)
-        s = '';
-    else
-        s = strtrim(char(x));
-    end
-catch
-    s = '';
-end
-end
 
 
 % GA_ROI_PREVIEW_STANDALONE_START
@@ -4557,12 +4300,15 @@ subjName = subjName(okTrace);
 n = numel(tCell);
 
 t0 = -inf;
-t1 = inf;
+% GA_UNEQUAL_SCAN_LENGTH_PREVIEW_FIX_20260903
+% Longest scan determines display endpoint.
+t1 = -inf;
 dtList = [];
 for i = 1:n
     t = tCell{i};
     t0 = max(t0,min(t));
-    t1 = min(t1,max(t));
+    % Keep the latest available endpoint across subjects.
+t1 = max(t1,max(t));
     d = diff(t);
     d = d(isfinite(d) & d > 0);
     dtList = [dtList d(:)']; %#ok<AGROW>
@@ -4840,122 +4586,142 @@ end
 ga_apply_preview_grid(ax,S,fgCol);
 end
 
-function s = ga_preview_popup_string_local(h)
-s = '';
-try
-    lst = get(h,'String');
-    val = get(h,'Value');
-    if iscell(lst)
-        val = max(1,min(numel(lst),val));
-        s = lst{val};
-    else
-        s = char(lst);
-    end
-catch
-end
-if isempty(s), s = 'PACAP blue'; end
-end
 
-function c = ga_preview_named_color_local(name, cDefault)
-if nargin < 2 || isempty(cDefault), cDefault = [0.5 0.5 0.5]; end
-c = cDefault;
-if isempty(name), return; end
-s = lower(strtrim(name));
-switch s
-    case {'pacap blue','blue'}
-        c = [0.20 0.65 0.96];
-    case 'orange'
-        c = [0.95 0.58 0.20];
-    case 'red'
-        c = [0.87 0.24 0.24];
-    case 'green'
-        c = [0.20 0.72 0.28];
-    case 'purple'
-        c = [0.58 0.36 0.78];
-    case 'magenta'
-        c = [0.90 0.20 0.70];
-    case 'cyan'
-        c = [0.10 0.80 0.85];
-    case 'yellow'
-        c = [0.95 0.85 0.20];
-    case 'teal'
-        c = [0.10 0.65 0.60];
-    case 'dark blue'
-        c = [0.05 0.25 0.60];
-    case 'dark green'
-        c = [0.05 0.45 0.12];
-    case 'dark red'
-        c = [0.55 0.10 0.10];
-    case 'gray'
-        c = [0.60 0.60 0.60];
-    case 'black'
-        c = [0.10 0.10 0.10];
-end
-end
 
-function c = ga_color_name(s,fallback)
-c = fallback;
-try
-    s = lower(char(s));
-    if ~isempty(strfind(s,'pacap')) || ~isempty(strfind(s,'blue'))
-        c = [0.20 0.65 0.90];
-    elseif ~isempty(strfind(s,'vehicle')) || ~isempty(strfind(s,'veh')) || ~isempty(strfind(s,'gray')) || ~isempty(strfind(s,'grey'))
-        c = [0.60 0.60 0.60];
-    elseif ~isempty(strfind(s,'red'))
-        c = [0.90 0.25 0.25];
-    elseif ~isempty(strfind(s,'green'))
-        c = [0.25 0.75 0.45];
-    elseif ~isempty(strfind(s,'purple'))
-        c = [0.60 0.35 0.90];
-    elseif ~isempty(strfind(s,'orange'))
-        c = [0.95 0.55 0.20];
-    elseif ~isempty(strfind(s,'black'))
-        c = [0 0 0];
-    end
-catch
-end
-end
 
 function [ok,tMin,psc] = ga_read_roi_txt(fname)
+% Robust SCM ROI TXT time-course reader.
+%
+% New SCM exports contain:
+%   # PSC_REBASED: 1
+%
+% Old SCM exports do not. For those files the BaselineWindow header is
+% read and the trace is baseline-corrected in memory.
+%
+% Numeric ROI coordinates / RGB metadata before "# columns:" are ignored.
+
 ok = false;
 tMin = [];
 psc = [];
+
+if nargin < 1 || isempty(fname)
+    return;
+end
+
+fname = strtrim(char(fname));
+if exist(fname,'file') ~= 2
+    return;
+end
+
 fid = fopen(fname,'r');
 if fid < 0, return; end
 cleanupObj = onCleanup(@()fclose(fid)); %#ok<NASGU>
+
+inData = false;
+isRebased = false;
+baselineSec = [NaN NaN];
+
 while true
     ln = fgetl(fid);
     if ~ischar(ln), break; end
+
     ln = strtrim(ln);
     if isempty(ln), continue; end
-    if ln(1) == '#' || ln(1) == '%' || ln(1) == ';'
+
+    if ln(1)=='#' || ln(1)=='%' || ln(1)==';'
+        ll = lower(ln);
+
+        % Read the baseline stored by SCM_gui.
+        if ~isempty(strfind(ll,'baselinewindow:'))
+            tok = regexp(ln,'(?i)BaselineWindow:\s*([^\r\n]+)','tokens','once');
+            if ~isempty(tok)
+                rr = strrep(tok{1},'-',' ');
+                rr = strrep(rr,',',' ');
+                nums = sscanf(rr,'%f');
+                if numel(nums) >= 2
+                    baselineSec = double(nums(1:2)).';
+                end
+            end
+        end
+
+        % New SCM files explicitly say they are already rebased.
+        if ~isempty(strfind(ll,'psc_rebased:'))
+            tok = regexp(ll,'psc_rebased:\s*([a-z0-9]+)','tokens','once');
+            if ~isempty(tok)
+                vv = lower(strtrim(tok{1}));
+                isRebased = any(strcmp(vv,{'1','true','yes','y'}));
+            end
+        end
+
+        % Data starts ONLY here. This avoids reading x/y/RGB metadata.
+        if ~isempty(strfind(ll,'columns:')) && ~isempty(strfind(ll,'psc'))
+            inData = true;
+        end
+
         continue;
     end
-    vals = sscanf(ln,'%f');
-    if numel(vals) >= 3
-        tMin(end+1,1) = vals(2); %#ok<AGROW>
-        psc(end+1,1) = vals(3); %#ok<AGROW>
-    elseif numel(vals) == 2
-        tMin(end+1,1) = vals(1); %#ok<AGROW>
-        psc(end+1,1) = vals(2); %#ok<AGROW>
+
+    if ~inData
+        continue;
     end
-end
-ok = numel(tMin) >= 3 && numel(psc) == numel(tMin);
+
+    vals = sscanf(ln,'%f');
+
+    if numel(vals) >= 3
+        % SCM format: time_sec, time_min, PSC
+        tMin(end+1,1) = vals(2); %#ok<AGROW>
+        psc(end+1,1)  = vals(3); %#ok<AGROW>
+    elseif numel(vals) == 2
+        % Legacy two-column fallback.
+        tMin(end+1,1) = vals(1); %#ok<AGROW>
+        psc(end+1,1)  = vals(2); %#ok<AGROW>
+    end
 end
 
-function ga_draw_optional_window(ax,S)
-try
-    if isfield(S,'tc_peakSearchMin0') && isfield(S,'tc_peakSearchMin1')
-        x0 = double(S.tc_peakSearchMin0);
-        x1 = double(S.tc_peakSearchMin1);
-        if isfinite(x0) && isfinite(x1) && x1 > x0
-            yl = ylim(ax);
-            patch(ax,[x0 x1 x1 x0],[yl(1) yl(1) yl(2) yl(2)],[1 0.9 0.2], ...
-                'FaceAlpha',0.12,'EdgeColor','none','HandleVisibility','off');
+keep = isfinite(tMin) & isfinite(psc);
+tMin = double(tMin(keep));
+psc  = double(psc(keep));
+
+if isempty(tMin)
+    return;
+end
+
+% Two-column files may occasionally store seconds.
+if max(tMin) > 300
+    tMin = tMin ./ 60;
+end
+
+[tMin,ord] = sort(tMin);
+psc = psc(ord);
+[tMin,ia] = unique(tMin,'stable');
+psc = psc(ia);
+
+% ----------------------------------------------------------
+% AUTOMATIC LEGACY FIX
+%
+% Old SCM ROI TXT values used the original PSC reference even when the
+% header contained another BaselineWindow. Correct those old traces here.
+% New files have PSC_REBASED:1 and therefore skip this block.
+% ----------------------------------------------------------
+if ~isRebased && all(isfinite(baselineSec)) && numel(psc) >= 3
+
+    b0 = min(baselineSec);
+    b1 = max(baselineSec);
+    tSec = 60 .* tMin;
+
+    bi = (tSec >= b0) & (tSec <= b1);
+
+    if any(bi)
+        bv = psc(bi);
+        bv = bv(isfinite(bv));
+
+        if ~isempty(bv)
+            psc = psc - mean(bv);
         end
     end
-catch
 end
+
+ok = numel(tMin) >= 3 && numel(psc) == numel(tMin);
 end
 
 function ga_apply_preview_x(ax,t,S)
@@ -5041,34 +4807,6 @@ catch
 end
 end
 
-function ga_auto_limits(ax)
-try
-    ch = get(ax,'Children');
-    xx = [];
-    yy = [];
-    for i = 1:numel(ch)
-        try
-            x = get(ch(i),'XData');
-            y = get(ch(i),'YData');
-            xx = [xx x(:)']; %#ok<AGROW>
-            yy = [yy y(:)']; %#ok<AGROW>
-        catch
-        end
-    end
-    xx = xx(isfinite(xx));
-    yy = yy(isfinite(yy));
-    if ~isempty(xx)
-        xlim(ax,[min(xx) max(xx)]);
-    end
-    if ~isempty(yy)
-        lo = min(yy); hi = max(yy);
-        if hi <= lo, hi = lo + 1; end
-        pad = 0.12*(hi-lo);
-        ylim(ax,[lo-pad hi+pad]);
-    end
-catch
-end
-end
 
 function tf = ga_bool(x)
 tf = true;
@@ -5209,13 +4947,6 @@ if nargin < 2, amp = 0.16; end
 j = amp * (mod(double(k)*37,100)/100 - 0.5);
 end
 
-function s = ga_join(C,sep)
-s = '';
-for i = 1:numel(C)
-    if i > 1, s = [s sep]; end %#ok<AGROW>
-    s = [s char(C{i})]; %#ok<AGROW>
-end
-end
 
 
 function gaPrevTop(ax,R,S,styleName)
@@ -5628,193 +5359,10 @@ end
 end
 
 
-function gaApplyROIPreviewAxisCleanfix(hFig,R)
-% Applies final visual cleanup to ROI preview axes.
-if nargin < 1 || isempty(hFig) || ~ishandle(hFig)
-    try
-        hFig = gcf;
-    catch
-        return;
-    end
-end
-if nargin < 2
-    R = [];
-end
 
-axs = findall(hFig,'Type','axes');
-for k = 1:numel(axs)
-    ax = axs(k);
-    ttl = lower(gaGetAxesTitleCleanfix(ax));
 
-    if ~isempty(strfind(ttl,'group roi timecourse'))
-        gaFixOneROIAxisCleanfix(ax,true,R);
-    elseif ~isempty(strfind(ttl,'per-animal roi metric'))
-        gaFixOneROIAxisCleanfix(ax,false,R);
-    end
-end
-end
 
-function gaFixOneROIAxisCleanfix(ax,isTop,R)
-if isempty(ax) || ~ishandle(ax), return; end
 
-bg = get(ax,'Color');
-if ischar(bg)
-    try
-        bg = get(ancestor(ax,'figure'),'Color');
-    catch
-        bg = [1 1 1];
-    end
-end
-if ischar(bg) || isempty(bg) || numel(bg) ~= 3
-    bg = [1 1 1];
-end
-bg = double(bg(:)');
-
-if mean(bg) > 0.5
-    fg = [0 0 0];
-else
-    fg = [1 1 1];
-end
-
-try
-    set(ax,'XColor',fg,'YColor',fg,'FontName','Arial','FontSize',10,'LineWidth',1.1,'Box','off');
-end
-
-try, set(get(ax,'Title'), 'Color',fg,'FontName','Arial','FontWeight','bold'); end
-try, set(get(ax,'XLabel'),'Color',fg,'FontName','Arial','FontWeight','bold'); end
-try, set(get(ax,'YLabel'),'Color',fg,'FontName','Arial','FontWeight','bold'); end
-
-try
-    txt = findall(ax,'Type','text');
-    for t = 1:numel(txt)
-        set(txt(t),'Color',fg,'FontName','Arial');
-    end
-end
-
-try
-    hFig = ancestor(ax,'figure');
-    legs = findall(hFig,'Type','legend');
-    for l = 1:numel(legs)
-        try, set(legs(l),'TextColor',fg); end
-        try, set(legs(l),'Color',bg); end
-    end
-end
-
-if isTop
-    x = gaCollectTimeFromRCleanfix(R);
-    if isempty(x)
-        x = gaCollectAxisDataCleanfix(ax,'XData');
-    end
-    x = x(isfinite(x));
-    if numel(x) >= 2
-        xmin = min(x(:));
-        xmax = max(x(:));
-        if xmax > xmin
-            xlim(ax,[xmin xmax]);
-        end
-    end
-
-    y = gaCollectAxisDataCleanfix(ax,'YData');
-    y = y(isfinite(y));
-    if ~isempty(y)
-        lo = min(y(:));
-        hi = max(y(:));
-        if hi <= lo, hi = lo + 1; end
-        pad = 0.10 * (hi-lo);
-        ylim(ax,[lo-pad hi+pad]);
-    end
-
-    try, xlabel(ax,'Time (min)'); end
-    try, ylabel(ax,'PSC (%)'); end
-else
-    y = gaCollectAxisDataCleanfix(ax,'YData');
-    y = y(isfinite(y));
-    if ~isempty(y)
-        lo = min([0; y(:)]);
-        hi = max([0; y(:)]);
-        if hi <= lo, hi = lo + 1; end
-        pad = 0.20 * (hi-lo);
-        ylim(ax,[lo-pad hi+pad]);
-        yl = ylim(ax);
-        set(ax,'YTick',linspace(yl(1),yl(2),5));
-    end
-
-    x = gaCollectAxisDataCleanfix(ax,'XData');
-    x = x(isfinite(x));
-    if ~isempty(x)
-        xmin = min(x(:));
-        xmax = max(x(:));
-        if xmax > xmin
-            xlim(ax,[xmin-0.75 xmax+0.75]);
-        end
-    end
-
-    try, ylabel(ax,'PSC (%)'); end
-end
-end
-
-function ttl = gaGetAxesTitleCleanfix(ax)
-ttl = '';
-try
-    h = get(ax,'Title');
-    s = get(h,'String');
-    if iscell(s)
-        tmp = '';
-        for i = 1:numel(s)
-            tmp = [tmp ' ' char(s{i})];
-        end
-        s = tmp;
-    end
-    ttl = char(s);
-catch
-    ttl = '';
-end
-end
-
-function vals = gaCollectAxisDataCleanfix(ax,propName)
-vals = [];
-try
-    hs = findall(ax,'-property',propName);
-catch
-    return;
-end
-
-for i = 1:numel(hs)
-    try
-        d = get(hs(i),propName);
-    catch
-        continue;
-    end
-
-    if iscell(d)
-        for j = 1:numel(d)
-            if isnumeric(d{j})
-                vals = [vals; double(d{j}(:))];
-            end
-        end
-    elseif isnumeric(d)
-        vals = [vals; double(d(:))];
-    end
-end
-end
-
-function x = gaCollectTimeFromRCleanfix(R)
-x = [];
-if ~isstruct(R), return; end
-
-fields = {'tMin','timeMin','time_min','timeAxis','time','t','commonTimeMin','commonTime','plotTimeMin'};
-for k = 1:numel(fields)
-    f = fields{k};
-    if isfield(R,f) && isnumeric(R.(f)) && numel(R.(f)) >= 2
-        tmp = double(R.(f)(:));
-        tmp = tmp(isfinite(tmp));
-        if numel(tmp) >= 2
-            x = tmp;
-            return;
-        end
-    end
-end
-end
 
 
 function [lineW, shadeA, colA, colB, showLabels] = ga_preview_style_from_gui(figH)
@@ -5946,12 +5494,6 @@ shadeA = max(0,min(0.75,shadeA));
 end
 
 
-function GA_exportGroupAnalysisPPTBundleFix_20260511(hFig, makePPT)
-% Compatibility wrapper for older Group Maps Export Data SCM / PPT callbacks.
-% Keeps old button callbacks working after the exporter was renamed.
-if nargin < 2 || isempty(makePPT), makePPT = false; end
-GA_exportGroupMeanSCMBundle_Interactive(hFig, makePPT);
-end
 
 function GA_exportGroupMeanSCMBundle_Interactive(hFig, makePPT)
 % Export Group Maps result either as an SCM-compatible MAT bundle or as PPT.
@@ -6356,332 +5898,8 @@ else
     s = 'n.s.';
 end
 end
-function G = GA_fixGroupBundleForScmOpen_local(G,D)
-% Make GroupAnalysis SCM bundle readable by SCM_gui.
-% SCM_gui expects G.pscAtlas4D as [Y X T] or [Y X Z T].
-
-    if nargin < 1 || isempty(G) || ~isstruct(G)
-        G = struct();
-    end
-    if nargin < 2
-        D = struct();
-    end
-
-    X = [];
-
-    % Preferred existing field.
-    if isfield(G,'pscAtlas4D') && ~isempty(G.pscAtlas4D) && isnumeric(G.pscAtlas4D)
-        X = G.pscAtlas4D;
-    end
-
-    % Other possible GroupAnalysis field names.
-    if isempty(X)
-        candG = {'pscGroupMeanAtlas4D','meanPSCAtlas4D','groupMeanPSCAtlas4D','groupPSCAtlas4D','PSCAtlas4D','PSC','psc','meanPSC','groupMeanPSC','scmSeriesAtlas','scmMapSignedAtlas','scmMapDisplayAtlas'};
-        for ii = 1:numel(candG)
-            fn = candG{ii};
-            if isfield(G,fn) && ~isempty(G.(fn)) && isnumeric(G.(fn))
-                X = G.(fn);
-                break;
-            end
-        end
-    end
-
-    % Try D/appdata struct if needed.
-    if isempty(X) && isstruct(D)
-        candD = {'pscAtlas4D','PSCAtlas4D','PSC','psc','meanPSC','groupMeanPSC','scmMapSignedAtlas','scmMapDisplayAtlas'};
-        for ii = 1:numel(candD)
-            fn = candD{ii};
-            if isfield(D,fn) && ~isempty(D.(fn)) && isnumeric(D.(fn))
-                X = D.(fn);
-                break;
-            end
-        end
-    end
-
-    if isempty(X)
-        % Last fallback: make tiny dummy image instead of crashing save.
-        X = zeros(2,2,2,'single');
-    end
-
-    X = double(squeeze(X));
-    X(~isfinite(X)) = 0;
-
-    % If first dimension looks like subjects/groups and the next two are image-like,
-    % average the first dimension. This prevents [N Y X T] from reaching SCM_gui.
-    if ndims(X) == 4 && size(X,1) <= 50 && size(X,2) > 16 && size(X,3) > 16
-        X = squeeze(mean(X,1));
-    end
-
-    % If first dimension is group/subject in [N Y X Z T], average it.
-    if ndims(X) == 5 && size(X,1) <= 50 && size(X,2) > 16 && size(X,3) > 16
-        X = squeeze(mean(X,1));
-    end
-
-    % Use underlay/mask dimensions to decide whether 3rd dim is Z or T.
-    nZhint = NaN;
-    if isfield(G,'nZ') && ~isempty(G.nZ) && isnumeric(G.nZ) && isfinite(G.nZ)
-        nZhint = double(G.nZ);
-    elseif isfield(G,'underlayAtlas') && isnumeric(G.underlayAtlas) && ndims(G.underlayAtlas) == 3
-        nZhint = size(G.underlayAtlas,3);
-    end
-
-    nThint = NaN;
-    if isfield(G,'nT') && ~isempty(G.nT) && isnumeric(G.nT) && isfinite(G.nT)
-        nThint = double(G.nT);
-    elseif isfield(G,'tsec') && isnumeric(G.tsec) && numel(G.tsec) > 1
-        nThint = numel(G.tsec);
-    elseif isfield(G,'tmin') && isnumeric(G.tmin) && numel(G.tmin) > 1
-        nThint = numel(G.tmin);
-    end
-
-    if ndims(X) == 2
-        % Static 2D map -> duplicate as 2 timepoints.
-        X = cat(3, X, X);
-    elseif ndims(X) == 3
-        % Ambiguous [Y X K]. If K looks like Z, create [Y X Z 2].
-        K = size(X,3);
-        if isfinite(nZhint) && nZhint > 1 && K == round(nZhint) && ~(isfinite(nThint) && K == round(nThint))
-            X = cat(4, X, X);
-        else
-            % Keep as [Y X T].
-        end
-    elseif ndims(X) == 4
-        % Already [Y X Z T].
-    else
-        % Collapse unsupported dimensions into time.
-        sz = size(X);
-        if numel(sz) >= 2
-            X = reshape(X, sz(1), sz(2), []);
-        else
-            X = reshape(X, 1, 1, []);
-        end
-        if size(X,3) == 1
-            X = cat(3,X,X);
-        end
-    end
-
-    % Guarantee at least 2 timepoints for static maps.
-    if ndims(X) == 3 && size(X,3) == 1
-        X = cat(3,X,X);
-    end
-    if ndims(X) == 4 && size(X,4) == 1
-        X = cat(4,X,X);
-    end
-
-    G.pscAtlas4D = single(X);
-
-    if ndims(G.pscAtlas4D) == 3
-        G.nY = size(G.pscAtlas4D,1);
-        G.nX = size(G.pscAtlas4D,2);
-        G.nZ = 1;
-        G.nT = size(G.pscAtlas4D,3);
-    else
-        G.nY = size(G.pscAtlas4D,1);
-        G.nX = size(G.pscAtlas4D,2);
-        G.nZ = size(G.pscAtlas4D,3);
-        G.nT = size(G.pscAtlas4D,4);
-    end
-
-    if ~isfield(G,'TR') || isempty(G.TR) || ~isnumeric(G.TR) || ~isscalar(G.TR) || ~isfinite(G.TR) || G.TR <= 0
-        G.TR = 1;
-    end
-    G.tsec = (0:G.nT-1) .* double(G.TR);
-    G.tmin = G.tsec ./ 60;
-
-    if ~isfield(G,'kind') || isempty(G.kind)
-        G.kind = 'SCM_GROUP_EXPORT';
-    end
-    G.version = '1.1_GroupAnalysis_fixed_for_SCM_gui';
-end
 
 % BEGIN_GA_SCM_TIMESERIES_EXPORT_HELPERS_V2
-function GA_export_write_scm_timeseries_ppt_local(outFile,G,D,pngFile,hFig)
-% Full SCM-style time-series PPT export for GroupAnalysis.
-% Exports 60 s SCM windows across the complete group mean PSC series.
-
-    if nargin < 2 || isempty(G), G = struct(); end
-    if nargin < 3 || isempty(D), D = struct(); end
-    if nargin < 4, pngFile = ''; end
-    if nargin < 5, hFig = []; end
-
-    outDir0 = fileparts(outFile);
-    if isempty(outDir0), outDir0 = pwd; end
-    if exist(outDir0,'dir') ~= 7, mkdir(outDir0); end
-
-    % Try to find the real full time-series first.
-    [X,srcName] = GA_find_best_timeseries_local(G,D,hFig);
-
-    if isempty(X)
-        error(['Could not find a full PSC time series for GroupAnalysis PPT export.' newline newline ...
-               'The current export contains only one static group-map PNG. ' ...
-               'The PPT exporter needs a numeric array shaped [Y X T] or [Y X Z T].']);
-    end
-
-    X = double(squeeze(X));
-    X(~isfinite(X)) = 0;
-
-    if ndims(X) == 3
-        [nY,nX,nT] = size(X);
-        nZ = 1;
-    elseif ndims(X) == 4
-        [nY,nX,nZ,nT] = size(X);
-    else
-        error('Time-series PSC must be [Y X T] or [Y X Z T]. Found: %s', mat2str(size(X)));
-    end
-
-    if nT < 4
-        error(['Only %d time points were found in the exported group data.' newline newline ...
-               'This means GroupAnalysis is still passing a static SCM map, not the full time series. ' ...
-               'The full time series must be stored in the GroupAnalysis data/bundle before PPT export.'], nT);
-    end
-
-    TR = GA_get_TR_local(G,D);
-    tsec = (0:nT-1) .* TR;
-    totalSec = tsec(end);
-
-    [base0,base1] = GA_get_base_window_local(G,D,totalSec);
-    defMaxMin = '';
-    if totalSec > 0
-        defMaxMin = sprintf('%.2f', totalSec/60);
-    end
-
-    a = inputdlg({ ...
-        'Injection start (sec). Empty if unknown:', ...
-        'Window length (sec) (SCM default = 60):', ...
-        'Max minutes to export (empty = all):', ...
-        'Baseline window start-end sec:'}, ...
-        'Export full Group SCM time series', 1, {'','60',defMaxMin,sprintf('%g-%g',base0,base1)});
-
-    if isempty(a), return; end
-
-    injSec = str2double(strtrim(a{1}));
-    if ~isfinite(injSec), injSec = NaN; end
-
-    winLen = str2double(strtrim(a{2}));
-    if ~isfinite(winLen) || winLen <= 0, winLen = 60; end
-
-    maxMin = str2double(strtrim(a{3}));
-    if ~isfinite(maxMin) || maxMin <= 0, maxMin = NaN; end
-
-    [base0,base1] = GA_parse_range_local(a{4},base0,base1);
-    b0i = max(1,min(nT,round(base0/TR)+1));
-    b1i = max(1,min(nT,round(base1/TR)+1));
-    if b1i < b0i, tmp=b0i; b0i=b1i; b1i=tmp; end
-
-    stamp = datestr(now,'yyyymmdd_HHMMSS');
-    seriesDir = fullfile(outDir0, ['Group_SCM_timeseries_' stamp]);
-    tileDir = fullfile(seriesDir,'tiles_png');
-    slideDir = fullfile(seriesDir,'slide_pngs');
-    if exist(seriesDir,'dir') ~= 7, mkdir(seriesDir); end
-    if exist(tileDir,'dir') ~= 7, mkdir(tileDir); end
-    if exist(slideDir,'dir') ~= 7, mkdir(slideDir); end
-
-    cm = GA_get_export_cmap_local(G);
-    caxV = GA_get_export_caxis_local(G,X);
-    sigma = GA_get_export_sigma_local(G);
-    thr = GA_get_export_threshold_local(G);
-    alphaPct = GA_get_export_alpha_local(G);
-    [alphaModOn,modMin,modMax] = GA_get_export_alpha_mod_local(G);
-    signMode = GA_get_export_signmode_local(G);
-
-    U = GA_get_underlay_local(G,X);
-    M = GA_get_mask_local(G,nY,nX,nZ);
-
-    starts = 0:winLen:(floor(totalSec/winLen)*winLen);
-    if isempty(starts), starts = 0; end
-    if isfinite(maxMin)
-        starts = starts(starts < maxMin*60);
-    end
-    if isempty(starts), starts = 0; end
-
-    slidePNGs = {};
-    nSaved = 0;
-
-    for zSel = 1:nZ
-        if ndims(X) == 3
-            Xz = X;
-        else
-            Xz = squeeze(X(:,:,zSel,:));
-        end
-
-        baseMap = mean(Xz(:,:,b0i:b1i),3);
-        mask2 = M(:,:,min(zSel,size(M,3)));
-        bg2 = GA_get_underlay_slice_local(U,zSel,nY,nX,nZ);
-
-        tilePNG = {};
-        tileLBL = {};
-
-        for wi = 1:numel(starts)
-            s0 = starts(wi);
-            s1 = min(s0 + winLen, totalSec + TR);
-            idx = find(tsec >= s0 & tsec < s1);
-            if isempty(idx), continue; end
-
-            sigMap = mean(Xz(:,:,idx),3);
-            map = sigMap - baseMap;
-            if sigma > 0, map = GA_smooth2_local(map,sigma); end
-            map(~mask2) = 0;
-
-            [dispMap,alpha] = GA_build_overlay_local(map,mask2,thr,alphaPct,alphaModOn,modMin,modMax,signMode);
-
-            phase = '';
-            if isfinite(injSec)
-                if s1 <= injSec
-                    phase = 'Baseline';
-                elseif s0 < injSec && s1 > injSec
-                    phase = 'Injection';
-                else
-                    piMin = floor((s0-injSec)/winLen) + 1;
-                    if piMin < 1, piMin = 1; end
-                    phase = sprintf('%d min PI',piMin);
-                end
-            end
-
-            if isempty(phase)
-                lbl = sprintf('z=%d/%d | %.0f-%.0fs',zSel,nZ,s0,s1);
-            else
-                lbl = sprintf('z=%d/%d | %.0f-%.0fs | %s',zSel,nZ,s0,s1,phase);
-            end
-
-            outPng = fullfile(tileDir,sprintf('GroupSCM_z%02d_w%03d_%0.0f_%0.0fs.png',zSel,wi,s0,s1));
-            GA_render_scm_tile_local(outPng,bg2,dispMap,alpha,cm,caxV,lbl,200);
-
-            if exist(outPng,'file') == 2
-                tilePNG{end+1} = outPng; %#ok<AGROW>
-                tileLBL{end+1} = lbl; %#ok<AGROW>
-                nSaved = nSaved + 1;
-            end
-        end
-
-        if isempty(tilePNG), continue; end
-
-        perSlide = 6;
-        nSlides = ceil(numel(tilePNG)/perSlide);
-        for si = 1:nSlides
-            i0 = (si-1)*perSlide + 1;
-            i1 = min(si*perSlide,numel(tilePNG));
-            idx = i0:i1;
-
-            ttl = GA_get_export_title_local(G,srcName,zSel,nZ);
-            footer = sprintf('TR=%.4g s | Base=%g-%g s | Win=%g s | Thr=%g | CAX=[%g %g] | Alpha=%g%% | AlphaMod=%d [%g..%g]', ...
-                TR,base0,base1,winLen,thr,caxV(1),caxV(2),alphaPct,double(alphaModOn),modMin,modMax);
-
-            outSlide = fullfile(slideDir,sprintf('slide_z%02d_%02d.png',zSel,si));
-            GA_render_scm_montage_slide_local(outSlide,tilePNG(idx),tileLBL(idx),cm,caxV,ttl,footer,200);
-            slidePNGs{end+1} = outSlide; %#ok<AGROW>
-        end
-    end
-
-    if isempty(slidePNGs)
-        error('No SCM time windows were rendered.');
-    end
-
-    GA_write_ppt_from_slide_pngs_local(outFile,slidePNGs);
-
-    fprintf('\n[GroupAnalysis SCM PPT] Full time-series PPT saved:\n%s\n', outFile);
-    fprintf('[GroupAnalysis SCM PPT] Tile folder:\n%s\n', tileDir);
-    fprintf('[GroupAnalysis SCM PPT] Rendered %d SCM window tiles.\n\n', nSaved);
-end
 
 function [bestX,bestSrc] = GA_find_best_timeseries_local(G,D,hFig)
     bestX = [];
@@ -6834,160 +6052,19 @@ function sc = GA_score_timeseries_candidate_local(path,X,nT)
     sc = sc + min(nT,1000)/10;
 end
 
-function TR = GA_get_TR_local(G,D)
-    TR = NaN;
-    try, if isfield(G,'TR') && isfinite(G.TR) && G.TR > 0, TR = double(G.TR); end, catch, end
-    try, if ~isfinite(TR) && isfield(D,'TR') && isfinite(D.TR) && D.TR > 0, TR = double(D.TR); end, catch, end
-    try, if ~isfinite(TR) && isfield(G,'tsec') && numel(G.tsec) > 1, TR = median(diff(double(G.tsec(:)))); end, catch, end
-    if ~isfinite(TR) || TR <= 0, TR = 1; end
-end
 
-function [b0,b1] = GA_get_base_window_local(G,D,totalSec)
-    b0 = 30; b1 = 240;
-    try, if isfield(G,'baseWindowSec') && numel(G.baseWindowSec) >= 2, b0 = G.baseWindowSec(1); b1 = G.baseWindowSec(2); end, catch, end
-    try, if isfield(G,'baseWindowStr') && ~isempty(G.baseWindowStr), [b0,b1] = GA_parse_range_local(G.baseWindowStr,b0,b1); end, catch, end
-    if b0 >= totalSec || b1 > totalSec || b1 <= b0
-        b0 = 0;
-        b1 = max(1,min(totalSec,0.20*totalSec));
-    end
-end
 
-function [a,b] = GA_parse_range_local(s,da,db)
-    a = da; b = db;
-    try
-        s = char(s);
-        s = strrep(s,char(8211),'-');
-        s = strrep(s,char(8212),'-');
-        s = strrep(s,',',' ');
-        v = sscanf(s,'%f-%f');
-        if numel(v) ~= 2, v = sscanf(s,'%f %f'); end
-        if numel(v) >= 2 && all(isfinite(v(1:2)))
-            a = v(1); b = v(2);
-        end
-    catch
-    end
-    if b < a, tmp=a; a=b; b=tmp; end
-end
 
-function cm = GA_get_export_cmap_local(G)
-    cm = [];
-    try, if isfield(G,'display') && isfield(G.display,'cmapMatrix') && size(G.display.cmapMatrix,2) == 3, cm = double(G.display.cmapMatrix); end, catch, end
-    if isempty(cm)
-        try
-            if isfield(G,'display') && isfield(G.display,'colormapName')
-                nm = lower(char(G.display.colormapName));
-                if ~isempty(strfind(nm,'winter')), cm = winter(256);
-                elseif ~isempty(strfind(nm,'gray')), cm = gray(256);
-                elseif ~isempty(strfind(nm,'jet')), cm = jet(256);
-                else, cm = hot(256); end
-            end
-        catch
-        end
-    end
-    if isempty(cm), cm = hot(256); end
-end
 
-function caxV = GA_get_export_caxis_local(G,X)
-    caxV = [0 100];
-    try, if isfield(G,'display') && isfield(G.display,'caxis') && numel(G.display.caxis) >= 2, caxV = double(G.display.caxis(1:2)); end, catch, end
-    if ~all(isfinite(caxV)) || caxV(2) <= caxV(1)
-        v = abs(double(X(:))); v = v(isfinite(v));
-        if isempty(v), caxV = [0 1]; else, caxV = [0 max(1,GA_prctile_local(v,99))]; end
-    end
-end
 
-function sigma = GA_get_export_sigma_local(G)
-    sigma = 1;
-    try, if isfield(G,'sigma') && isfinite(G.sigma), sigma = double(G.sigma); end, catch, end
-end
 
-function thr = GA_get_export_threshold_local(G)
-    thr = 0;
-    try, if isfield(G,'display') && isfield(G.display,'threshold') && isfinite(G.display.threshold), thr = double(G.display.threshold); end, catch, end
-end
 
-function a = GA_get_export_alpha_local(G)
-    a = 100;
-    try, if isfield(G,'display') && isfield(G.display,'alphaPercent') && isfinite(G.display.alphaPercent), a = double(G.display.alphaPercent); end, catch, end
-    a = max(0,min(100,a));
-end
 
-function [tf,lo,hi] = GA_get_export_alpha_mod_local(G)
-    tf = true; lo = 10; hi = 20;
-    try, if isfield(G,'display') && isfield(G.display,'alphaModOn'), tf = logical(G.display.alphaModOn); end, catch, end
-    try, if isfield(G,'display') && isfield(G.display,'modMin') && isfinite(G.display.modMin), lo = double(G.display.modMin); end, catch, end
-    try, if isfield(G,'display') && isfield(G.display,'modMax') && isfinite(G.display.modMax), hi = double(G.display.modMax); end, catch, end
-    if hi < lo, tmp=lo; lo=hi; hi=tmp; end
-end
 
-function sm = GA_get_export_signmode_local(G)
-    sm = 1;
-    try, if isfield(G,'display') && isfield(G.display,'signMode') && isfinite(G.display.signMode), sm = round(double(G.display.signMode)); end, catch, end
-    sm = max(1,min(3,sm));
-end
 
-function U = GA_get_underlay_local(G,X)
-    U = [];
-    try, if isfield(G,'underlayAtlas') && ~isempty(G.underlayAtlas), U = double(G.underlayAtlas); end, catch, end
-    if isempty(U)
-        if ndims(X) == 3, U = std(double(X),0,3); else, U = std(double(X),0,4); end
-    end
-    U = squeeze(double(U)); U(~isfinite(U)) = 0;
-end
 
-function M = GA_get_mask_local(G,nY,nX,nZ)
-    M = true(nY,nX,nZ);
-    try
-        if isfield(G,'maskAtlas') && ~isempty(G.maskAtlas)
-            M0 = logical(G.maskAtlas);
-        elseif isfield(G,'mask2DCurrentSlice') && ~isempty(G.mask2DCurrentSlice)
-            M0 = logical(G.mask2DCurrentSlice);
-        else
-            return;
-        end
-        if ndims(M0) == 2
-            M(:,:,1) = GA_resize_mask_local(M0,nY,nX);
-            for z=2:nZ, M(:,:,z) = M(:,:,1); end
-        elseif ndims(M0) == 3
-            for z=1:nZ
-                zz = min(z,size(M0,3));
-                M(:,:,z) = GA_resize_mask_local(M0(:,:,zz),nY,nX);
-            end
-        end
-    catch
-        M = true(nY,nX,nZ);
-    end
-end
 
-function M2 = GA_resize_mask_local(M0,nY,nX)
-    if size(M0,1) == nY && size(M0,2) == nX
-        M2 = logical(M0); return;
-    end
-    try, M2 = imresize(double(M0),[nY nX],'nearest') > 0.5;
-    catch, M2 = true(nY,nX); end
-end
 
-function bg2 = GA_get_underlay_slice_local(U,z,nY,nX,nZ)
-    U = squeeze(U);
-    if ndims(U) == 2
-        bg2 = U;
-    elseif ndims(U) == 3
-        if size(U,3) == 3 && nZ == 1
-            bg2 = U;
-        else
-            bg2 = U(:,:,min(z,size(U,3)));
-        end
-    elseif ndims(U) == 4
-        if size(U,3) == 3
-            bg2 = squeeze(U(:,:,:,min(z,size(U,4))));
-        else
-            tmp = mean(U,4); bg2 = tmp(:,:,min(z,size(tmp,3)));
-        end
-    else
-        bg2 = zeros(nY,nX);
-    end
-    bg2 = GA_fit_image_local(bg2,nY,nX);
-end
 
 function I = GA_fit_image_local(I,nY,nX)
     I = squeeze(double(I));
@@ -7005,631 +6082,30 @@ function I = GA_fit_image_local(I,nY,nX)
     end
 end
 
-function [dispMap,alpha] = GA_build_overlay_local(rawMap,mask2,thr,alphaPct,alphaModOn,modMin,modMax,signMode)
-% SCM-style overlay and alpha builder for GroupAnalysis exports.
-rawMap = double(rawMap);
-rawMap(~isfinite(rawMap)) = 0;
 
-if nargin < 2 || isempty(mask2)
-    mask2 = true(size(rawMap));
-end
-mask2 = logical(mask2);
-if ~isequal(size(mask2),size(rawMap))
-    try
-        mask2 = imresize(double(mask2),size(rawMap),'nearest') > 0.5;
-    catch
-        tmp = false(size(rawMap));
-        yy = min(size(tmp,1),size(mask2,1));
-        xx = min(size(tmp,2),size(mask2,2));
-        tmp(1:yy,1:xx) = mask2(1:yy,1:xx);
-        mask2 = tmp;
-    end
-end
 
-if nargin < 3 || isempty(thr) || ~isfinite(thr), thr = 0; end
-if nargin < 4 || isempty(alphaPct) || ~isfinite(alphaPct), alphaPct = 100; end
-if nargin < 5 || isempty(alphaModOn), alphaModOn = true; end
-if nargin < 6 || isempty(modMin) || ~isfinite(modMin), modMin = 10; end
-if nargin < 7 || isempty(modMax) || ~isfinite(modMax), modMax = 20; end
-if nargin < 8 || isempty(signMode) || ~isfinite(signMode), signMode = 1; end
 
-thr = abs(double(thr));
-alphaPct = max(0,min(100,double(alphaPct)));
-modMin = double(modMin);
-modMax = double(modMax);
-if modMax < modMin
-    tmp = modMin; modMin = modMax; modMax = tmp;
-end
-if modMax <= modMin
-    modMax = modMin + eps;
-end
 
-signMode = round(double(signMode));
-switch signMode
-    case 2
-        showMask = rawMap < 0;
-        dispMap = abs(min(rawMap,0));
-    case 3
-        showMask = rawMap ~= 0;
-        dispMap = rawMap;
-    otherwise
-        showMask = rawMap > 0;
-        dispMap = rawMap;
-end
 
-mag = abs(rawMap);
-showMask = showMask & mask2 & isfinite(rawMap) & (mag >= thr);
 
-if ~logical(alphaModOn)
-    alpha = (alphaPct/100) .* double(showMask);
-else
-    effLo = max(modMin,thr);
-    effHi = modMax;
-    if effHi <= effLo, effHi = effLo + eps; end
-    ramp = (mag - effLo) ./ max(eps,(effHi - effLo));
-    ramp(~isfinite(ramp)) = 0;
-    ramp = min(max(ramp,0),1);
-    ramp(mag <= effLo) = 0;
-    alpha = (alphaPct/100) .* ramp .* double(showMask);
-end
 
-alpha(~isfinite(alpha)) = 0;
-alpha = min(max(alpha,0),1);
-alpha(abs(rawMap) <= max(modMin,thr)) = 0;
-dispMap(~isfinite(dispMap)) = 0;
-dispMap(alpha <= 0) = 0;
-end
-
-function GA_render_scm_tile_local(outPng,bg2,map,alpha,cm,caxV,lbl,dpiVal)
-    figT = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off','Units','pixels','Position',[80 80 1000 850]);
-    ax = axes('Parent',figT,'Units','normalized','Position',[0.02 0.02 0.96 0.96]);
-    axis(ax,'image'); axis(ax,'off'); set(ax,'YDir','reverse'); hold(ax,'on');
-    image(ax,GA_underlay_rgb_local(bg2));
-    h = imagesc(ax,map); set(h,'AlphaData',GA_alphaModFixFromCData_20260504(h,alpha)); try, set(h,'AlphaDataMapping','none'); catch, end
-    colormap(ax,cm); caxis(ax,caxV);
-    text(ax,0.02,0.98,lbl,'Units','normalized','Color','w','FontName','Arial','FontWeight','bold','FontSize',16, ...
-        'HorizontalAlignment','left','VerticalAlignment','top','Interpreter','none','BackgroundColor',[0 0 0],'Margin',2);
-    set(figT,'PaperPositionMode','auto');
-    print(figT,outPng,'-dpng',sprintf('-r%d',dpiVal),'-opengl');
-    close(figT);
-end
-
-function rgb = GA_underlay_rgb_local(U)
-    U = squeeze(double(U));
-    if ndims(U) == 3 && size(U,3) == 3
-        rgb = U;
-        if max(rgb(:)) > 1, rgb = rgb ./ 255; end
-        rgb = min(max(rgb,0),1);
-        return;
-    end
-    U(~isfinite(U)) = 0;
-    lo = GA_prctile_local(U(:),0.5); hi = GA_prctile_local(U(:),99.5);
-    if ~isfinite(lo) || ~isfinite(hi) || hi <= lo
-        lo = min(U(:)); hi = max(U(:));
-    end
-    if hi <= lo, U01 = zeros(size(U)); else, U01 = min(max((U-lo)./(hi-lo),0),1); end
-    rgb = repmat(U01,[1 1 3]);
-end
-
-function GA_render_scm_montage_slide_local(outFile,pngList,lblList,cm,caxV,titleStr,footerStr,dpiVal)
-    figS = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off');
-    set(figS,'Units','inches','Position',[0.5 0.5 13.333 7.5]);
-    set(figS,'PaperPositionMode','auto');
-
-    annotation(figS,'textbox',[0.02 0.89 0.96 0.09],'String',titleStr,'Color','w','EdgeColor','none', ...
-        'FontName','Arial','FontSize',15,'FontWeight','bold','HorizontalAlignment','center','Interpreter','none');
-    annotation(figS,'textbox',[0.25 0.01 0.73 0.06],'String',footerStr,'Color','w','EdgeColor','none', ...
-        'FontName','Arial','FontSize',9,'FontWeight','bold','HorizontalAlignment','right','Interpreter','none');
-
-    axCB = axes('Parent',figS,'Position',[0.01 0.14 0.001 0.72],'Visible','off');
-    imagesc(axCB,[0 1;0 1]); colormap(axCB,cm); caxis(axCB,caxV);
-    cb = colorbar(axCB,'Position',[0.018 0.14 0.015 0.72]);
-    cb.Color = 'w'; cb.FontName = 'Arial'; cb.FontSize = 9;
-    cb.Label.String = 'Signal change (%)'; cb.Label.Color = 'w';
-
-    x0 = 0.085; x1 = 0.98; yBot = 0.11; yTop = 0.86;
-    rowGap = 0.06; colGap = 0.02;
-    cellH = (yTop-yBot-rowGap)/2;
-    cellW = (x1-x0-2*colGap)/3;
-
-    for k = 1:min(6,numel(pngList))
-        if k <= 3
-            cc = k-1; y = yBot + cellH + rowGap;
-        else
-            cc = k-4; y = yBot;
-        end
-        x = x0 + cc*(cellW+colGap);
-        img = imread(pngList{k});
-        axI = axes('Parent',figS,'Position',[x y cellW cellH]);
-        image(axI,img); axis(axI,'image'); axis(axI,'off');
-        annotation(figS,'textbox',[x y+cellH+0.003 cellW 0.035],'String',lblList{k},'Color','w','EdgeColor','none', ...
-            'FontName','Arial','FontSize',11,'FontWeight','bold','HorizontalAlignment','center','Interpreter','none');
-    end
-
-    print(figS,outFile,'-dpng',sprintf('-r%d',dpiVal),'-opengl');
-    close(figS);
-end
-
-function GA_write_ppt_from_slide_pngs_local(outFile,slidePNGs)
-    if exist(outFile,'file') == 2
-        try, delete(outFile); catch, error('Could not overwrite PPTX: %s',outFile); end
-    end
-
-    if ~isempty(which('mlreportgen.ppt.Presentation'))
-        try
-            import mlreportgen.ppt.*
-            ppt = Presentation(outFile); open(ppt);
-            for i=1:numel(slidePNGs)
-                try, slide = add(ppt,'Blank'); catch, slide = add(ppt); end
-                pic = Picture(slidePNGs{i});
-                pic.X = '0in'; pic.Y = '0in'; pic.Width = '13.333in'; pic.Height = '7.5in';
-                add(slide,pic);
-            end
-            close(ppt); pause(0.25);
-            if exist(outFile,'file') == 2, return; end
-        catch ME
-            warning('mlreportgen PPT failed, trying ActiveX: %s',ME.message);
-        end
-    end
-
-    pptApp = []; pres = [];
-    try
-        pptApp = actxserver('PowerPoint.Application'); pptApp.Visible = 1;
-        pres = invoke(pptApp.Presentations,'Add');
-        for i=1:numel(slidePNGs)
-            slide = invoke(pres.Slides,'Add',i,12);
-            sw = pres.PageSetup.SlideWidth; sh = pres.PageSetup.SlideHeight;
-            invoke(slide.Shapes,'AddPicture',slidePNGs{i},0,1,0,0,sw,sh);
-        end
-        invoke(pres,'SaveAs',outFile);
-        invoke(pres,'Close'); invoke(pptApp,'Quit');
-    catch ME
-        try, if ~isempty(pres), invoke(pres,'Close'); end, catch, end
-        try, if ~isempty(pptApp), invoke(pptApp,'Quit'); end, catch, end
-        error('PowerPoint export failed: %s',ME.message);
-    end
-end
-
-function titleStr = GA_get_export_title_local(G,srcName,zSel,nZ)
-    titleStr = 'GroupAnalysis SCM time series';
-    try, if isfield(G,'fileLabel') && ~isempty(G.fileLabel), titleStr = char(G.fileLabel); end, catch, end
-    if isempty(titleStr), titleStr = 'GroupAnalysis SCM time series'; end
-    titleStr = sprintf('%s | z=%d/%d | source: %s',titleStr,zSel,nZ,srcName);
-end
-
-function out = GA_smooth2_local(in,sigma)
-    try, out = imgaussfilt(in,sigma); return; catch, end
-    if sigma <= 0, out = in; return; end
-    r = max(1,ceil(3*sigma)); x = -r:r; g = exp(-(x.^2)/(2*sigma^2)); g = g/sum(g);
-    out = conv2(conv2(in,g,'same'),g','same');
-end
-
-function q = GA_prctile_local(v,p)
-    v = double(v(:)); v = v(isfinite(v));
-    if isempty(v), q = 0; return; end
-    try, q = prctile(v,p); return; catch, end
-    v = sort(v); n = numel(v);
-    k = 1 + (n-1)*(p/100); k1 = floor(k); k2 = ceil(k);
-    k1 = max(1,min(n,k1)); k2 = max(1,min(n,k2));
-    if k1 == k2, q = v(k1); else, q = v(k1) + (k-k1)*(v(k2)-v(k1)); end
-end
 % END_GA_SCM_TIMESERIES_EXPORT_HELPERS_V2
 
 
-function [rows,bundles] = GA_collectSCMBundlesFromRows_PATCH_V4(S,cand)
-rows = []; bundles = {}; seen = {};
-for ii = 1:numel(cand)
-    r = cand(ii);
-    useRow = true;
-    try, useRow = GA_toLogical_PATCH_V4(S.subj{r,1}); catch, end
-    if ~useRow, continue; end
-    bf = '';
-    try, bf = strtrim(char(S.subj{r,8})); catch, end
-    if isempty(bf) || exist(bf,'file') ~= 2, continue; end
-    if ~GA_isLikelySCMBundle_PATCH_V4(bf), continue; end
-    key = lower(strrep(bf,'/','\'));
-    if any(strcmp(seen,key)), continue; end
-    seen{end+1} = key; %#ok<AGROW>
-    rows(end+1) = r; %#ok<AGROW>
-    bundles{end+1} = bf; %#ok<AGROW>
-end
-end
 
-function tf = GA_isLikelySCMBundle_PATCH_V4(bf)
-tf = false;
-try
-    W = whos('-file',bf); names = {W.name};
-    if any(strcmp(names,'G'))
-        tf = true; return;
-    end
-catch
-end
-try
-    [~,nm,~] = fileparts(bf); nm = lower(nm);
-    tf = ~isempty(strfind(nm,'scm_groupexport')) || ~isempty(strfind(nm,'scm_group'));
-catch
-end
-end
 
-function G = GA_loadSCMBundle_PATCH_V4(bf)
-L = load(bf); G = [];
-if isfield(L,'G') && isstruct(L.G)
-    G = L.G;
-else
-    fn = fieldnames(L);
-    for k = 1:numel(fn)
-        v = L.(fn{k});
-        if isstruct(v) && (isfield(v,'pscAtlas4D') || isfield(v,'pscAtlasD') || isfield(v,'psc4D') || isfield(v,'PSC'))
-            G = v; break;
-        end
-    end
-end
-if isempty(G) || ~isstruct(G), error('MAT file does not contain an SCM bundle struct G.'); end
-G = GA_normalizeBundlePSC_PATCH_V4(G,bf);
-end
 
-function G = GA_normalizeBundlePSC_PATCH_V4(G,bf)
-if isfield(G,'pscAtlas4D') && ~isempty(G.pscAtlas4D)
-    X = G.pscAtlas4D;
-else
-    X = [];
-    flds = {'pscAtlasD','pscAtlas3D','psc4D','PSC4D','PSC','functionalPSC','Ipsc'};
-    for k = 1:numel(flds)
-        f = flds{k};
-        if isfield(G,f) && ~isempty(G.(f)) && isnumeric(G.(f))
-            X = G.(f); break;
-        end
-    end
-end
-if isempty(X)
-    error(['Could not find a full PSC time series in this bundle.' char(10) ...
-           'Expected G.pscAtlas4D [Y X T] or [Y X Z T].' char(10) ...
-           'File: ' bf]);
-end
-X = double(X);
-X(~isfinite(X)) = 0;
-while ndims(X) > 4
-    X = squeeze(X);
-end
-if ndims(X) == 4 && size(X,3) == 1
-    X = squeeze(X);
-end
-if ndims(X) == 2
-    error(['This file contains only a static 2D map, not a full SCM time series.' char(10) ...
-           'Open/export the individual SCM_GroupExport bundle from SCM_gui instead.' char(10) ...
-           'File: ' bf]);
-end
-if ndims(X) == 3
-    if size(X,3) < 2, error('3D PSC array has only one frame.'); end
-elseif ndims(X) == 4
-    if size(X,4) < 2, error('4D PSC array has only one time frame.'); end
-else
-    error('PSC array must be [Y X T] or [Y X Z T].');
-end
-G.pscAtlas4D = X;
-if ~isfield(G,'TR') || isempty(G.TR) || ~isfinite(double(G.TR(1)))
-    try
-        if isfield(G,'tsec') && numel(G.tsec) >= 2
-            G.TR = median(diff(double(G.tsec(:))));
-        elseif isfield(G,'tmin') && numel(G.tmin) >= 2
-            G.TR = 60 * median(diff(double(G.tmin(:))));
-        end
-    catch
-    end
-end
-end
 
-function [TR,nT] = GA_getTRnT_PATCH_V4(G)
-TR = NaN; nT = NaN;
-try, TR = double(G.TR(1)); catch, end
-X = G.pscAtlas4D;
-if ndims(X) == 3, nT = size(X,3); elseif ndims(X) == 4, nT = size(X,4); end
-if (~isfinite(TR) || TR <= 0) && isfield(G,'tsec') && numel(G.tsec) >= 2
-    TR = median(diff(double(G.tsec(:))));
-end
-if (~isfinite(TR) || TR <= 0) && isfield(G,'tmin') && numel(G.tmin) >= 2
-    TR = 60 * median(diff(double(G.tmin(:))));
-end
-end
 
-function M = GA_computeSCMWindowMap_PATCH_V4(G,zSel,baseWin,sigWin,TR)
-X = double(G.pscAtlas4D);
-if ndims(X) == 3
-    P = X;
-else
-    zSel = max(1,min(size(X,3),round(zSel)));
-    P = squeeze(X(:,:,zSel,:));
-end
-T = size(P,3);
-b0 = max(1,min(T,floor(baseWin(1)/TR)+1));
-b1 = max(1,min(T,floor(baseWin(2)/TR)+1));
-s0 = max(1,min(T,floor(sigWin(1)/TR)+1));
-s1 = max(1,min(T,floor(sigWin(2)/TR)+1));
-if b1 < b0, tmp=b0; b0=b1; b1=tmp; end
-if s1 < s0, tmp=s0; s0=s1; s1=tmp; end
-baseMap = mean(P(:,:,b0:b1),3);
-sigMap  = mean(P(:,:,s0:s1),3);
-M = sigMap - baseMap;
-sigma = 1;
-try, if isfield(G,'sigma') && ~isempty(G.sigma) && isfinite(G.sigma(1)), sigma = double(G.sigma(1)); end, catch, end
-if sigma > 0, M = GA_smooth2_PATCH_V4(M,sigma); end
-M(~isfinite(M)) = 0;
-end
 
-function U = GA_getUnderlayForBundle_PATCH_V4(G,zSel,sz)
-U = [];
-flds = {'underlayAtlas','underlay2D','underlayAtlas2D','underlayAtlas','brainImage','bg','commonUnderlay'};
-for k = 1:numel(flds)
-    f = flds{k};
-    if isfield(G,f) && ~isempty(G.(f)) && isnumeric(G.(f))
-        U = G.(f); break;
-    end
-end
-if isempty(U), U = zeros(sz(1),sz(2)); end
-U = squeeze(double(U));
-if ndims(U) == 3
-    if size(U,3) == 3 && ~(isfield(G,'nZ') && G.nZ == 3)
-        % RGB image, keep as RGB.
-    else
-        zSel = max(1,min(size(U,3),round(zSel)));
-        U = U(:,:,zSel);
-    end
-elseif ndims(U) == 4
-    if size(U,3) == 3
-        zSel = max(1,min(size(U,4),round(zSel)));
-        U = squeeze(U(:,:,:,zSel));
-    else
-        zSel = max(1,min(size(U,3),round(zSel)));
-        U = squeeze(U(:,:,zSel,1));
-    end
-end
-U = GA_resizeLike_PATCH_V4(U,sz);
-end
 
-function mask2 = GA_getMaskForBundle_PATCH_V4(G,zSel,sz)
-mask2 = true(sz(1),sz(2));
-M = [];
-if isfield(G,'maskAtlas') && ~isempty(G.maskAtlas), M = G.maskAtlas;
-elseif isfield(G,'mask2DCurrentSlice') && ~isempty(G.mask2DCurrentSlice), M = G.mask2DCurrentSlice;
-end
-if isempty(M), return; end
-M = logical(M);
-if ndims(M) == 3
-    zSel = max(1,min(size(M,3),round(zSel)));
-    M = M(:,:,zSel);
-elseif ndims(M) > 3
-    M = squeeze(M);
-    if ndims(M) > 2, M = M(:,:,1); end
-end
-mask2 = GA_resizeMask_PATCH_V4(M,sz);
-try
-    if isfield(G,'maskIsInclude') && ~isempty(G.maskIsInclude) && ~logical(G.maskIsInclude)
-        mask2 = ~mask2;
-    end
-catch
-end
-end
 
-function R = GA_displayStruct_PATCH_V4(S,G)
-R.threshold = GA_numField_PATCH_V4(S,'mapThreshold',0);
-R.caxis = GA_vecField_PATCH_V4(S,'mapCaxis',[0 100]);
-R.alphaPercent = 100;
-R.alphaModOn = GA_logField_PATCH_V4(S,'mapAlphaModOn',true);
-R.modMin = GA_numField_PATCH_V4(S,'mapModMin',15);
-R.modMax = GA_numField_PATCH_V4(S,'mapModMax',30);
-R.colormapName = GA_charField_PATCH_V4(S,'mapColormap','blackbdy_iso');
-R.signMode = 1;
-try
-    if isfield(G,'display') && isstruct(G.display)
-        D = G.display;
-        if isfield(D,'threshold') && ~isempty(D.threshold), R.threshold = double(D.threshold(1)); end
-        if isfield(D,'caxis') && numel(D.caxis)>=2, R.caxis = double(D.caxis(1:2)); end
-        if isfield(D,'alphaPercent') && ~isempty(D.alphaPercent), R.alphaPercent = double(D.alphaPercent(1)); end
-        if isfield(D,'alphaModOn') && ~isempty(D.alphaModOn), R.alphaModOn = logical(D.alphaModOn(1)); end
-        if isfield(D,'modMin') && ~isempty(D.modMin), R.modMin = double(D.modMin(1)); end
-        if isfield(D,'modMax') && ~isempty(D.modMax), R.modMax = double(D.modMax(1)); end
-        if isfield(D,'colormapName') && ~isempty(D.colormapName), R.colormapName = char(D.colormapName); end
-        if isfield(D,'signMode') && ~isempty(D.signMode), R.signMode = round(double(D.signMode(1))); end
-        if isfield(D,'cmapMatrix') && ~isempty(D.cmapMatrix) && size(D.cmapMatrix,2)==3, R.cmapMatrix = double(D.cmapMatrix); end
-    end
-catch
-end
-if numel(R.caxis)<2 || any(~isfinite(R.caxis(1:2))) || R.caxis(2)==R.caxis(1), R.caxis = [0 100]; end
-if R.caxis(2)<R.caxis(1), R.caxis = fliplr(R.caxis); end
-if R.modMax < R.modMin, tmp=R.modMin; R.modMin=R.modMax; R.modMax=tmp; end
-R.signMode = max(1,min(3,R.signMode));
-end
 
-function GA_exportTile_PATCH_V4(outFile,U,M,R,titleStr)
-f = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off','MenuBar','none','ToolBar','none','NumberTitle','off');
-set(f,'Position',[100 100 1100 900]);
-ax = axes('Parent',f,'Units','normalized','Position',[0.06 0.08 0.80 0.84]);
-Urgb = GA_toRGB_PATCH_V4(U);
-image(ax,Urgb); axis(ax,'image'); axis(ax,'off'); hold(ax,'on');
-[dispMap,alpha] = GA_displayMapAlpha_PATCH_V4(M,R);
-h = imagesc(ax,dispMap); set(h,'AlphaData',GA_alphaModFixFromCData_20260504(h,alpha)); try, set(h,'AlphaDataMapping','none'); catch, end
-colormap(ax,GA_colormap_PATCH_V4(R)); caxis(ax,R.caxis);
-cb = colorbar(ax);
-try, cb.Color = 'w'; cb.Label.String = 'Signal change (%)'; cb.Label.Color = 'w'; cb.FontSize = 11; catch, end
-title(ax,titleStr,'Color','w','FontWeight','bold','Interpreter','none');
-set(f,'PaperPositionMode','auto');
-print(f,outFile,'-dpng','-r200','-opengl');
-close(f);
-end
 
-function [D,A] = GA_displayMapAlpha_PATCH_V4(M,R)
-% SCM-style display map and alpha for GroupAnalysis preview.
-M = double(M);
-M(~isfinite(M)) = 0;
 
-if nargin < 2 || isempty(R) || ~isstruct(R)
-    R = struct();
-end
 
-thr = 0;
-if isfield(R,'thr') && ~isempty(R.thr) && isfinite(R.thr), thr = double(R.thr(1)); end
-if isfield(R,'threshold') && ~isempty(R.threshold) && isfinite(R.threshold), thr = double(R.threshold(1)); end
-thr = abs(thr);
 
-alphaPct = 100;
-if isfield(R,'alpha') && ~isempty(R.alpha) && isfinite(R.alpha), alphaPct = double(R.alpha(1)); end
-if isfield(R,'alphaPct') && ~isempty(R.alphaPct) && isfinite(R.alphaPct), alphaPct = double(R.alphaPct(1)); end
-if isfield(R,'alphaPercent') && ~isempty(R.alphaPercent) && isfinite(R.alphaPercent), alphaPct = double(R.alphaPercent(1)); end
-alphaPct = max(0,min(100,alphaPct));
 
-alphaModOn = true;
-if isfield(R,'alphaModOn') && ~isempty(R.alphaModOn), alphaModOn = logical(R.alphaModOn); end
-if isfield(R,'mapAlphaModOn') && ~isempty(R.mapAlphaModOn), alphaModOn = logical(R.mapAlphaModOn); end
-
-modMin = 10;
-modMax = 20;
-if isfield(R,'modMin') && ~isempty(R.modMin) && isfinite(R.modMin), modMin = double(R.modMin(1)); end
-if isfield(R,'modMax') && ~isempty(R.modMax) && isfinite(R.modMax), modMax = double(R.modMax(1)); end
-if modMax < modMin
-    tmp = modMin; modMin = modMax; modMax = tmp;
-end
-if modMax <= modMin
-    modMax = modMin + eps;
-end
-
-signMode = 1;
-if isfield(R,'signMode') && ~isempty(R.signMode) && isfinite(R.signMode), signMode = round(double(R.signMode(1))); end
-
-switch signMode
-    case 2
-        showMask = M < 0;
-        D = abs(min(M,0));
-    case 3
-        showMask = M ~= 0;
-        D = M;
-    otherwise
-        showMask = M > 0;
-        D = M;
-end
-
-mag = abs(M);
-showMask = showMask & isfinite(M) & (mag >= thr);
-
-if ~alphaModOn
-    A = (alphaPct/100) .* double(showMask);
-else
-    effLo = max(modMin,thr);
-    effHi = modMax;
-    if effHi <= effLo, effHi = effLo + eps; end
-    ramp = (mag - effLo) ./ max(eps,(effHi - effLo));
-    ramp(~isfinite(ramp)) = 0;
-    ramp = min(max(ramp,0),1);
-    ramp(mag <= effLo) = 0;
-    A = (alphaPct/100) .* ramp .* double(showMask);
-end
-
-A(~isfinite(A)) = 0;
-A = min(max(A,0),1);
-A(abs(M) <= max(modMin,thr)) = 0;
-D(~isfinite(D)) = 0;
-D(A <= 0) = 0;
-end
-
-function GA_renderMontageSlide_PATCH_V4(outFile,pngList,lblList,cm,caxV,titleStr,footerStr)
-figS = figure('Visible','off','Color',[0 0 0],'InvertHardcopy','off','MenuBar','none','ToolBar','none','NumberTitle','off');
-set(figS,'Units','inches','Position',[0.5 0.5 13.333 7.5]);
-set(figS,'PaperPositionMode','auto');
-annotation(figS,'textbox',[0.02 0.89 0.96 0.10],'String',titleStr,'Color','w','EdgeColor','none','FontName','Arial','FontSize',14,'FontWeight','bold','HorizontalAlignment','center','Interpreter','none');
-annotation(figS,'textbox',[0.28 0.01 0.70 0.06],'String',footerStr,'Color','w','EdgeColor','none','FontName','Arial','FontSize',9,'FontWeight','bold','HorizontalAlignment','right','Interpreter','none');
-axCB = axes('Parent',figS,'Position',[0.012 0.14 0.001 0.74],'Visible','off','XTick',[],'YTick',[],'XColor','none','YColor','none','Box','off');
-imagesc(axCB,[0 1; 0 1]); colormap(axCB,cm); caxis(axCB,caxV);
-cbx = colorbar(axCB,'Position',[0.020 0.14 0.015 0.74]);
-try, cbx.Color='w'; cbx.FontName='Arial'; cbx.FontSize=10; cbx.Label.String='Signal change (%)'; cbx.Label.Color='w'; cbx.TickDirection='out'; cbx.Box='off'; catch, end
-x0 = 0.095; x1 = 0.98; yBot = 0.12; yTop = 0.86; rowGap = 0.06; colGap = 0.02;
-cellH = (yTop-yBot-rowGap)/2; cellW = (x1-x0-2*colGap)/3;
-for k = 1:min(6,numel(pngList))
-    if k <= 3, cc = k-1; y = yBot + cellH + rowGap; else, cc = k-4; y = yBot; end
-    x = x0 + cc*(cellW+colGap);
-    axI = axes('Parent',figS,'Position',[x y cellW cellH]);
-    image(axI,imread(pngList{k})); axis(axI,'image'); axis(axI,'off');
-    annotation(figS,'textbox',[x y+cellH+0.005 cellW 0.035],'String',lblList{k},'Color','w','EdgeColor','none','FontName','Arial','FontSize',12,'FontWeight','bold','HorizontalAlignment','center','Interpreter','none');
-end
-print(figS,outFile,'-dpng','-r200','-opengl');
-close(figS);
-end
-
-function GA_writePPT_PATCH_V4(pptFile,slidePNGs)
-if exist(pptFile,'file')==2
-    try, delete(pptFile); catch, error('Could not overwrite PPT: %s',pptFile); end
-end
-if ~isempty(which('mlreportgen.ppt.Presentation'))
-    import mlreportgen.ppt.*
-    ppt = [];
-    try
-        ppt = Presentation(pptFile); open(ppt);
-        for i = 1:numel(slidePNGs)
-            try, slide = add(ppt,'Blank'); catch, slide = add(ppt); end
-            pic = Picture(slidePNGs{i});
-            pic.X = '0in'; pic.Y = '0in'; pic.Width = '13.333in'; pic.Height = '7.5in';
-            add(slide,pic);
-        end
-        close(ppt);
-    catch ME
-        try, if ~isempty(ppt), close(ppt); end, catch, end
-        error('mlreportgen PPT export failed: %s',ME.message);
-    end
-elseif ispc && exist('actxserver','file')==2
-    ppt = []; pres = [];
-    try
-        ppt = actxserver('PowerPoint.Application'); ppt.Visible = 1;
-        pres = ppt.Presentations.Add;
-        sw = pres.PageSetup.SlideWidth; sh = pres.PageSetup.SlideHeight;
-        for i = 1:numel(slidePNGs)
-            slide = pres.Slides.Add(i,12);
-            slide.Shapes.AddPicture(slidePNGs{i},0,1,0,0,sw,sh);
-        end
-        pres.SaveAs(pptFile); pres.Close; ppt.Quit;
-    catch ME
-        try, if ~isempty(pres), pres.Close; end, catch, end
-        try, if ~isempty(ppt), ppt.Quit; end, catch, end
-        error('PowerPoint COM export failed: %s',ME.message);
-    end
-else
-    error('No PowerPoint writer found. Slide PNGs were saved but PPTX could not be created.');
-end
-pause(0.3);
-if exist(pptFile,'file')~=2, error('PPT file was not created: %s',pptFile); end
-end
-
-function cm = GA_colormap_PATCH_V4(R)
-if isfield(R,'cmapMatrix') && ~isempty(R.cmapMatrix) && size(R.cmapMatrix,2)==3
-    cm = double(R.cmapMatrix); cm = max(0,min(1,cm)); return;
-end
-name = lower(strtrim(char(R.colormapName)));
-n = 256;
-switch name
-    case 'hot', cm = hot(n);
-    case 'parula', cm = parula(n);
-    case 'jet', cm = jet(n);
-    case 'gray', cm = gray(n);
-    case 'bone', cm = bone(n);
-    case 'copper', cm = copper(n);
-    case 'winter_brain_fsl', cm = winter(n);
-    case 'signed_blackbdy_winter'
-        nNeg = floor(n/2); nPos = n-nNeg;
-        neg = winter(max(nNeg,2)); neg = neg(1:nNeg,:); neg = neg .* repmat(linspace(1,0,nNeg)',1,3);
-        if ~isempty(neg), neg(end,:) = [0 0 0]; end
-        pos = hot(max(nPos,2)); pos = pos(1:nPos,:); if ~isempty(pos), pos(1,:) = [0 0 0]; end
-        cm = [neg; pos];
-    otherwise
-        if strcmp(name,'turbo') && exist('turbo','file')==2, cm = turbo(n); else, cm = hot(n); end
-end
-end
-
-function RGB = GA_toRGB_PATCH_V4(U)
-U = double(U); U(~isfinite(U)) = 0;
-if ndims(U) == 3 && size(U,3) == 3
-    RGB = U; mx = max(RGB(:)); if isfinite(mx) && mx > 1, RGB = RGB/255; end; RGB = max(0,min(1,RGB)); return;
-end
-mn = min(U(:)); mx = max(U(:));
-if isfinite(mn) && isfinite(mx) && mx > mn, G = (U-mn)/(mx-mn); else, G = zeros(size(U)); end
-RGB = repmat(G,[1 1 3]);
-end
 
 function B = GA_resizeLike_PATCH_V4(A,sz)
 if numel(sz)>2, sz = sz(1:2); end
@@ -7647,94 +6123,13 @@ catch
 end
 end
 
-function M = GA_resizeMask_PATCH_V4(M,sz)
-if isequal(size(M),sz), M = logical(M); return; end
-try, M = imresize(double(M),sz,'nearest') > 0.5;
-catch, M = GA_resizeLike_PATCH_V4(double(M),sz) > 0.5;
-end
-end
 
-function B = GA_smooth2_PATCH_V4(A,sigma)
-try, B = imgaussfilt(A,sigma); return; catch, end
-if sigma <= 0, B = A; return; end
-r = max(1,ceil(3*sigma)); x = -r:r; g = exp(-(x.^2)/(2*sigma^2)); g = g/sum(g);
-B = conv2(conv2(double(A),g,'same'),g','same');
-end
 
-function tf = GA_toLogical_PATCH_V4(x)
-tf = false;
-try
-    if islogical(x), tf = logical(x(1));
-    elseif isnumeric(x), tf = isfinite(x(1)) && x(1) ~= 0;
-    else, s = lower(strtrim(char(x))); tf = any(strcmp(s,{'1','true','yes','y','on'}));
-    end
-catch
-end
-end
 
-function bw = GA_defaultBaseWindow_PATCH_V4(S,bf)
-bw = [30 240];
-try
-    if isfield(S,'mapGlobalBaseSec') && numel(S.mapGlobalBaseSec)>=2
-        v = double(S.mapGlobalBaseSec(1:2)); if all(isfinite(v)) && v(2)>v(1), bw = v(:)'; return; end
-    end
-catch
-end
-try
-    G = GA_loadSCMBundle_PATCH_V4(bf);
-    if isfield(G,'baseWindowSec') && numel(G.baseWindowSec)>=2
-        v = double(G.baseWindowSec(1:2)); if all(isfinite(v)) && v(2)>v(1), bw = v(:)'; return; end
-    end
-catch
-end
-end
 
-function d = GA_exportStartDir_PATCH_V4(S)
-d = pwd;
-try, if isfield(S,'outDir') && ~isempty(S.outDir) && exist(S.outDir,'dir')==7, d = char(S.outDir); return; end, catch, end
-try, if isfield(S,'opt') && isfield(S.opt,'startDir') && exist(S.opt.startDir,'dir')==7, d = char(S.opt.startDir); return; end, catch, end
-end
 
-function subj = GA_subjectName_PATCH_V4(S,row,bf,G)
-subj = '';
-try, subj = strtrim(char(S.subj{row,2})); catch, end
-if isempty(subj) && isfield(G,'animalID') && ~isempty(G.animalID), try, subj = strtrim(char(G.animalID)); catch, end, end
-if isempty(subj), [~,subj] = fileparts(bf); end
-end
 
-function s = GA_phaseLabel_PATCH_V4(s0,s1,injSec,winLen)
-if ~isfinite(injSec)
-    s = sprintf('%d min',floor(s0/winLen)+1);
-elseif s1 <= injSec
-    s = 'Pre-inj';
-elseif s0 < injSec && s1 > injSec
-    s = 'Injection';
-else
-    m = floor((s0-injSec)/winLen)+1; if m < 1, m = 1; end
-    s = sprintf('%d min PI',m);
-end
-end
 
-function v = GA_numField_PATCH_V4(S,f,fb)
-v = fb; try, if isfield(S,f) && ~isempty(S.(f)), v = double(S.(f)(1)); end, catch, end; if ~isfinite(v), v = fb; end
-end
-function v = GA_vecField_PATCH_V4(S,f,fb)
-v = fb; try, if isfield(S,f) && numel(S.(f))>=2, vv = double(S.(f)(1:2)); if all(isfinite(vv)), v = vv(:)'; end, end, catch, end
-end
-function v = GA_logField_PATCH_V4(S,f,fb)
-v = fb; try, if isfield(S,f) && ~isempty(S.(f)), v = logical(S.(f)(1)); end, catch, end
-end
-function s = GA_charField_PATCH_V4(S,f,fb)
-s = fb; try, if isfield(S,f) && ~isempty(S.(f)), s = strtrim(char(S.(f))); end, catch, end
-end
-function s = GA_safeName_PATCH_V4(s)
-try, s = char(s); catch, s = 'export'; end
-s = regexprep(s,'[<>:"/\\|?*]','_'); s = regexprep(s,'[^A-Za-z0-9_\-]','_'); s = regexprep(s,'_+','_'); s = regexprep(s,'^_+|_+$','');
-if isempty(s), s = 'export'; end; if numel(s)>60, s = s(1:60); end
-end
-function GA_mkdir_PATCH_V4(d)
-if exist(d,'dir')~=7, ok = mkdir(d); if ~ok, error('Could not create folder: %s',d); end, end
-end
 
 
 function Aout = GA_alphaModFixFromCData_20260504(h, Ain)
@@ -7960,65 +6355,7 @@ end
 
 
 
-function M = ga_fc_prefer_fisher_z_matrix(subj)
-% GA helper: use Fisher z for FC averaging/statistics.
-% Priority: displayStatMatrix/displayZ/statMatrix/Z, fallback atanh(displayR/R).
-M = [];
-try
-    if isstruct(subj)
-        if isfield(subj,'displayStatMatrix') && ~isempty(subj.displayStatMatrix)
-            M = double(subj.displayStatMatrix); return;
-        end
-        if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
-            M = double(subj.displayZ); return;
-        end
-        if isfield(subj,'statMatrix') && ~isempty(subj.statMatrix)
-            M = double(subj.statMatrix); return;
-        end
-        if isfield(subj,'Z') && ~isempty(subj.Z)
-            M = double(subj.Z); return;
-        end
-        if isfield(subj,'displayR') && ~isempty(subj.displayR)
-            R = max(-0.999999,min(0.999999,double(subj.displayR)));
-            M = atanh(R);
-            M(1:size(M,1)+1:end) = 0;
-            return;
-        end
-        if isfield(subj,'R') && ~isempty(subj.R)
-            R = max(-0.999999,min(0.999999,double(subj.R)));
-            M = atanh(R);
-            M(1:size(M,1)+1:end) = 0;
-            return;
-        end
-    end
-catch
-end
-end
 
-function R = ga_fc_prefer_pearson_r_matrix(subj)
-% GA helper: use Pearson r for visual display.
-R = [];
-try
-    if isstruct(subj)
-        if isfield(subj,'displayMatrix') && ~isempty(subj.displayMatrix)
-            R = double(subj.displayMatrix); return;
-        end
-        if isfield(subj,'displayR') && ~isempty(subj.displayR)
-            R = double(subj.displayR); return;
-        end
-        if isfield(subj,'R') && ~isempty(subj.R)
-            R = double(subj.R); return;
-        end
-        if isfield(subj,'displayZ') && ~isempty(subj.displayZ)
-            R = tanh(double(subj.displayZ)); return;
-        end
-        if isfield(subj,'Z') && ~isempty(subj.Z)
-            R = tanh(double(subj.Z)); return;
-        end
-    end
-catch
-end
-end
 
 
 
@@ -8488,9 +6825,6 @@ end
 localGA_writePPTSlidePNGs_V6(outFile,slidePNGs);
 end
 
-function localGA_addPictureV6(slide,file,x,y,w,h)
-invoke(slide.Shapes,'AddPicture',file,0,1,x,y,w,h);
-end
 
 function localGA_addPictureFitV6(slide,file,x,y,w,h)
 % Insert image while preserving aspect ratio. Prevents stretched brain panels.
@@ -8949,24 +7283,6 @@ t=(double(V)-lo)./(hi-lo); t=min(max(t,0),1); t(~isfinite(t))=0; idx=1+round(t*(
 RGB=zeros([size(V) 3]); for c=1:3, C=cm(:,c); RGB(:,:,c)=reshape(C(idx(:)),size(V)); end
 end
 
-function cm=localGA_blackbodyV6(n)
-% Shared blackbody-like positive map: black -> red -> orange/yellow -> white.
-if nargin < 1 || isempty(n), n = 256; end
-n = max(2,round(n));
-x = linspace(0,1,n)';
-anchorX = [0.00 0.18 0.40 0.68 1.00]';
-anchorC = [ ...
-    0.00 0.00 0.00;  ...
-    0.35 0.00 0.00;  ...
-    0.85 0.05 0.00;  ...
-    1.00 0.75 0.00;  ...
-    1.00 1.00 1.00];
-cm = zeros(n,3);
-for cc=1:3
-    cm(:,cc) = interp1(anchorX,anchorC(:,cc),x,'linear','extrap');
-end
-cm = max(0,min(1,cm));
-end
 
 function RGB=localGA_underlayRGBV6(U)
 U=double(U); U=squeeze(U); if ndims(U)==3 && size(U,3)==3, RGB=U; if max(RGB(:))>1, RGB=RGB/255; end; RGB=max(0,min(1,RGB)); return; end
@@ -8974,9 +7290,6 @@ U(~isfinite(U))=0; v=U(:); v=v(isfinite(v)); if isempty(v), U01=zeros(size(U)); 
 RGB=repmat(U01,[1 1 3]);
 end
 
-function m=localGA_brainMaskFromUnderlayV6(U,sz)
-G=localGA_underlayRGBV6(U); G=mean(G,3); thr=max(0.02,0.15*max(G(:))); m=G>thr; if nnz(m)<10, m=true(sz); end
-end
 
 function [cm,cax]=localGA_cmapForOptsV6(opts)
 % V11: colorbar matches exact SCM-style overlay rendering.
@@ -9234,9 +7547,6 @@ function q=localGA_prctileV6(v,p)
 v=sort(double(v(:))); v=v(isfinite(v)); if isempty(v), q=0; return; end; n=numel(v); k=1+(n-1)*(p/100); k1=max(1,min(n,floor(k))); k2=max(1,min(n,ceil(k))); if k1==k2, q=v(k1); else, q=v(k1)+(k-k1)*(v(k2)-v(k1)); end
 end
 
-function tf=localGA_containsV6(s,pat)
-tf=~isempty(strfind(lower(char(s)),lower(char(pat))));
-end
 
 function B=localGA_smooth2V6(A,sigma)
 try, B=imgaussfilt(A,sigma); return; catch, end
@@ -9347,62 +7657,6 @@ else
 end
 end
 
-function S = attachFCGABundlesToTable_TARGETED(S,fileList,FC)
-% Attach FC-GA bundles to existing rows only. Never create subject rows here.
-S = ensureFCRowFilesSizeGA_TARGETED(S);
-if nargin < 2 || isempty(fileList), fileList = {}; end
-if ischar(fileList), fileList = {fileList}; end
-fileList = fileList(:);
-
-% 1) If user selected rows before loading FC, attach files in order.
-sel = [];
-try
-    if isfield(S,'selectedRows') && ~isempty(S.selectedRows)
-        sel = unique(round(double(S.selectedRows(:)')).');
-        sel = sel(sel >= 1 & sel <= size(S.subj,1));
-    end
-catch
-    sel = [];
-end
-if ~isempty(sel) && ~isempty(fileList)
-    nDirect = min(numel(sel),numel(fileList));
-    for kk = 1:nDirect
-        S.fcRowFiles{sel(kk),1} = fileList{kk};
-    end
-end
-
-% 2) Match FC subjects to already existing rows by animal / subject name.
-if nargin >= 3 && isfield(FC,'subjects') && ~isempty(FC.subjects)
-    for ii = 1:numel(FC.subjects)
-        fp = ''; nm = '';
-        try, fp = strtrimSafe(FC.subjects(ii).sourceFile); catch, end
-        try, nm = strtrimSafe(FC.subjects(ii).name); catch, end
-        if isempty(fp) && ~isempty(fileList)
-            try, fp = fileList{min(ii,numel(fileList))}; catch, end
-        end
-        r = findExistingFCGARow_TARGETED(S,nm,fp);
-        if ~isempty(r)
-            S.fcRowFiles{r,1} = fp;
-            try
-                if isfield(FC.subjects(ii),'group') && ~isempty(FC.subjects(ii).group)
-                    % Keep table group as source of truth if user already set it.
-                    if isempty(strtrimSafe(S.subj{r,3})) || strcmpi(strtrimSafe(S.subj{r,3}),'Unassigned')
-                        S.subj{r,3} = strtrimSafe(FC.subjects(ii).group);
-                    end
-                end
-            catch
-            end
-        end
-    end
-end
-
-% 3) Do not append unmatched FC subjects. They remain loaded in S.FC only.
-try
-    nAttached = sum(~cellfun(@isempty,S.fcRowFiles));
-    S.fcAttachNote = sprintf('FC bundles attached to %d existing table row(s). No new subject rows created.',nAttached);
-catch
-end
-end
 
 
 function hit = findFCGARow_TARGETED(S,nm,fp)
@@ -9514,50 +7768,6 @@ end
 
 
 % GA_FC_SINGLE_CLEAN_HELPERS_20260616_START
-function S = attachFCGABundlesToTable_NOROW_SINGLE_20260616(S,fileList,FC)
-% Attach FC-GA bundles only to selected or matched existing rows. Never create new rows.
-S = ensureFCRowFilesSizeGA_TARGETED(S);
-if nargin < 2 || isempty(fileList), fileList = {}; end
-if ischar(fileList), fileList = {fileList}; end
-fileList = fileList(:);
-
-% Direct attach to selected rows.
-sel = [];
-try
-    if isfield(S,'selectedRows') && ~isempty(S.selectedRows)
-        sel = unique(round(double(S.selectedRows(:)')));
-        sel = sel(sel >= 1 & sel <= size(S.subj,1));
-    end
-catch
-    sel = [];
-end
-if ~isempty(sel) && ~isempty(fileList)
-    nDirect = min(numel(sel),numel(fileList));
-    for kk = 1:nDirect
-        S.fcRowFiles{sel(kk),1} = fileList{kk};
-    end
-end
-
-% Match by existing animal / pair ID only.
-if nargin >= 3 && isfield(FC,'subjects') && ~isempty(FC.subjects)
-    for ii = 1:numel(FC.subjects)
-        fp = ''; nm = '';
-        try, fp = strtrimSafe(FC.subjects(ii).sourceFile); catch, end
-        try, nm = strtrimSafe(FC.subjects(ii).name); catch, end
-        if isempty(fp) && ~isempty(fileList)
-            try, fp = fileList{min(ii,numel(fileList))}; catch, end
-        end
-        r = findExistingFCGARow_SINGLE_20260616(S,nm,fp);
-        if ~isempty(r)
-            S.fcRowFiles{r,1} = fp;
-        end
-    end
-end
-try
-    S.fcAttachNote = sprintf('FC bundles attached to %d existing row(s). Unmatched bundles remain loaded but no table rows were created.',sum(~cellfun(@isempty,S.fcRowFiles)));
-catch
-end
-end
 
 function r = findExistingFCGARow_SINGLE_20260616(S,nm,fp)
 r = [];
@@ -9634,53 +7844,6 @@ R.sourceFiles = G.sourceFiles(idx);
 R.note = 'Single-group FC-GA: mean is computed in Fisher z space; Pearson r = tanh(mean z).';
 end
 
-function updateFCTabPreview_SINGLE_20260616(S)
-R = S.lastFC;
-setSingleFCAxis_SINGLE_20260616(S);
-viewMode = popupString_SINGLE_20260616(S,'hFCView','Heatmap');
-dispMode = popupString_SINGLE_20260616(S,'hFCDisplay','Pearson r');
-thr = 0;
-try, thr = safeNum(get(S.hFCThreshold,'String'),0); catch, end
-if strcmpi(dispMode,'Fisher z')
-    M = R.meanZ; stack = R.Zstack; clim = [-2.5 2.5]; valTxt = 'Fisher z';
-else
-    M = R.meanR; stack = R.Rstack; clim = [-1 1]; valTxt = 'Pearson r';
-end
-if thr > 0, M(abs(M) < thr) = 0; end
-seedIdx = popupIndex_SINGLE_20260616(S,'hFCRegion1',1);
-roi2Idx = popupIndex_SINGLE_20260616(S,'hFCRegion2',min(2,size(M,1)));
-seedIdx = max(1,min(seedIdx,size(M,1)));
-roi2Idx = max(1,min(roi2Idx,size(M,1)));
-subjIdx = popupIndex_SINGLE_20260616(S,'hFCSubject',1);
-
-try
-    [namesX,namesY,labelsX,labelsY] = fcGAReconcileHemiLabels_20260625(hemiTitle,namesH,labelsH,namesX,namesY,labelsX,labelsY);
-catch
-end
-switch lower(viewMode)
-    case 'heatmap'
-        plotFCMatrix_SINGLE_20260616(S.axFCA,M,clim,sprintf('%s mean FC heatmap | n=%d | %s',R.groupName,R.n,valTxt),R.names,S.C);
-    case 'seed profile'
-        plotSeedProfile_SINGLE_20260616(S.axFCA,M,seedIdx,R,valTxt,S.C);
-    case 'roi trace'
-        plotROITrace_SINGLE_20260616(S.axFCA,stack,seedIdx,roi2Idx,R,valTxt,S.C);
-    case 'roi pair'
-        plotROIPair_SINGLE_20260616(S.axFCA,stack,seedIdx,roi2Idx,R,valTxt,S.C);
-    otherwise
-        if subjIdx <= 1
-            plotFCMatrix_SINGLE_20260616(S.axFCA,M,clim,sprintf('%s mean subject matrix | n=%d | %s',R.groupName,R.n,valTxt),R.names,S.C);
-        else
-            si = max(1,min(subjIdx-1,size(stack,3)));
-            Ms = stack(:,:,si);
-            if thr > 0, Ms(abs(Ms) < thr) = 0; end
-            plotFCMatrix_SINGLE_20260616(S.axFCA,Ms,clim,sprintf('Subject matrix: %s | %s',strtrimSafe(R.subjectNames{si}),valTxt),R.names,S.C);
-        end
-end
-try
-    set(S.hFCInfo,'String',sprintf('Loaded %d FC subject(s). Showing %s, n=%d | View=%s | Seed=%s | ROI2=%s',numel(S.FC.subjects),R.groupName,R.n,viewMode,roiName_SINGLE_20260616(R,seedIdx),roiName_SINGLE_20260616(R,roi2Idx)));
-catch
-end
-end
 
 function setSingleFCAxis_SINGLE_20260616(S)
 try, set(S.axFCA,'Visible','on','Position',[0.070 0.110 0.840 0.800]); catch, end
@@ -9689,95 +7852,11 @@ try, cla(S.axFCD); set(S.axFCD,'Visible','off'); catch, end
 try, cla(S.axFCP); set(S.axFCP,'Visible','off'); catch, end
 end
 
-function plotFCMatrix_SINGLE_20260616(ax,M,clim,titleStr,names,C)
-cla(ax);
-if isempty(M), fcNoDataLocal(ax,titleStr,C); return; end
-imagesc(ax,M); axis(ax,'image');
-try, caxis(ax,clim); catch, end
-colormap(ax,bwr_SINGLE_20260616(256));
-cb = colorbar(ax); try, set(cb,'Color',[1 1 1]); catch, end
-set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted,'FontName','Arial','FontSize',8,'TickLength',[0 0]);
-title(ax,titleStr,'Color',C.txt,'FontWeight','bold','Interpreter','none');
-nR = size(M,1); ticks = tickIdx_SINGLE_20260616(nR);
-set(ax,'XTick',ticks,'YTick',ticks,'XTickLabel',abbrev_SINGLE_20260616(names(ticks),10),'YTickLabel',abbrev_SINGLE_20260616(names(ticks),10));
-try, xtickangle(ax,90); catch, end
-end
 
-function plotSeedProfile_SINGLE_20260616(ax,M,seedIdx,R,valTxt,C)
-cla(ax);
-y = M(seedIdx,:); x = 1:numel(y);
-plot(ax,x,y,'LineWidth',2.0);
-set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); grid(ax,'on');
-title(ax,sprintf('Seed profile: %s | %s',roiName_SINGLE_20260616(R,seedIdx),valTxt),'Color',C.txt,'FontWeight','bold','Interpreter','none');
-xlabel(ax,'ROI index','Color',C.txt); ylabel(ax,valTxt,'Color',C.txt);
-end
 
-function plotROITrace_SINGLE_20260616(ax,stack,seedIdx,roi2Idx,R,valTxt,C)
-cla(ax);
-vals = squeeze(stack(seedIdx,roi2Idx,:));
-if isempty(vals), vals = NaN; end
-plot(ax,1:numel(vals),vals,'-o','LineWidth',1.8,'MarkerSize',6);
-set(ax,'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); grid(ax,'on');
-title(ax,sprintf('ROI trace across subjects: %s ↔ %s',roiName_SINGLE_20260616(R,seedIdx),roiName_SINGLE_20260616(R,roi2Idx)),'Color',C.txt,'FontWeight','bold','Interpreter','none');
-xlabel(ax,'Subject index','Color',C.txt); ylabel(ax,valTxt,'Color',C.txt);
-end
 
-function plotROIPair_SINGLE_20260616(ax,stack,seedIdx,roi2Idx,R,valTxt,C)
-cla(ax);
-vals = squeeze(stack(seedIdx,roi2Idx,:));
-vals = vals(:);
-bar(ax,1,mean(vals,'omitnan')); hold(ax,'on');
-if numel(vals) > 1
-    xj = 1 + linspace(-0.08,0.08,numel(vals));
-    plot(ax,xj,vals,'o','MarkerSize',7,'LineWidth',1.5);
-end
-hold(ax,'off');
-set(ax,'XTick',1,'XTickLabel',{'Mean + subjects'},'Color',C.axisBg,'XColor',C.muted,'YColor',C.muted); grid(ax,'on');
-title(ax,sprintf('ROI pair: %s ↔ %s | n=%d',roiName_SINGLE_20260616(R,seedIdx),roiName_SINGLE_20260616(R,roi2Idx),numel(vals)),'Color',C.txt,'FontWeight','bold','Interpreter','none');
-ylabel(ax,valTxt,'Color',C.txt);
-end
 
-function refreshFCRegionPopups_SINGLE_20260616(hFig)
-try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    subj = S.FC.subjects(1);
-    labels = []; names = {};
-    try, labels = double(subj.labels(:)); catch, end
-    try, names = subj.names(:); catch, end
-    if isempty(labels), try, labels = (1:size(subj.R,1))'; catch, labels = []; end, end
-    if isempty(names)
-        names = cell(numel(labels),1);
-        for ii = 1:numel(labels), names{ii} = sprintf('ROI_%g',labels(ii)); end
-    end
-    items = cell(numel(labels),1);
-    for ii = 1:numel(labels)
-        nm = strtrimSafe(names{ii}); if numel(nm)>44, nm=[nm(1:41) '...']; end
-        items{ii} = sprintf('%g | %s',labels(ii),nm);
-    end
-    if isempty(items), items = {'No ROI labels'}; end
-    if isfield(S,'hFCRegion1') && ishghandle(S.hFCRegion1), set(S.hFCRegion1,'String',items,'Value',min(get(S.hFCRegion1,'Value'),numel(items))); end
-    if isfield(S,'hFCRegion2') && ishghandle(S.hFCRegion2), set(S.hFCRegion2,'String',items,'Value',min(max(get(S.hFCRegion2,'Value'),2),numel(items))); end
-catch
-end
-end
 
-function refreshFCSubjectPopup_SINGLE_20260616(hFig)
-try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    items = cell(numel(S.FC.subjects)+1,1);
-    items{1} = 'Group mean';
-    for ii = 1:numel(S.FC.subjects)
-        nm = sprintf('Subject %d',ii);
-        try, nm = strtrimSafe(S.FC.subjects(ii).name); catch, end
-        if isempty(nm), nm = sprintf('Subject %d',ii); end
-        items{ii+1} = nm;
-    end
-    if isfield(S,'hFCSubject') && ishghandle(S.hFCSubject), set(S.hFCSubject,'String',items,'Value',1); end
-catch
-end
-end
 
 function M = mean3nan_SINGLE_20260616(X)
 [n1,n2,~] = size(X); M = nan(n1,n2);
@@ -9829,31 +7908,8 @@ catch
 end
 end
 
-function ticks = tickIdx_SINGLE_20260616(nR)
-if nR <= 35, step = 1; elseif nR <= 70, step = 2; elseif nR <= 120, step = 4; elseif nR <= 200, step = 6; else, step = max(8,ceil(nR/30)); end
-ticks = 1:step:nR;
-end
 
-function out = abbrev_SINGLE_20260616(names,n)
-if nargin < 2, n = 10; end
-out = names;
-for ii = 1:numel(out)
-    s = strtrimSafe(out{ii});
-    s = regexprep(s,'\s*\[[^\]]*\]\s*$','');
-    parts = regexp(s,'\s+','split'); if ~isempty(parts), s = parts{1}; end
-    if numel(s) > n, s = [s(1:max(1,n-3)) '...']; end
-    out{ii} = s;
-end
-end
 
-function cmap = bwr_SINGLE_20260616(n)
-if nargin < 1, n = 256; end
-n1 = floor(n/2); n2 = n - n1;
-b = [0.00 0.25 0.95]; w = [1.00 1.00 1.00]; r = [0.95 0.20 0.20];
-c1 = [linspace(b(1),w(1),n1)' linspace(b(2),w(2),n1)' linspace(b(3),w(3),n1)'];
-c2 = [linspace(w(1),r(1),n2)' linspace(w(2),r(2),n2)' linspace(w(3),r(3),n2)'];
-cmap = [c1; c2];
-end
 % GA_FC_SINGLE_CLEAN_HELPERS_20260616_END
 
 % GA_FC_CALLFC_AUTOCOMPUTE_20260617_START
@@ -10151,31 +8207,7 @@ if isempty(Zmat) && ~isempty(Rmat)
 end
 end
 
-function [Mm,namesM,labelsM] = mergeLRMatrix_ADV_20260617(M,names,labels)
-labels = double(labels(:));
-if any(labels < 0) && any(labels > 0)
-    ids = unique(abs(labels)); ids = ids(ids>0);
-else
-    ids = (1:numel(labels))';
-end
-n = numel(ids); Mm = nan(n,n); namesM = cell(n,1); labelsM = ids(:);
-for i=1:n
-    ii=find(abs(labels)==ids(i)); if isempty(ii), ii=i; end
-    namesM{i}=cleanLRName_ADV_20260617(names{ii(1)});
-    for j=1:n
-        jj=find(abs(labels)==ids(j)); if isempty(jj), jj=j; end
-        block=M(ii,jj); v=block(isfinite(block)); if ~isempty(v), Mm(i,j)=mean(v); end
-    end
-end
-end
 
-function s = cleanLRName_ADV_20260617(s)
-s = strtrimSafe(s);
-s = regexprep(s,'(?i)\b[LR]_','');
-s = regexprep(s,'(?i)\b(left|right)\b','');
-s = regexprep(s,'\[-?\d+\]','');
-s = strtrim(regexprep(s,'\s+',' '));
-end
 
 function cm = cmapFC_ADV_20260617(name,n)
 if nargin < 2, n = 256; end
@@ -10456,12 +8488,6 @@ catch ME, try,errordlg(ME.message,'Export FC PNG');catch,end
 end
 end
 
-function m=nanmean_local_ADV_20260617(X,dim)
-if nargin<2,dim=1;end; X=double(X); ok=isfinite(X); X(~ok)=0; n=sum(ok,dim); m=sum(X,dim)./max(n,1); m(n==0)=NaN;
-end
-function s=nanstd_local_ADV_20260617(X,flag,dim)
-if nargin<2,flag=0;end; if nargin<3,dim=1;end; mu=nanmean_local_ADV_20260617(X,dim); sz=ones(1,ndims(X)); sz(dim)=size(X,dim); muRep=repmat(mu,sz); D=(X-muRep).^2; D(~isfinite(D))=NaN; v=nanmean_local_ADV_20260617(D,dim); s=sqrt(v);
-end
 % GA_FC_ADVANCED_DISPLAY_HELPERS_20260617_END
 
 
@@ -10518,30 +8544,6 @@ catch ME
 end
 end
 
-function selectFCRegions_SAFE_20260617(hFig)
-try
-    S = guidata(hFig);
-    if isempty(S) || ~isfield(S,'FC') || ~isfield(S.FC,'subjects') || isempty(S.FC.subjects), return; end
-    subj = S.FC.subjects(1);
-    labels = fcGetLabels_SAFE_20260617(subj);
-    names  = fcGetNames_SAFE_20260617(subj,labels);
-    items = cell(numel(labels),1);
-    for kk = 1:numel(labels)
-        items{kk} = sprintf('%g | %s',labels(kk),fcNiceName_SAFE_20260617(names{kk},labels(kk),'Full',false));
-    end
-    init = 1:numel(items);
-    try, if isfield(S,'fcSelectedROIIdx') && ~isempty(S.fcSelectedROIIdx), init = S.fcSelectedROIIdx; end, catch, end
-    [sel,ok] = listdlg('PromptString','Select regions shown in FC-GA plots:','SelectionMode','multiple','ListString',items,'InitialValue',init,'ListSize',[540 420]);
-    if ok
-        S.fcSelectedROIIdx = sel(:);
-        S.lastFC = struct();
-        guidata(hFig,S);
-        fcTriggerPreview_SAFE_20260617(hFig);
-    end
-catch ME
-    try, errordlg(ME.message,'FC regions'); catch, end
-end
-end
 
 function showFCRegionNames_SAFE_20260617(hFig)
 try
@@ -10606,53 +8608,8 @@ h = lower(strtrimSafe(hemiTitle));
 tf = contains(h,'left only') || contains(h,'right only') || contains(h,'merged');
 end
 
-function [xl,yl] = fcHemiAxis_SAFE_20260617(hemiTitle)
-h = lower(strtrimSafe(hemiTitle));
-if contains(h,'left rows')
-    xl = 'Right hemisphere regions'; yl = 'Left hemisphere regions';
-elseif contains(h,'left only')
-    xl = 'Left hemisphere regions'; yl = 'Left hemisphere regions';
-elseif contains(h,'right only')
-    xl = 'Right hemisphere regions'; yl = 'Right hemisphere regions';
-elseif contains(h,'merged')
-    xl = 'Merged bilateral regions'; yl = 'Merged bilateral regions';
-else
-    xl = 'Regions'; yl = 'Regions';
-end
-end
 
-function full = fcFullName_SAFE_20260617(acr)
-a = lower(regexprep(strtrimSafe(acr),'[^a-z0-9]',''));
-switch a
-    case 'cpu', full = 'caudate putamen';
-    case 'alv', full = 'alveus';
-    case 'cc', full = 'corpus callosum';
-    case 'aca', full = 'anterior commissure anterior';
-    case 'acp', full = 'anterior commissure posterior';
-    case 'fi', full = 'fimbria';
-    case 'hip', full = 'hippocampus';
-    case 'ca1', full = 'cornu ammonis 1';
-    case 'ca2', full = 'cornu ammonis 2';
-    case 'ca3', full = 'cornu ammonis 3';
-    case 'dg', full = 'dentate gyrus';
-    case 'th', full = 'thalamus';
-    case 'hyp', full = 'hypothalamus';
-    case 'ctx', full = 'cortex';
-    case 'str', full = 'striatum';
-    case 'gp', full = 'globus pallidus';
-    case 'ic', full = 'internal capsule';
-    case 'ec', full = 'external capsule';
-    case 'ot', full = 'optic tract';
-    case 'amy', full = 'amygdala';
-    case 'sn', full = 'substantia nigra';
-    case 'pag', full = 'periaqueductal gray';
-    otherwise, full = acr;
-end
-end
 
-function idx = fcTickIdx_SAFE_20260617(n,maxTicks)
-if n <= maxTicks, idx = 1:n; else, step = ceil(n/maxTicks); idx = 1:step:n; if idx(end) ~= n, idx = [idx n]; end, end
-end
 
 function labels = fcGetLabels_SAFE_20260617(subj)
 labels = [];
@@ -10683,9 +8640,6 @@ catch
 end
 end
 
-function cm = cmapFC_SAFE_20260617(name,n)
-cm = cmapFC_ADV_20260617(name,n);
-end
 
 function v = fcNanMean_SAFE_20260617(X,dim)
 if nargin < 2, dim = 1; end
@@ -10716,38 +8670,7 @@ catch
 end
 end
 
-function col = fcGetPlotColor_SAFE_20260622(S,defaultCol)
-col = defaultCol;
-try
-    if isfield(S,'hFCPlotColor') && ishghandle(S.hFCPlotColor)
-        items = get(S.hFCPlotColor,'String'); v = get(S.hFCPlotColor,'Value');
-        if iscell(items), nm = lower(strtrimSafe(items{max(1,min(v,numel(items)))})); else, cc = cellstr(items); nm = lower(strtrimSafe(cc{max(1,min(v,numel(cc)))})); end
-        switch nm
-            case 'blue',   col = [0.10 0.45 0.95];
-            case 'red',    col = [0.90 0.15 0.12];
-            case 'green',  col = [0.10 0.60 0.25];
-            case 'orange', col = [0.95 0.48 0.10];
-            case 'purple', col = [0.55 0.25 0.85];
-            case 'black',  col = [0.02 0.02 0.02];
-            case 'white',  col = [0.95 0.95 0.95];
-            case 'gray',   col = [0.45 0.45 0.45];
-        end
-    end
-catch
-    col = defaultCol;
-end
-end
 
-function s = popupStr_SAFE_20260617(S,field,fb)
-s = fb;
-try
-    if isfield(S,field) && ishghandle(S.(field))
-        items = get(S.(field),'String'); v = get(S.(field),'Value');
-        if iscell(items), v=max(1,min(v,numel(items))); s=strtrimSafe(items{v}); else, c=cellstr(items); v=max(1,min(v,numel(c))); s=strtrimSafe(c{v}); end
-    end
-catch
-end
-end
 % GA_FC_SAFE_VIEWER_20260617_END
 
 
@@ -10756,15 +8679,9 @@ end
 
 
 
-function fcDrawHeatmapGrid_GA_20260622(ax,nR,nC)
-try, for x=0.5:1:(nC+0.5), line(ax,[x x],[0.5 nR+0.5],'Color',[0 0 0],'LineWidth',0.55,'HitTest','off'); end; for y=0.5:1:(nR+0.5), line(ax,[0.5 nC+0.5],[y y],'Color',[0 0 0],'LineWidth',0.55,'HitTest','off'); end; for x=0.5:5:(nC+0.5), line(ax,[x x],[0.5 nR+0.5],'Color',[0 0 0],'LineWidth',1.50,'HitTest','off'); end; for y=0.5:5:(nR+0.5), line(ax,[0.5 nC+0.5],[y y],'Color',[0 0 0],'LineWidth',1.50,'HitTest','off'); end; catch, end
-end
 
 
 
-function keep = fc_region_keep_indices_GA_20260622(sel,n)
-keep=[]; try, if isempty(sel)||n<1, return; end; if islogical(sel), sel=find(sel(:)); end; sel=round(double(sel(:))); keep=unique(sel(sel>=1&sel<=n),'stable'); catch, keep=[]; end
-end
 
 function fcGARefreshNameTable_20260622(f)
 try, hFig=getappdata(f,'hFigGA'); S=guidata(hFig); labels=getappdata(f,'fcLabels'); names=getappdata(f,'fcNames'); hSearch=getappdata(f,'hSearch'); hHemi=getappdata(f,'hHemi'); hTable=getappdata(f,'hTable'); q=lower(strtrim(get(hSearch,'String'))); hemiItems=get(hHemi,'String'); mode=hemiItems{get(hHemi,'Value')}; rows={}; usedAbs=[]; for ii=1:numel(labels), lab=double(labels(ii)); side='R'; if lab<0, side='L'; end; if strcmpi(mode,'Left only')&&lab>0, continue; end; if strcmpi(mode,'Right only')&&lab<0, continue; end; if strcmpi(mode,'Merged L/R'), if any(usedAbs==abs(lab)), continue; end; usedAbs(end+1)=abs(lab); idxGroup=find(abs(double(labels(:)))==abs(lab)); showLab=abs(lab); else, idxGroup=ii; showLab=lab; end; abbr=fcNiceName_SAFE_20260617(names{ii},lab,'Abbrev',true); full=fcNiceName_SAFE_20260617(names{ii},lab,'Full',true); txtRow=lower(sprintf('%g %s %s',showLab,abbr,full)); if ~isempty(q)&&isempty(strfind(txtRow,q)), continue; end; inc=false; try, if isfield(S,'fcSelectedROIIdx')&&~isempty(S.fcSelectedROIIdx), inc=any(ismember(idxGroup,S.fcSelectedROIIdx)); end, catch, end; idxStr=sprintf('%d,',idxGroup); idxStr=regexprep(idxStr,',$',''); if strcmpi(mode,'Both separate'), abbr=[side '_' abbr]; end; rows(end+1,:)={inc,showLab,abbr,full,idxStr}; end; if ~isempty(rows), [~,ord]=sort(lower(rows(:,3))); rows=rows(ord,:); end; set(hTable,'Data',rows); catch ME, try, disp(['Names table refresh failed: ' ME.message]); catch, end, end
@@ -10777,19 +8694,6 @@ try, hFig=getappdata(f,'hFigGA'); S=guidata(hFig); hTable=getappdata(f,'hTable')
 end
 
 
-function fcGACompactLayout_20260623(S)
-% Runtime layout cleanup for FC-GA top controls.
-try
-    if isfield(S,'hFCExportPNG') && ishghandle(S.hFCExportPNG), set(S.hFCExportPNG,'Units','normalized','Position',[0.820 0.020 0.065 0.105]); end
-    if isfield(S,'hFCZoom') && ishghandle(S.hFCZoom), set(S.hFCZoom,'Units','normalized','Position',[0.895 0.020 0.070 0.105],'String','Large'); end
-    if isfield(S,'hFCYAuto') && ishghandle(S.hFCYAuto), set(S.hFCYAuto,'Units','normalized','Position',[0.060 0.020 0.060 0.105]); end
-    if isfield(S,'hFCYMin') && ishghandle(S.hFCYMin), set(S.hFCYMin,'Units','normalized','Position',[0.125 0.020 0.045 0.105]); end
-    if isfield(S,'hFCYMax') && ishghandle(S.hFCYMax), set(S.hFCYMax,'Units','normalized','Position',[0.175 0.020 0.045 0.105]); end
-    if isfield(S,'hFCYStep') && ishghandle(S.hFCYStep), set(S.hFCYStep,'Units','normalized','Position',[0.225 0.020 0.045 0.105]); end
-    if isfield(S,'hFCPlotColor') && ishghandle(S.hFCPlotColor), set(S.hFCPlotColor,'Units','normalized','Position',[0.325 0.020 0.085 0.105]); end
-catch
-end
-end
 
 function nm = fcNiceName_SAFE_20260617(raw,label,labelMode,stripSide)
 if nargin < 4, stripSide = false; end
@@ -10812,10 +8716,6 @@ if numel(base) > maxN, base = [base(1:max(1,maxN-3)) '...']; end
 nm = base;
 end
 
-function acr = fcAcr_SAFE_20260617(raw)
-[acr,~] = fcNameParts_SAFE_20260622(raw);
-acr = upper(acr);
-end
 
 function [acr,full] = fcNameParts_SAFE_20260622(raw)
 s = strtrimSafe(raw); full = '';
@@ -10851,42 +8751,6 @@ full = strtrim(regexprep(full,'[_\s]+',' '));
 if isempty(acr), acr = upper(strtrimSafe(raw)); end
 end
 
-function [sel,note] = fcGASelectROIForLarge_20260623(S,R,M,seedIdx,roi2Idx,nTop)
-sel = [];
-note = '';
-try
-    n = size(M,1);
-    if nargin < 6 || isempty(nTop), nTop = 20; end
-    nHalf = max(5,min(10,round(nTop/2)));
-
-    row = double(M(seedIdx,:));
-    row(seedIdx) = NaN;
-    [~,posOrd] = sort(row,'descend');
-    [~,negOrd] = sort(row,'ascend');
-    posOrd = posOrd(isfinite(row(posOrd)));
-    negOrd = negOrd(isfinite(row(negOrd)));
-    posSel = posOrd(1:min(nHalf,numel(posOrd)));
-    negSel = negOrd(1:min(nHalf,numel(negOrd)));
-
-    sel = unique([seedIdx; roi2Idx; posSel(:); negSel(:)],'stable');
-    sel = sel(sel >= 1 & sel <= n);
-
-    try
-        nm = cell(numel(sel),1);
-        for ii = 1:numel(sel)
-            nm{ii} = fcNiceName_SAFE_20260617(R.names{sel(ii)},R.labels(sel(ii)),'Abbrev',true);
-        end
-        [~,ord] = sort(lower(nm));
-        sel = sel(ord);
-    catch
-    end
-
-    note = sprintf('seed top +%d / -%d ROI(s), alphabetic',numel(posSel),numel(negSel));
-catch
-    sel = [];
-    note = 'all ROIs';
-end
-end
 
 function plotROIOverlay_ADV_20260617(ax,S,R,cmapName)
 % ROI_SELECTED_SLICE_UNSQUASH_FIX_20260623
@@ -11113,21 +8977,9 @@ end
 end
 
 % Compatibility wrappers for older callbacks still present in the file.
-function fcGAOverlayClick_20260622(src,evt)
-fcGAOverlayClickAny_20260623(src,evt);
-end
 
-function fcGAScrollSlice_20260622(fig,evt)
-fcGAOverlayScrollAny_20260623(fig,evt);
-end
 
-function fcGALargeOverlayClick_20260622(f,src,evt)
-try, fcGAOverlayClickAny_20260623(src,evt); catch, end
-end
 
-function fcGALargeScrollSlice_20260622(f,evt)
-fcGAOverlayScrollAny_20260623(f,evt);
-end
 
 
 
@@ -11653,24 +9505,6 @@ if ~isempty(useRows)
 end
 end
 
-function S = fcga_clear_duplicate_fc_file_20260624(S,fp,keepRow)
-% Remove this FC file from all rows except keepRow.
-try
-    fp = strtrimSafe(fp);
-    if isempty(fp), return; end
-    S = ensureFCRowFilesSizeGA_TARGETED(S);
-    for r = 1:numel(S.fcRowFiles)
-        if r == keepRow, continue; end
-        try
-            if strcmpi(strtrimSafe(S.fcRowFiles{r}),fp)
-                S.fcRowFiles{r} = '';
-            end
-        catch
-        end
-    end
-catch
-end
-end
 
 function r = fcga_find_row_with_fc_file_20260624(S,fp)
 r = [];
@@ -13408,147 +11242,9 @@ end
 end
 
 
-function [isL,isR,baseNames] = fcGAHemiMask_20260624(names,labels)
-% Robust side detection from names such as R_ALV, L_ALV, R-ALV, Right ALV, ALV_R.
-n = numel(labels);
-isL = false(n,1);
-isR = false(n,1);
-baseNames = cell(n,1);
 
-for ii = 1:n
-    raw = '';
-    try, raw = char(names{ii}); catch, raw = sprintf('ROI_%03d',ii); end
-    [side,base] = fcGAHemiSideBase_20260624(raw);
-    if strcmp(side,'L'), isL(ii) = true; end
-    if strcmp(side,'R'), isR(ii) = true; end
-    baseNames{ii} = base;
-end
 
-% Signed-label fallback if names do not contain side information.
-try
-    if (~any(isL) || ~any(isR)) && any(labels < 0) && any(labels > 0)
-        isL = labels < 0;
-        isR = labels > 0;
-        for ii = 1:n
-            if isempty(baseNames{ii})
-                baseNames{ii} = sprintf('ROI_%g',abs(labels(ii)));
-            end
-        end
-    end
-catch
-end
 
-% Do not invent a side if neither side exists.
-if ~any(isL) && ~any(isR)
-    isL = false(n,1);
-    isR = false(n,1);
-end
-end
-
-function [side,base] = fcGAHemiSideBase_20260624(raw)
-side = '';
-base = '';
-try
-    s = char(raw);
-    s = regexprep(s,'\|\|.*$','');
-    s = regexprep(s,'\[[^\]]*\]','');
-    s = regexprep(s,'^\s*-?\d+\s*=?\s*','');
-    s = strtrim(s);
-    if isempty(s)
-        base = '';
-        return;
-    end
-
-    u = upper(s);
-    u = regexprep(u,'[-\s]+','_');
-    u = regexprep(u,'_+','_');
-    u = regexprep(u,'^_','');
-    u = regexprep(u,'_$','');
-
-    % Side prefix.
-    if ~isempty(regexp(u,'^(L|LEFT)_','once'))
-        side = 'L';
-        base = regexprep(u,'^(L|LEFT)_','');
-    elseif ~isempty(regexp(u,'^(R|RIGHT)_','once'))
-        side = 'R';
-        base = regexprep(u,'^(R|RIGHT)_','');
-    % Side suffix.
-    elseif ~isempty(regexp(u,'_(L|LEFT)$','once'))
-        side = 'L';
-        base = regexprep(u,'_(L|LEFT)$','');
-    elseif ~isempty(regexp(u,'_(R|RIGHT)$','once'))
-        side = 'R';
-        base = regexprep(u,'_(R|RIGHT)$','');
-    else
-        base = u;
-    end
-
-    base = regexprep(base,'^(R/L|L/R|LR|BOTH|BILATERAL|MERGED)_','','ignorecase');
-    base = regexprep(base,'^(L|R|LEFT|RIGHT)_','','ignorecase');
-    base = regexprep(base,'_(L|R|LEFT|RIGHT)$','');
-    base = regexprep(base,'_+','_');
-    base = strtrim(base);
-    if isempty(base), base = u; end
-catch
-    base = strtrim(char(raw));
-end
-end
-
-function [Mmerge,namesMerge,labelsMerge] = fcGAMergeHemisphereMatrix_20260624(M,names,labels,baseNames)
-% Collapse L/R homologues into base ROI matrix.
-n = size(M,1);
-keys = baseNames(:);
-for ii = 1:numel(keys)
-    if isempty(keys{ii})
-        try
-            keys{ii} = sprintf('ROI_%g',abs(labels(ii)));
-        catch
-            keys{ii} = sprintf('ROI_%03d',ii);
-        end
-    end
-end
-
-% Sort base ROIs alphabetically.
-[~,ordBase] = sort(lower(keys));
-keysSorted = keys(ordBase);
-unq = {};
-for ii = 1:numel(keysSorted)
-    if isempty(unq) || ~strcmpi(unq{end},keysSorted{ii})
-        unq{end+1,1} = keysSorted{ii}; %#ok<AGROW>
-    end
-end
-
-k = numel(unq);
-Mmerge = NaN(k,k);
-namesMerge = cell(k,1);
-labelsMerge = zeros(k,1);
-groups = cell(k,1);
-
-for ii = 1:k
-    groups{ii} = find(strcmpi(keys,unq{ii}));
-    namesMerge{ii} = unq{ii};
-    try
-        labelsMerge(ii) = abs(labels(groups{ii}(1)));
-    catch
-        labelsMerge(ii) = ii;
-    end
-end
-
-for ii = 1:k
-    for jj = 1:k
-        rr = groups{ii};
-        cc = groups{jj};
-        vals = M(rr,cc);
-        Mmerge(ii,jj) = fcGANanMeanVec_20260624(vals(:));
-    end
-end
-end
-
-function m = fcGANanMeanVec_20260624(v)
-v = v(:);
-v = v(isfinite(v));
-if isempty(v), m = NaN; else, m = mean(v); end
-end
 
 function labs = fcGAHeatLabels_20260624(names,labels,labelMode,hemiTitle)
 % Heatmap labels. Merged names are already base-only, but strip side prefixes again for safety.
