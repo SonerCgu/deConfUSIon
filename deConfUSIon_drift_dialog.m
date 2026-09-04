@@ -78,11 +78,16 @@ mOpts = { ...
     {'cutoff'}, ...
     {'roi'}};
 
-% ---- keep only routine methods (delete this block to show all 11) ----
-mKeep = {'pacap_response','glm','compcor','vehicle'};
-keepMask = ismember(mKey, mKeep);
-mKey=mKey(keepMask); mName=mName(keepMask); mDesc=mDesc(keepMask);
-mCav=mCav(keepMask); mOpts=mOpts(keepMask); mRank=1:numel(mKey);
+% ---- DECONF_METHODSCOPE_V1: routine 4 by default, all 11 via toggle ----
+showAllMethods = false;
+try, showAllMethods = logical(getpref('deConfUSIon','driftShowAllMethods',false)); catch, showAllMethods = false; end
+reopenRequested = false;
+if ~showAllMethods
+    mKeep = {'pacap_response','glm','compcor','vehicle'};
+    keepMask = ismember(mKey, mKeep);
+    mKey=mKey(keepMask); mName=mName(keepMask); mDesc=mDesc(keepMask);
+    mCav=mCav(keepMask); mOpts=mOpts(keepMask); mRank=1:numel(mKey);
+end
 
 sel = 1;
 if isfield(defaults,'method') && ~isempty(defaults.method)
@@ -223,7 +228,18 @@ uicontrol(f,'Style','pushbutton','String','Cancel','Units','normalized','Positio
 
 refreshLists();
 paintAll();
+if showAllMethods
+    btnScopeLabel = 'SHOW ROUTINE 4 ONLY';
+else
+    btnScopeLabel = 'SHOW ALL 11 METHODS';
+end
+uicontrol(f,'Style','pushbutton','String',btnScopeLabel,'Units','normalized','Position',[0.02 0.010 0.18 0.030], ...
+    'BackgroundColor',[0.22 0.22 0.26],'ForegroundColor',WHT,'FontName',FONT,'FontSize',12,'FontWeight','bold', ...
+    'Callback',@(a,b)toggleMethodScope());
 uiwait(f);
+if reopenRequested
+    cfg = deConfUSIon_drift_dialog(defaults);
+end
 
     function h=mkLab(s)
         h=uicontrol(pD,'Style','text','String',s,'Units','normalized', ...
@@ -252,6 +268,12 @@ uiwait(f);
     function setSel(i), sel=i; paintAll(); end
     function setOrder(i), orderSel=i; paintAll(); end
     function setRestore(i), restoreSel=i; paintAll(); end
+    function toggleMethodScope()
+        try, setpref('deConfUSIon','driftShowAllMethods',~showAllMethods); catch, end
+        reopenRequested = true;
+        cfg = struct('cancelled',true);
+        if ishghandle(f), uiresume(f); delete(f); end
+    end
     function cancelClose()
         cfg=struct('cancelled',true);
         if ishghandle(f), uiresume(f); delete(f); end

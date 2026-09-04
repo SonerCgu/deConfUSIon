@@ -190,17 +190,6 @@ catch
 end
 end
 
-function Rm = makeMapRenderStruct(S)
-Rm = struct();
-Rm.threshold = 0;
-Rm.caxis = S.mapCaxis;
-Rm.alphaModOn = S.mapAlphaModOn;
-Rm.modMin = S.mapModMin;
-Rm.modMax = S.mapModMax;
-Rm.blackBody = S.mapBlackBody;
-Rm.colormapName = S.mapColormap;
-Rm.flipUDPreview = true;
-end
 
 function sel = clampSelRows(sel, nRows)
 if isempty(sel)
@@ -222,60 +211,6 @@ for i = 1:size(tbl,1)
 end
 end
 
-function idx = findActiveROIRowsGA(subj)
-idx = [];
-for i = 1:size(subj,1)
-    if ~logicalCellValue(subj{i,1})
-        continue;
-    end
-    roiFile = strtrimSafe(subj{i,7});
-    if ~isempty(roiFile) && exist(roiFile,'file') == 2
-        idx(end+1) = i; %#ok<AGROW>
-    end
-end
-end
-function [idx, missingIdx] = findActiveBundleRowsGA(S)
-    idx = [];
-    missingIdx = [];
-
-    dispRows = findBundleDisplayRowsGA(S);
-
-    for i = 1:numel(dispRows)
-        r = dispRows(i);
-        key = makeBundleEntityKeyForRow(S, r);
-
-        if isempty(key)
-            continue;
-        end
-
-        if ~entityUseStateForKey(S, key)
-            continue;
-        end
-
-        bf = '';
-        try
-            bf = strtrimSafe(S.subj{r,8});
-        catch
-            bf = '';
-        end
-
-        if isempty(bf)
-            try
-                bf = resolveGroupBundlePath(S, S.subj(r,:));
-            catch
-                bf = '';
-            end
-        end
-
-        if isempty(bf) || ~isScmGroupBundleFile(bf)
-            missingIdx = [missingIdx r]; %#ok<AGROW>
-        else
-            idx(end+1) = r; %#ok<AGROW>
-        end
-    end
-
-    missingIdx = unique(missingIdx,'stable');
-end
 function col = colAsStr(C, j)
 col = cell(size(C,1),1);
 for i = 1:size(C,1)
@@ -294,21 +229,6 @@ for i = 1:numel(C)
 end
 end
 
-function S = rememberGroupCondPair(S, groupName, condName)
-groupName = strtrimSafe(groupName);
-condName  = strtrimSafe(condName);
-
-if isempty(groupName) || isempty(condName)
-    return;
-end
-
-try
-    if isa(S.groupToCondMap,'containers.Map')
-        S.groupToCondMap(upper(groupName)) = condName;
-    end
-catch
-end
-end
 
 function S = sanitizeTableStruct(S)
 if isempty(S.subj), return; end
@@ -433,66 +353,6 @@ end
     end
 end
 
-function [hAuto,hZero,hStep,hYmin,hYmax,hYminM,hYminP,hYmaxM,hYmaxP] = mkYControlsStepCompact(parent, y0, label, cfg, C, cbEdit, cbYminM, cbYminP, cbYmaxM, cbYmaxP)
-bg = get(parent,'BackgroundColor');
-rowH = 0.18;
-
-uicontrol(parent,'Style','text','String',[label ':'], ...
-    'Units','normalized','Position',[0.02 y0 0.08 rowH], ...
-    'BackgroundColor',bg,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-
-hAuto = uicontrol(parent,'Style','checkbox','String','Auto', ...
-    'Units','normalized','Position',[0.11 y0 0.12 rowH], ...
-    'Value',double(cfg.auto), 'BackgroundColor',bg,'ForegroundColor','w','Callback',cbEdit);
-
-hZero = uicontrol(parent,'Style','checkbox','String','Force 0', ...
-    'Units','normalized','Position',[0.24 y0 0.14 rowH], ...
-    'Value',double(cfg.forceZero), 'BackgroundColor',bg,'ForegroundColor','w','Callback',cbEdit);
-
-uicontrol(parent,'Style','text','String','Step:', ...
-    'Units','normalized','Position',[0.40 y0 0.06 rowH], ...
-    'BackgroundColor',bg,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-
-hStep = uicontrol(parent,'Style','edit','String',num2str(cfg.step), ...
-    'Units','normalized','Position',[0.46 y0+0.01 0.06 rowH], ...
-    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cbEdit);
-
-uicontrol(parent,'Style','text','String','Ymin:', ...
-    'Units','normalized','Position',[0.54 y0 0.06 rowH], ...
-    'BackgroundColor',bg,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-
-hYmin = uicontrol(parent,'Style','edit','String',num2str(cfg.ymin), ...
-    'Units','normalized','Position',[0.60 y0+0.01 0.08 rowH], ...
-    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cbEdit);
-
-hYminM = uicontrol(parent,'Style','pushbutton','String','-', ...
-    'Units','normalized','Position',[0.69 y0+0.01 0.035 rowH], ...
-    'BackgroundColor',C.btnSecondary,'ForegroundColor','w','FontWeight','bold', ...
-    'Callback',cbYminM);
-
-hYminP = uicontrol(parent,'Style','pushbutton','String','+', ...
-    'Units','normalized','Position',[0.73 y0+0.01 0.035 rowH], ...
-    'BackgroundColor',C.btnSecondary,'ForegroundColor','w','FontWeight','bold', ...
-    'Callback',cbYminP);
-
-uicontrol(parent,'Style','text','String','Ymax:', ...
-    'Units','normalized','Position',[0.78 y0 0.06 rowH], ...
-    'BackgroundColor',bg,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-
-hYmax = uicontrol(parent,'Style','edit','String',num2str(cfg.ymax), ...
-    'Units','normalized','Position',[0.84 y0+0.01 0.07 rowH], ...
-    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cbEdit);
-
-hYmaxM = uicontrol(parent,'Style','pushbutton','String','-', ...
-    'Units','normalized','Position',[0.92 y0+0.01 0.035 rowH], ...
-    'BackgroundColor',C.btnSecondary,'ForegroundColor','w','FontWeight','bold', ...
-    'Callback',cbYmaxM);
-
-hYmaxP = uicontrol(parent,'Style','pushbutton','String','+', ...
-    'Units','normalized','Position',[0.96 y0+0.01 0.035 rowH], ...
-    'BackgroundColor',C.btnSecondary,'ForegroundColor','w','FontWeight','bold', ...
-    'Callback',cbYmaxP);
-end
 
 function fixAxesInset(ax)
 try
@@ -541,19 +401,7 @@ try, set(get(ax,'XLabel'),'Color',fg); catch, end
 try, set(get(ax,'YLabel'),'Color',fg); catch, end
 end
 
-function styleColorbarMode(cb, styleName)
-[~,fg] = previewColors(styleName);
-try, set(cb,'Color',fg); catch, end
-try, set(get(cb,'Label'),'Color',fg); catch, end
-try, set(cb,'Box','off'); catch, end
-end
 
-function styleLegendMode(lg, styleName)
-[bg,fg] = previewColors(styleName);
-try, set(lg,'TextColor',fg); catch, end
-try, set(lg,'Color',bg); catch, end
-try, set(lg,'EdgeColor','none'); catch, end
-end
 
 function moveTitleUp(ax, yPos)
 if nargin < 2, yPos = 1.09; end
@@ -606,76 +454,8 @@ moveTitleUp(ax, titleYForStyle(styleName));
 fixAxesInset(ax);
 end
 
-function stylePreviewPanels(S)
-isLight = strcmpi(S.previewStyle,'Light');
 
-if isLight
-    bgMain = [1 1 1];
-    bgTop  = [0.96 0.96 0.96];
-    fg     = [0 0 0];
-    editBg = [1 1 1];
-    btnBg  = [0.86 0.86 0.86];
-else
-    bgMain = S.C.bg;
-    bgTop  = S.C.panel2;
-    fg     = [1 1 1];
-    editBg = S.C.editBg;
-    btnBg  = [0.14 0.14 0.14];
-end
 
-set(S.hPrevBG,  'BackgroundColor',bgMain);
-set(S.hPrevTop, 'BackgroundColor',bgTop, 'ForegroundColor',fg);
-
-setIfHandle(S,'hPrevExportTop','BackgroundColor',btnBg,'ForegroundColor',fg,'FontWeight','bold');
-setIfHandle(S,'hPrevExportBot','BackgroundColor',btnBg,'ForegroundColor',fg,'FontWeight','bold');
-setIfHandle(S,'hPrevExportBoth','BackgroundColor',btnBg,'ForegroundColor',fg,'FontWeight','bold');
-
-setIfHandle(S,'hPrevLblView','BackgroundColor',bgTop,'ForegroundColor',fg);
-setIfHandle(S,'hPrevLblWin','BackgroundColor',bgTop,'ForegroundColor',fg);
-
-setIfHandle(S,'hPrevStyle','BackgroundColor',editBg,'ForegroundColor',fg);
-setIfHandle(S,'hPrevGrid','BackgroundColor',bgTop,'ForegroundColor',fg);
-setIfHandle(S,'hSmoothEnable','BackgroundColor',bgTop,'ForegroundColor',fg);
-setIfHandle(S,'hSmoothWin','BackgroundColor',editBg,'ForegroundColor',fg);
-end
-
-function setIfHandle(S, fieldName, varargin)
-if isfield(S,fieldName)
-    h = S.(fieldName);
-    if ishghandle(h)
-        try
-            set(h, varargin{:});
-        catch
-        end
-    end
-end
-end
-
-    function colors = buildTableRowColors(subj)
-neutral  = [0.12 0.12 0.12];
-excluded = [0.30 0.12 0.12];
-
-n = size(subj,1);
-if n <= 0
-    colors = [neutral; neutral];
-    return;
-end
-
-colors = repmat(neutral, max(n,2), 1);
-
-for i = 1:n
-    use  = logicalCellValue(subj{i,1});
-    st   = lower(strtrimSafe(subj{i,9}));
-    grp  = strtrimSafe(subj{i,3});
-    cond = strtrimSafe(subj{i,4});
-
-    if contains(st,'excluded') || ~use
-        colors(i,:) = excluded;
-    else
-        colors(i,:) = groupRowColorGA(grp, cond);
-    end
-end
-end
 
 function colors = buildTableRowColorsDisplay(subj, minRows)
 if nargin < 2, minRows = 0; end
@@ -754,156 +534,9 @@ else
 end
 end
 
-function applyYLim(ax, dataVec, plotCfg)
-if isempty(dataVec), return; end
-dataVec = dataVec(isfinite(dataVec));
-if isempty(dataVec), return; end
 
-if plotCfg.auto
-    lo = min(dataVec);
-    hi = max(dataVec);
-    if plotCfg.forceZero, lo = 0; end
-    if lo == hi
-        lo = lo - 1;
-        hi = hi + 1;
-    else
-        pad = 0.06 * (hi - lo);
-        lo = lo - pad;
-        hi = hi + pad;
-        if plotCfg.forceZero, lo = 0; end
-    end
-    ylim(ax,[lo hi]);
-else
-    lo = plotCfg.ymin;
-    hi = plotCfg.ymax;
-    if plotCfg.forceZero, lo = 0; end
-    if isfinite(lo) && isfinite(hi) && lo < hi
-        ylim(ax,[lo hi]);
-    end
-end
 
-step = plotCfg.step;
-if ~isfinite(step) || step <= 0
-    try, set(ax,'YTickMode','auto'); catch, end
-    return;
-end
 
-yl = ylim(ax);
-lo = yl(1);
-hi = yl(2);
-if ~isfinite(lo) || ~isfinite(hi) || hi <= lo, return; end
-
-if plotCfg.forceZero
-    t0 = 0;
-else
-    t0 = floor(lo/step)*step;
-end
-t1 = ceil(hi/step)*step;
-
-ticks = t0:step:t1;
-ticks = ticks(ticks >= lo-1e-9 & ticks <= hi+1e-9);
-
-if numel(ticks) > 60
-    try, set(ax,'YTickMode','auto'); catch, end
-    return;
-end
-
-if ~isempty(ticks)
-    try, set(ax,'YTick',ticks); catch, end
-end
-end
-
-function h = drawInjectionPatch(ax, x0, x1, col, alphaVal)
-if ~isfinite(x0) || ~isfinite(x1)
-    h = [];
-    return;
-end
-if x1 <= x0
-    h = [];
-    return;
-end
-
-yl = ylim(ax);
-h = patch(ax,[x0 x1 x1 x0],[yl(1) yl(1) yl(2) yl(2)],col, ...
-    'FaceAlpha',alphaVal, ...
-    'EdgeColor','none', ...
-    'HitTest','off', ...
-    'HandleVisibility','off', ...
-    'Tag','GA_InjectionPatch');
-
-try
-    ann = get(h,'Annotation');
-    leg = get(ann,'LegendInformation');
-    set(leg,'IconDisplayStyle','off');
-catch
-end
-
-try
-    uistack(h,'bottom');
-catch
-end
-end
-
-function y2 = smooth1D_edgeCentered(y, dtSec, winSec)
-y = double(y(:)');
-n = numel(y);
-y2 = y;
-
-if n < 2 || ~isfinite(dtSec) || dtSec <= 0 || ~isfinite(winSec) || winSec <= 0
-    return;
-end
-
-if any(~isfinite(y))
-    idx = find(isfinite(y));
-    if numel(idx) < 2
-        return;
-    end
-    y = interp1(idx, y(idx), 1:n, 'linear', 'extrap');
-end
-
-winVol = max(1, round(winSec / dtSec));
-if winVol <= 1
-    y2 = y;
-    return;
-end
-
-prePad  = floor(winVol/2);
-postPad = winVol - 1 - prePad;
-
-L = repmat(y(1), 1, prePad);
-R = repmat(y(end), 1, postPad);
-ypad = [L y R];
-
-k = ones(1, winVol) / winVol;
-y2 = conv(ypad, k, 'valid');
-end
-
-function [hLine,hPatch] = shadedLineColored(ax, x, y, e, lineColor, fillColor, semAlpha)
-if nargin < 7 || isempty(semAlpha)
-    semAlpha = 0.20;
-end
-
-x = x(:)';
-y = y(:)';
-e = e(:)';
-
-up = y + e;
-dn = y - e;
-
-hPatch = patch(ax, [x fliplr(x)], [up fliplr(dn)], fillColor, ...
-    'FaceAlpha',semAlpha, ...
-    'EdgeColor','none', ...
-    'HandleVisibility','off');
-
-try
-    ann = get(hPatch,'Annotation');
-    leg = get(ann,'LegendInformation');
-    set(leg,'IconDisplayStyle','off');
-catch
-end
-
-hLine = plot(ax, x, y, 'LineWidth',2.4, 'Color',lineColor);
-end
 
 function dispNames = resolveDisplayGroupNames(rawNames, S)
 n = numel(rawNames);
@@ -983,312 +616,16 @@ else
 end
 end
 
-function dispNames = getDisplayNamesFromR(R)
-if isfield(R,'groupDisplayNames') && ~isempty(R.groupDisplayNames)
-    dispNames = R.groupDisplayNames;
-else
-    dispNames = R.groupNames;
-end
-end
 
-function j = deterministicJitter(key, amp)
-if nargin < 2 || isempty(amp), amp = 0.22; end
-if isempty(key), key = 'x'; end
 
-s = uint8(char(key));
-h = uint32(2166136261);
-for k = 1:numel(s)
-    h = bitxor(h, uint32(s(k)));
-    h = uint32(mod(uint64(h) * 16777619, 2^32));
-end
 
-u = double(h) / double(intmax('uint32'));
-j = (u - 0.5) * amp;
-end
 
-function highlightOutliersOnScatter(ax, R, S, rowX, styleName)
-if isempty(S.outlierKeys), return; end
-if ~isfield(R,'subjTable') || isempty(R.subjTable), return; end
-if numel(rowX) ~= size(R.subjTable,1), return; end
 
-[bg,fg] = previewColors(styleName);
-keysAll = makeRowKeys(R.subjTable);
-y = R.metricVals(:);
 
-for i = 1:numel(S.outlierKeys)
-    hit = find(strcmp(keysAll, S.outlierKeys{i}), 1, 'first');
-    if isempty(hit), continue; end
-    if ~isfinite(rowX(hit)) || ~isfinite(y(hit)), continue; end
 
-    scatter(ax, rowX(hit), y(hit), 150, ...
-        'MarkerFaceColor','none', ...
-        'MarkerEdgeColor',[1 0.45 0.45], ...
-        'LineWidth',2.0);
 
-    sid = strtrimSafe(R.subjTable{hit,2});
-    txt = sprintf('%s: %.4g', sid, y(hit));
-    text(ax, rowX(hit)+0.03, y(hit), txt, ...
-        'Color',fg, ...
-        'FontSize',9, ...
-        'FontWeight','bold', ...
-        'BackgroundColor',bg, ...
-        'Margin',1, ...
-        'Clipping','on', ...
-        'HorizontalAlignment','left', ...
-        'VerticalAlignment','middle');
-end
-end
 
-function A = flipLR_3D_local(A)
-    A = A(:,end:-1:1,:);
-end
 
-function rgb = toRGB_local(A)
-A = mat2gray_local(A);
-rgb = repmat(A, [1 1 3]);
-end
-
-function rgb = normalizeRgbLocal(U)
-rgb = double(U);
-mx = max(rgb(:));
-if isfinite(mx) && mx > 1
-    rgb = rgb / 255;
-end
-rgb(~isfinite(rgb)) = 0;
-rgb = min(max(rgb,0),1);
-end
-
-function A = mat2gray_local(A)
-A = double(A);
-A(~isfinite(A)) = 0;
-mn = min(A(:));
-mx = max(A(:));
-if ~isfinite(mn) || ~isfinite(mx) || mx <= mn
-    A = zeros(size(A));
-else
-    A = (A - mn) / (mx - mn);
-end
-A = min(max(A,0),1);
-end
-
-function cm = getNamedCmapLocal(name, n)
-if nargin < 2, n = 256; end
-name = lower(strtrimSafe(name));
-
-switch name
-    case 'blackbdy_iso'
-        if exist('blackbdy_iso','file') == 2
-            cm = blackbdy_iso(n);
-        else
-            cm = hot(n);
-        end
-    case 'hot'
-        cm = hot(n);
-    case 'parula'
-        cm = parula(n);
-    case 'jet'
-        cm = jet(n);
-    case 'gray'
-        cm = gray(n);
-    otherwise
-        if strcmp(name,'turbo') && exist('turbo','file') == 2
-            cm = turbo(n);
-        else
-            cm = hot(n);
-        end
-end
-end
-
-function B = smooth2D_gauss_local(A, sigma)
-try
-    B = imgaussfilt(A, sigma);
-    return;
-catch
-end
-
-if sigma <= 0
-    B = A;
-    return;
-end
-
-r = max(1, ceil(3*sigma));
-x = -r:r;
-g = exp(-(x.^2)/(2*sigma^2));
-g = g / sum(g);
-
-B = conv2(conv2(double(A), g, 'same'), g', 'same');
-end
-
-function exportPreviewPNG(outFile, which, S)
-[figBg,~] = previewColors(S.previewStyle);
-
-% Export-only geometry
-if which == 1
-    % Top plot: make wider again
-    figPos = [100 100 1320 620];
-   axPos  = [0.10 0.36 0.96 0.34];
-    boxAsp = [2.00 1 1];
-else
-    % Bottom plot: keep mostly as before, only slightly broader
-    figPos = [100 100 980 620];
-    axPos  = [0.25 0.24 0.44 0.28];
-    boxAsp = [0.92 1 1];
-end
-
-f = figure( ...
-    'Visible','off', ...
-    'Color',figBg, ...
-    'InvertHardcopy','off', ...
-    'MenuBar','none', ...
-    'ToolBar','none', ...
-    'NumberTitle','off', ...
-    'Renderer','opengl');
-
-set(f,'Position',figPos);
-
-ax = axes( ...
-    'Parent',f, ...
-    'Units','normalized', ...
-    'Position',axPos);
-
-styleAxesMode(ax, S.previewStyle, S.previewShowGrid);
-recolorAxesText(ax, S.previewStyle);
-
-try, set(ax,'LineWidth',1.0); catch, end
-try, set(ax,'TickDir','out'); catch, end
-try, set(ax,'TickLength',[0.012 0.012]); catch, end
-try, set(ax,'ActivePositionProperty','position'); catch, end
-
-exportOnePreview(ax, which, S, S.previewStyle);
-
-% Apply aspect after plotting
-try, pbaspect(ax, boxAsp); catch, end
-
-if which == 2
-    % Slight extra headroom for stats annotation
-    try
-        yl = ylim(ax);
-        dy = yl(2) - yl(1);
-        if isfinite(dy) && dy > 0
-            ylim(ax, [yl(1) yl(2) + 0.12*dy]);
-        end
-    catch
-    end
-
-    % Remove bottom export title
-    try
-        title(ax,'');
-    catch
-    end
-
-    % Move p-text / stars slightly upward and to the right
-    moveExportStatsForExport(ax, 0, -0.08);
-end
-
-set(f,'PaperPositionMode','auto');
-print(f, outFile, '-dpng', '-r300');
-close(f);
-end
-
-   function moveExportStatsForExport(ax, xFracRight, pGapBelowStar)
-if nargin < 2 || isempty(xFracRight)
-    xFracRight = 0.06;
-end
-if nargin < 3 || isempty(pGapBelowStar)
-    pGapBelowStar = 0.05;
-end
-
-if isempty(ax) || ~ishandle(ax)
-    return;
-end
-
-try
-    xl = xlim(ax);
-    yl = ylim(ax);
-catch
-    return;
-end
-
-dx = xl(2) - xl(1);
-dy = yl(2) - yl(1);
-
-if ~isfinite(dx) || dx <= 0 || ~isfinite(dy) || dy <= 0
-    return;
-end
-
-txts = findall(ax,'Type','text');
-if isempty(txts)
-    return;
-end
-
-hP = [];
-hStar = [];
-
-for k = 1:numel(txts)
-    h = txts(k);
-
-    try
-        s = get(h,'String');
-    catch
-        continue;
-    end
-
-    if iscell(s)
-        try
-            s = strjoin(s,' ');
-        catch
-            s = '';
-        end
-    end
-
-    s = strtrimSafe(s);
-    sLow = lower(s);
-    sNoSpace = strrep(sLow,' ','');
-
-    isPText = contains(sNoSpace,'p=');
-    isStar  = strcmp(s,'*') || strcmp(s,'**') || strcmp(s,'***') || strcmpi(s,'n.s.');
-
-    if isPText
-        hP = h;
-    elseif isStar
-        hStar = h;
-    end
-end
-
-if isempty(hP) || ~ishandle(hP)
-    return;
-end
-
-try
-    posP = get(hP,'Position');
-catch
-    return;
-end
-
-if ~isempty(hStar) && ishandle(hStar)
-    try
-        posS = get(hStar,'Position');
-
-        % place p-text slightly to the right of the star center
-        posP(1) = min(xl(2) - 0.05*dx, posS(1) + xFracRight*dx);
-
-        % place p-text BELOW the star by a fixed gap
-        posP(2) = max(yl(1) + 0.03*dy, posS(2) - pGapBelowStar*dy);
-    catch
-    end
-else
-    % fallback if no star text found
-    posP(1) = min(xl(2) - 0.05*dx, posP(1) + xFracRight*dx);
-end
-
-try
-    set(hP,'Position',posP);
-    set(hP,'HorizontalAlignment','center');
-    set(hP,'VerticalAlignment','top');
-    set(hP,'FontSize',9);   % smaller p-value text
-catch
-end
-end
 
 function y = tern(cond, a, b)
 if cond
@@ -1310,36 +647,6 @@ for i = 1:n
 end
 end
 
-function writeCellCSV_UTF8(fn, C)
-fid = fopen(fn,'w');
-if fid < 0, return; end
-cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
-fwrite(fid, uint8([239 187 191]), 'uint8');
-
-[nr,nc] = size(C);
-for r = 1:nr
-    row = cell(1,nc);
-    for c = 1:nc
-        v = C{r,c};
-        if isnumeric(v)
-            if isempty(v) || ~isfinite(v)
-                s = '';
-            else
-                s = num2str(v);
-            end
-        else
-            try
-                s = char(v);
-            catch
-                s = '';
-            end
-        end
-        s = strrep(s,'"','""');
-        row{c} = ['"' s '"'];
-    end
-    fprintf(fid,'%s\n', strjoin(row,','));
-end
-end
 %%% =====================================================================
 %%% EXCEL EXPORT / METADATA / STATS / ROI ANALYSIS
 %%% =====================================================================
@@ -1596,14 +903,6 @@ end
 [info.TR_sec, info.NVols, ~] = extractDataSummaryQuick(info.dataFile);
 end
 
-function sh = makeSafeExcelSheetName(s)
-sh = strtrimSafe(s);
-if isempty(sh), sh = 'Sheet'; end
-sh = regexprep(sh,'[:\\/\?\*\[\]]','_');
-if numel(sh) > 31
-    sh = sh(1:31);
-end
-end
 
     function info = extractRowMetaLight(row)
 info = struct();
@@ -1936,19 +1235,6 @@ for k = 1:maxLines
 end
 end
 
-function rows = sortConditionRows(rows)
-if isempty(rows), return; end
-
-keys = cell(size(rows,1),1);
-for i = 1:size(rows,1)
-    keys{i} = sprintf('%s|%s', ...
-        lower(safeKeyStr(rows{i,5})), ...
-        lower(safeKeyStr(rows{i,2})));
-end
-
-[~,ord] = sort(keys);
-rows = rows(ord,:);
-end
 
 function r = conditionRankForExport(x)
 s = lower(strtrimSafe(x));
@@ -2269,52 +1555,7 @@ while n > 0
 end
 end
 
-function closeExcelSafe(excel, wb)
-try
-    if ~isempty(wb)
-        wb.Close(false);
-    end
-catch
-end
-try
-    if ~isempty(excel)
-        excel.Quit;
-    end
-catch
-end
-try
-    if ~isempty(excel)
-        delete(excel);
-    end
-catch
-end
-end
 
-function [names, rgb] = palette20()
-names = {'Blue','Red','Green','Purple','Orange','Cyan','Magenta','Yellow','Gray','White', ...
-         'Navy','DarkRed','Teal','Lime','Pink','Brown','Olive','Violet','Sky','Steel'};
-rgb = [ ...
-    0.20 0.65 0.90;
-    0.90 0.25 0.25;
-    0.25 0.85 0.55;
-    0.65 0.40 0.95;
-    0.95 0.55 0.20;
-    0.20 0.85 0.85;
-    0.90 0.35 0.80;
-    0.95 0.90 0.25;
-    0.75 0.75 0.75;
-    0.95 0.95 0.95;
-    0.10 0.20 0.55;
-    0.55 0.10 0.10;
-    0.10 0.55 0.55;
-    0.60 0.90 0.20;
-    0.95 0.55 0.75;
-    0.55 0.35 0.20;
-    0.55 0.55 0.15;
-    0.55 0.30 0.75;
-    0.35 0.75 0.95;
-    0.45 0.55 0.65];
-end
 
 function p = tcdf_local(x, v)
 x = double(x);
@@ -2380,13 +1621,16 @@ function rs = repSize(sz, dim)
 rs = ones(1,numel(sz));
 rs(dim) = sz(dim);
 end
-function [ok, tMin, psc] = tryReadSCMroiExportTxt(fname)
-% Robust SCM ROI TXT reader.
-% Accepts:
-%   3 columns: frame/time_sec, time_min, PSC
-%   3 columns: frame, time_sec, PSC  -> converts time_sec to min if needed
-%   2 columns: time_min or time_sec, PSC
-% Rejects coordinate-mask TXT files by requiring mostly increasing time.
+function [ok,tMin,psc] = tryReadSCMroiExportTxt(fname)
+% Robust SCM ROI TXT time-course reader.
+%
+% New SCM exports contain:
+%   # PSC_REBASED: 1
+%
+% Old SCM exports do not. For those files the BaselineWindow header is
+% read and the trace is baseline-corrected in memory.
+%
+% Numeric ROI coordinates / RGB metadata before "# columns:" are ignored.
 
 ok = false;
 tMin = [];
@@ -2402,142 +1646,115 @@ if exist(fname,'file') ~= 2
 end
 
 fid = fopen(fname,'r');
-if fid < 0
-    return;
-end
-cleanupObj = onCleanup(@() fclose(fid)); %#ok<NASGU>
+if fid < 0, return; end
+cleanupObj = onCleanup(@()fclose(fid)); %#ok<NASGU>
 
-A = [];
-headerText = '';
+inData = false;
+isRebased = false;
+baselineSec = [NaN NaN];
 
 while true
     ln = fgetl(fid);
-    if ~ischar(ln)
-        break;
-    end
+    if ~ischar(ln), break; end
 
     ln = strtrim(ln);
-    if isempty(ln)
+    if isempty(ln), continue; end
+
+    if ln(1)=='#' || ln(1)=='%' || ln(1)==';'
+        ll = lower(ln);
+
+        % Read the baseline stored by SCM_gui.
+        if ~isempty(strfind(ll,'baselinewindow:'))
+            tok = regexp(ln,'(?i)BaselineWindow:\s*([^\r\n]+)','tokens','once');
+            if ~isempty(tok)
+                rr = strrep(tok{1},'-',' ');
+                rr = strrep(rr,',',' ');
+                nums = sscanf(rr,'%f');
+                if numel(nums) >= 2
+                    baselineSec = double(nums(1:2)).';
+                end
+            end
+        end
+
+        % New SCM files explicitly say they are already rebased.
+        if ~isempty(strfind(ll,'psc_rebased:'))
+            tok = regexp(ll,'psc_rebased:\s*([a-z0-9]+)','tokens','once');
+            if ~isempty(tok)
+                vv = lower(strtrim(tok{1}));
+                isRebased = any(strcmp(vv,{'1','true','yes','y'}));
+            end
+        end
+
+        % Data starts ONLY here. This avoids reading x/y/RGB metadata.
+        if ~isempty(strfind(ll,'columns:')) && ~isempty(strfind(ll,'psc'))
+            inData = true;
+        end
+
         continue;
     end
 
-    if ln(1)=='#' || ln(1)=='%' || ln(1)==';'
-        headerText = [headerText ' ' lower(ln)]; %#ok<AGROW>
+    if ~inData
         continue;
     end
 
     vals = sscanf(ln,'%f');
-    if numel(vals) >= 2
-        if isempty(A)
-            A = nan(0,numel(vals));
-        elseif numel(vals) > size(A,2)
-            A(:,end+1:numel(vals)) = NaN;
+
+    if numel(vals) >= 3
+        % SCM format: time_sec, time_min, PSC
+        tMin(end+1,1) = vals(2); %#ok<AGROW>
+        psc(end+1,1)  = vals(3); %#ok<AGROW>
+    elseif numel(vals) == 2
+        % Legacy two-column fallback.
+        tMin(end+1,1) = vals(1); %#ok<AGROW>
+        psc(end+1,1)  = vals(2); %#ok<AGROW>
+    end
+end
+
+keep = isfinite(tMin) & isfinite(psc);
+tMin = double(tMin(keep));
+psc  = double(psc(keep));
+
+if isempty(tMin)
+    return;
+end
+
+% Two-column files may occasionally store seconds.
+if max(tMin) > 300
+    tMin = tMin ./ 60;
+end
+
+[tMin,ord] = sort(tMin);
+psc = psc(ord);
+[tMin,ia] = unique(tMin,'stable');
+psc = psc(ia);
+
+% ----------------------------------------------------------
+% AUTOMATIC LEGACY FIX
+%
+% Old SCM ROI TXT values used the original PSC reference even when the
+% header contained another BaselineWindow. Correct those old traces here.
+% New files have PSC_REBASED:1 and therefore skip this block.
+% ----------------------------------------------------------
+if ~isRebased && all(isfinite(baselineSec)) && numel(psc) >= 3
+
+    b0 = min(baselineSec);
+    b1 = max(baselineSec);
+    tSec = 60 .* tMin;
+
+    bi = (tSec >= b0) & (tSec <= b1);
+
+    if any(bi)
+        bv = psc(bi);
+        bv = bv(isfinite(bv));
+
+        if ~isempty(bv)
+            psc = psc - mean(bv);
         end
-        row = nan(1,size(A,2));
-        row(1:numel(vals)) = vals(:)';
-        A(end+1,:) = row; %#ok<AGROW>
     end
 end
 
-if isempty(A) || size(A,1) < 3
-    return;
+ok = numel(tMin) >= 3 && numel(psc) == numel(tMin);
 end
-
-A = double(A);
-A = A(any(isfinite(A),2),:);
-
-if size(A,1) < 3
-    return;
-end
-
-% Pick columns.
-if size(A,2) >= 3 && all(isfinite(A(:,3)))
-    % Most SCM exports are: frame, time_min, PSC.
-    candT = A(:,2);
-    candY = A(:,3);
-
-    d = diff(candT);
-    d = d(isfinite(d));
-    incOK = ~isempty(d) && sum(d > 0) >= 0.80*numel(d);
-
-    if ~incOK
-        % Fallback: maybe col1 is time.
-        candT = A(:,1);
-        candY = A(:,2);
-    end
-else
-    candT = A(:,1);
-    candY = A(:,2);
-end
-
-candT = double(candT(:));
-candY = double(candY(:));
-
-keep = isfinite(candT) & isfinite(candY);
-candT = candT(keep);
-candY = candY(keep);
-
-if numel(candT) < 5
-    return;
-end
-
-% Sort and unique time points.
-[candT, ord] = sort(candT);
-candY = candY(ord);
-[candT, ia] = unique(candT,'stable');
-candY = candY(ia);
-
-if numel(candT) < 5
-    return;
-end
-
-dt = diff(candT);
-dt = dt(isfinite(dt));
-
-if isempty(dt) || sum(dt > 0) < 0.80*numel(dt)
-    return;
-end
-
-% Convert seconds to minutes if the axis is clearly too large for minutes.
-% This fixes TXT files where the first/second column is time_sec.
-if max(candT) > 300
-    candT = candT ./ 60;
-end
-
-% Reject obvious coordinate-mask files unless the header says PSC/timecourse.
-hasPSCHeader = contains(headerText,'psc') || contains(headerText,'signal change') || contains(headerText,'%sc') || contains(headerText,'time');
-if ~hasPSCHeader
-    if max(candT) > 300 || median(diff(candT)) > 5
-        return;
-    end
-end
-
-tMin = candT(:);
-psc  = candY(:);
-ok = true;
-end
-
-
-function tf = isMostlyIncreasing(x)
-x = double(x(:));
-x = x(isfinite(x));
-
-if numel(x) < 3
-    tf = false;
-    return;
-end
-
-d = diff(x);
-d = d(isfinite(d));
-
-if isempty(d)
-    tf = false;
-    return;
-end
-
-tf = sum(d > 0) >= 0.80 * numel(d);
-end
-
 
 function D = loadPipelineStruct(fp)
 L = load(fp);
@@ -3076,7 +2293,10 @@ for i = 1:N
 end
 
 t0 = max(cellfun(@(x) x(1), tAll));
-t1 = min(cellfun(@(x) x(end), tAll));
+% GA_UNEQUAL_SCAN_LENGTH_FIX_20260903
+% Use longest scan duration. Shorter scans are NaN after their
+% actual endpoint and therefore do not contribute there.
+t1 = max(cellfun(@(x) x(end), tAll));
 dtAll = nan(N,1);
 for i = 1:N
     di = diff(tAll{i});
@@ -3191,175 +2411,11 @@ R.plotBot = S.plotBot;
 R.showSEM = S.tc_showSEM;
 end
 
-function p = p_to_stars(pv)
-% GA_ROI_STATS_STAR_FIX_20260504
-% Significance labels:
-%   ns    : p > 0.05
-%   *     : p < 0.05
-%   **    : p < 0.01
-%   ***   : p < 0.001
-%   ****  : p < 0.0001
-if ~isfinite(pv)
-    p = 'ns';
-elseif pv < 0.0001
-    p = '****';
-elseif pv < 0.001
-    p = '***';
-elseif pv < 0.01
-    p = '**';
-elseif pv < 0.05
-    p = '*';
-else
-    p = 'ns';
-end
-end
-function annotateStatsBottom(ax, R, S)
-% GA_ROI_STATS_BAR_FONT_FIX_20260504
-% Larger lower-plot significance star and p-value text.
-p = R.stats.p;
-alpha = R.stats.alpha; %#ok<NASGU>
-stars = p_to_stars(p);
-[~,fg] = previewColors(S.previewStyle);
 
-try
-    yl = ylim(ax);
-catch
-    return;
-end
 
-ySpan = yl(2) - yl(1);
-if ~isfinite(ySpan) || ySpan <= 0
-    ySpan = 1;
-end
 
-% Highest animal dot / metric value
-yMaxDot = NaN;
-try
-    vv = double(R.metricVals(:));
-    vv = vv(isfinite(vv));
-    if ~isempty(vv)
-        yMaxDot = max(vv);
-    end
-catch
-end
 
-if ~isfinite(yMaxDot)
-    yMaxDot = yl(2) - 0.25*ySpan;
-end
 
-% Always place significance bar above the highest dot.
-yBar = yMaxDot + 0.10*ySpan;
-yNeedTop = yBar + 0.18*ySpan;
-
-if yNeedTop > yl(2)
-    ylim(ax, [yl(1) yNeedTop]);
-    yl = ylim(ax);
-    ySpan = yl(2) - yl(1);
-    if ~isfinite(ySpan) || ySpan <= 0
-        ySpan = 1;
-    end
-    yBar = yMaxDot + 0.08*ySpan;
-end
-
-gN = numel(R.groupNames);
-tType = '';
-if isfield(R.stats,'type')
-    tType = strtrimSafe(R.stats.type);
-end
-
-isTwo = contains(lower(tType),'student') || contains(lower(tType),'welch') || ...
-        contains(lower(tType),'two-sample') || contains(lower(tType),'t-test');
-
-if gN >= 2 && isTwo
-    x1 = 1;
-    x2 = 2;
-    tickH = 0.030*ySpan;
-
-    plot(ax, [x1 x1 x2 x2], [yBar-tickH yBar yBar yBar-tickH], '-', ...
-        'LineWidth', 2.3, 'Color', fg, 'HandleVisibility', 'off');
-
-    text(ax, (x1+x2)/2, yBar + 0.025*ySpan, stars, ...
-        'Color',fg,'FontSize',24,'FontWeight','bold', ...
-        'HorizontalAlignment','center','VerticalAlignment','bottom', ...
-        'Clipping','off');
-
-    if S.showPText
-        text(ax, (x1+x2)/2, yBar - 0.060*ySpan, sprintf('p = %.3g', p), ...
-            'Color',fg,'FontSize',15,'FontWeight','bold', ...
-            'HorizontalAlignment','center','VerticalAlignment','top', ...
-            'Clipping','off');
-    end
-else
-    txt = sprintf('%s | p=%.3g', shortType(tType), p);
-    text(ax, mean(xlim(ax)), yBar, txt, ...
-        'Color',fg,'FontSize',15,'FontWeight','bold', ...
-        'HorizontalAlignment','center','VerticalAlignment','bottom', ...
-        'Clipping','off');
-
-    if isfinite(p) && p < alpha
-        text(ax, mean(xlim(ax)), yBar + 0.060*ySpan, stars, ...
-            'Color',fg,'FontSize',24,'FontWeight','bold', ...
-            'HorizontalAlignment','center','VerticalAlignment','bottom', ...
-            'Clipping','off');
-    end
-end
-end
-function annotateStatsTopText(ax, R, S)
-p = R.stats.p;
-alpha = R.stats.alpha;
-stars = p_to_stars(p);
-[~,fg] = previewColors(S.previewStyle);
-
-xl = xlim(ax);
-yl = ylim(ax);
-x = xl(2) - 0.02*(xl(2)-xl(1));
-y = yl(2) - 0.05*(yl(2)-yl(1));
-
-txt = sprintf('%s  p=%.3g', stars, p);
-text(ax, x, y, txt, ...
-    'Color',fg,'FontSize',12,'FontWeight','bold', ...
-    'HorizontalAlignment','right','VerticalAlignment','top');
-if S.showPText
-    text(ax, x, y - 0.06*(yl(2)-yl(1)), sprintf('alpha=%.3g', alpha), ...
-        'Color',0.7*fg,'FontSize',10, ...
-        'HorizontalAlignment','right','VerticalAlignment','top');
-end
-end
-
-function s = shortType(s)
-s = strtrimSafe(s);
-if isempty(s), s = 'Test'; end
-if numel(s)>26, s = [s(1:26) '...']; end
-end
-
-function M = meanOverFrames(I, idx, dimT)
-subs = repmat({':'},1,ndims(I));
-subs{dimT} = idx;
-X = I(subs{:});
-M = mean(double(X), dimT);
-end
-
-function X = catAlong4(cellMaps)
-N = numel(cellMaps);
-sz = size(cellMaps{1});
-if numel(sz)==2
-    X = zeros(sz(1),sz(2),N);
-    for i=1:N, X(:,:,i)=double(cellMaps{i}); end
-else
-    X = zeros(sz(1),sz(2),sz(3),N);
-    for i=1:N, X(:,:,:,i)=double(cellMaps{i}); end
-end
-end
-
-function m = meanCat(cellMaps)
-X = catAlong4(cellMaps);
-m = nanmean_local(X, ndims(X));
-end
-
-function m = medianCat(cellMaps)
-X = catAlong4(cellMaps);
-m = nanmedian_local(X, ndims(X));
-end
 
 function md = nanmedian_local(X, dim)
 try
@@ -3540,76 +2596,11 @@ if strcmpi(meta.animalID,'N/A')
 end
 end
 
-function animalID = extractAnimalIDFromText(txt)
-m = parseMetaSingleText(txt);
-animalID = m.animalID;
-if strcmpi(animalID,'N/A'), animalID = ''; end
-end
 
-function sess = extractSessionFromText(txt)
-m = parseMetaSingleText(txt);
-sess = m.session;
-if strcmpi(sess,'N/A'), sess = ''; end
-end
 
-function scanID = extractScanIDFromText(txt)
-m = parseMetaSingleText(txt);
-scanID = m.scanID;
-if strcmpi(scanID,'N/A'), scanID = ''; end
-end
 
-function idx = secToIdx(s0,s1,TR,T)
-i0 = floor(s0/TR) + 1;
-i1 = floor(s1/TR);
-i0 = max(1, min(T, i0));
-i1 = max(1, min(T, i1));
-if i1 < i0
-    idx = i0;
-else
-    idx = i0:i1;
-end
-end
 
-function M = extractPSCMap(fp, b0, b1, s0, s1)
-D = loadPipelineStruct(fp);
-if ~isfield(D,'TR') || isempty(D.TR), error('Missing TR in %s', fp); end
-if ~isfield(D,'I')  || isempty(D.I),  error('Missing I in %s', fp); end
-I = D.I;
-TR = double(D.TR);
-dimT = ndims(I);
-T = size(I, dimT);
 
-bIdx = secToIdx(b0,b1,TR,T);
-sIdx = secToIdx(s0,s1,TR,T);
-
-baseMean = meanOverFrames(I, bIdx, dimT);
-sigMean  = meanOverFrames(I, sIdx, dimT);
-
-baseMean = double(baseMean);
-sigMean  = double(sigMean);
-baseMean(baseMean==0) = eps;
-M = 100 * (sigMean - baseMean) ./ baseMean;
-M(~isfinite(M)) = 0;
-end
-
-function [mapOut, cache] = getCachedPSCMap(cache, dataFile, b0, b1, s0, s1)
-key = makeCacheKey('PSC',dataFile,num2str(b0),num2str(b1),num2str(s0),num2str(s1));
-if isstruct(cache) && isfield(cache,'pscMap') && isa(cache.pscMap,'containers.Map')
-    if isKey(cache.pscMap,key)
-        mapOut = cache.pscMap(key);
-        return;
-    end
-end
-
-mapOut = extractPSCMap(dataFile, b0, b1, s0, s1);
-
-if isstruct(cache) && isfield(cache,'pscMap') && isa(cache.pscMap,'containers.Map')
-    try
-        cache.pscMap(key) = mapOut;
-    catch
-    end
-end
-end
 
 %%% =====================================================================
 %%% Group Map function %%%%
@@ -3705,86 +2696,8 @@ elseif contains(g,'VEH') || contains(g,'VEHICLE') || contains(g,'CONTROL') || co
 end
 end
 
-function pairs = exportGroupCondPairs(mapObj)
-pairs = cell(0,2);
-try
-    if isa(mapObj,'containers.Map')
-        k = keys(mapObj);
-        for i = 1:numel(k)
-            pairs(end+1,1:2) = {k{i}, mapObj(k{i})}; %#ok<AGROW>
-        end
-    end
-catch
-end
-end
 
-function mapObj = importGroupCondPairs(pairs, mapObj)
-try
-    if isempty(mapObj)
-        mapObj = containers.Map('KeyType','char','ValueType','char');
-    end
-catch
-    return;
-end
 
-if isempty(pairs)
-    return;
-end
-
-for i = 1:size(pairs,1)
-    g = strtrimSafe(pairs{i,1});
-    c = strtrimSafe(pairs{i,2});
-    if ~isempty(g) && ~isempty(c)
-        try
-            mapObj(upper(g)) = c;
-        catch
-        end
-    end
-end
-end
-
-function S = removeRowsFromState(S, sel)
-sel = unique(sel(:)');
-sel = sel(sel >= 1 & sel <= size(S.subj,1));
-if isempty(sel)
-    return;
-end
-
-oldPreviewRow = S.mapPreviewRow;
-
-S.subj(sel,:) = [];
-
-if isfield(S,'rowPacapSide') && ~isempty(S.rowPacapSide)
-    keep = true(numel(S.rowPacapSide),1);
-    keep(sel(sel <= numel(keep))) = false;
-    S.rowPacapSide = S.rowPacapSide(keep);
-end
-
-if ~isempty(S.selectedRows)
-    keepSel = setdiff(S.selectedRows(:)', sel, 'stable');
-    for k = 1:numel(keepSel)
-        keepSel(k) = keepSel(k) - sum(sel < keepSel(k));
-    end
-    S.selectedRows = keepSel;
-else
-    S.selectedRows = [];
-end
-
-if isempty(oldPreviewRow) || ~isfinite(oldPreviewRow)
-    S.mapPreviewRow = NaN;
-elseif any(sel == oldPreviewRow)
-    S.mapPreviewRow = NaN;
-else
-    S.mapPreviewRow = oldPreviewRow - sum(sel < oldPreviewRow);
-end
-
-S.lastROI = struct();
-S.lastMAP = struct();
-S.outlierKeys = {};
-S.outlierInfo = {};
-
-S = ensureRowPacapSideSize(S);
-end
 
 function gNames = sortGroupNamesStableGA(gNames, S)
 if isempty(gNames)
@@ -3878,241 +2791,12 @@ if exist(d,'dir') ~= 7
 end
 end
 
-    function d = getBundleBrowseDir(S)
-    d = '';
 
-    sel = clampSelRows(S.selectedRows, size(S.subj,1));
 
-    % 1) Strongest preference: selected rows
-    candRows = sel(:).';
 
-    % 2) If nothing selected, try active USE rows
-    if isempty(candRows)
-        candRows = find(logicalCol(S.subj,1)).';
-    end
 
-    % 3) If still nothing, try all rows
-    if isempty(candRows)
-        candRows = 1:size(S.subj,1);
-    end
 
-    for k = 1:numel(candRows)
-        r = candRows(k);
-        try
-            d = buildBundleBrowseDirFromRow(S, S.subj(r,:));
-        catch
-            d = '';
-        end
-        if exist(d,'dir') == 7
-            return;
-        end
-    end
 
-    % 4) Project root fallback
-    d = getPreferredPacapRootDir(S);
-    if exist(d,'dir') == 7
-        return;
-    end
-
-    % 5) Generic fallback
-    d = getSmartBrowseDir(S,'add');
-    end
-
-function d = buildBundleBrowseDirFromRow(S, row)
-    d = '';
-
-    info = extractRowMetaLight(row);
-
-    animalID  = strtrimSafe(info.animalID);
-    sessionID = strtrimSafe(info.session);
-    scanID    = upper(strtrimSafe(info.scanID));
-
-    animalSessFolder = '';
-    scanFolder = '';
-
-    if ~isempty(animalID) && ~strcmpi(animalID,'N/A') && ...
-       ~isempty(sessionID) && ~strcmpi(sessionID,'N/A')
-        animalSessFolder = [animalID '_' sessionID];
-    end
-
-    % THIS WAS THE MISSING PART IN YOUR CURRENT CODE
-    if ~isempty(animalSessFolder) && ~isempty(scanID) && ~strcmpi(scanID,'N/A')
-        scanFolder = [animalSessFolder '_' scanID];
-    end
-
-    % Fast exact path first
-    rootPACAP = getPreferredPacapRootDir(S);
-    if ~isempty(rootPACAP) && exist(rootPACAP,'dir') == 7 && ...
-       ~isempty(animalSessFolder) && ~isempty(scanFolder)
-
-        cands = { ...
-            fullfile(rootPACAP, animalSessFolder, scanFolder, 'GroupAnalysis', 'Bundles', 'SCM'), ...
-            fullfile(rootPACAP, animalSessFolder, scanFolder, 'GroupAnalysis', 'Bundles'), ...
-            fullfile(rootPACAP, animalSessFolder, scanFolder)};
-
-        for kk = 1:numel(cands)
-            if exist(cands{kk},'dir') == 7
-                d = cands{kk};
-                return;
-            end
-        end
-    end
-
-    % Fallback: infer from already stored file paths
-    probeList = {info.bundleFile, info.dataFile, info.roiFile};
-
-    for ii = 1:numel(probeList)
-        probe = strtrimSafe(probeList{ii});
-        if isempty(probe)
-            continue;
-        end
-
-        if exist(probe,'file') == 2 || exist(probe,'dir') == 7
-            if ~isempty(animalSessFolder) && ~isempty(scanFolder)
-                dTry = findBundleDirFromProbe(probe, animalSessFolder, scanFolder);
-                if exist(dTry,'dir') == 7
-                    d = dTry;
-                    return;
-                end
-            end
-
-            if exist(probe,'file') == 2
-                d = fileparts(probe);
-            else
-                d = probe;
-            end
-
-            if exist(d,'dir') == 7
-                return;
-            end
-        end
-    end
-
-    % Last fallback
-    try
-        if isfield(S,'opt') && isfield(S.opt,'startDir') && ~isempty(S.opt.startDir) && exist(char(S.opt.startDir),'dir') == 7
-            d = char(S.opt.startDir);
-        end
-    catch
-    end
-
-    if isempty(d) || exist(d,'dir') ~= 7
-        d = pwd;
-    end
-end
-
-function d = findAnimalFolderFromPath(startDir, animalID)
-d = startDir;
-cur = startDir;
-prev = '';
-
-animalID = upper(strtrimSafe(animalID));
-
-while ~isempty(cur) && ~strcmp(cur, prev)
-    [parent, leaf] = fileparts(cur);
-    leafU = upper(strtrimSafe(leaf));
-
-    if ~isempty(animalID)
-        if strcmp(leafU, animalID) || ...
-           (numel(leafU) > numel(animalID) && strncmp(leafU, [animalID '_'], numel(animalID)+1))
-            d = cur;
-            return;
-        end
-    end
-
-    if isempty(parent) || strcmp(parent, cur)
-        break;
-    end
-
-    prev = cur;
-    cur = parent;
-end
-end
-
-function d = findFolderBeforeAnimal(fp, animalID)
-if exist(fp,'file') == 2
-    cur = fileparts(fp);
-else
-    cur = fp;
-end
-
-if isempty(cur) || exist(cur,'dir') ~= 7
-    d = pwd;
-    return;
-end
-
-animalID = upper(strtrimSafe(animalID));
-d = cur;
-prev = '';
-
-while ~isempty(cur) && ~strcmp(cur, prev)
-    [parent, leaf] = fileparts(cur);
-    if isempty(parent) || strcmp(parent, cur)
-        break;
-    end
-
-    leafU = upper(strtrimSafe(leaf));
-    if ~isempty(animalID)
-        if strcmp(leafU, animalID) || ...
-           (numel(leafU) > numel(animalID) && strncmp(leafU, [animalID '_'], numel(animalID)+1))
-            d = parent;
-            return;
-        end
-    end
-
-    prev = cur;
-    cur = parent;
-end
-
-[parent,~] = fileparts(d);
-if ~isempty(parent) && exist(parent,'dir') == 7
-    d = parent;
-end
-end
-
-function startDir = getExcelExportStartDir(S)
-startDir = getSmartBrowseDir(S, 'save');
-end
-
-function c = conditionRowColorGA(condName)
-u = upper(strtrimSafe(condName));
-
-if contains(u,'CONDA') || strcmp(u,'A') || contains(u,'PACAP') || contains(u,'GROUPA')
-    c = [0.14 0.34 0.18];
-elseif contains(u,'CONDB') || strcmp(u,'B') || contains(u,'VEH') || contains(u,'VEHICLE') || contains(u,'CONTROL') || contains(u,'GROUPB')
-    c = [0.08 0.22 0.12];
-elseif contains(u,'BASELINE')
-    c = [0.10 0.24 0.22];
-elseif contains(u,'POST')
-    c = [0.18 0.26 0.12];
-else
-    c = [0.10 0.24 0.14];
-end
-end
-
-function f = makeField(s)
-s = strtrimSafe(s);
-
-if isempty(s)
-    s = 'Group';
-end
-
-try
-    f = matlab.lang.makeValidName(s);
-catch
-    f = regexprep(s,'[^A-Za-z0-9_]','_');
-    if isempty(f)
-        f = 'Group';
-    end
-    if ~isletter(f(1))
-        f = ['x_' f];
-    end
-end
-
-if isempty(f)
-    f = 'Group';
-end
-end
 
 function subj = guessSubjectID(txt)
 subj = '';
@@ -4146,117 +2830,6 @@ end
 subj = ['S' datestr(now,'HHMMSS')];
 end
 
-function dataFile = findDataMatNearROI(roiFile)
-dataFile = '';
-
-if nargin < 1 || isempty(roiFile)
-    return;
-end
-
-roiFile = strtrimSafe(roiFile);
-if exist(roiFile,'file') ~= 2
-    return;
-end
-
-roiDir = fileparts(roiFile);
-if isempty(roiDir) || exist(roiDir,'dir') ~= 7
-    return;
-end
-
-meta = parseMetaSingleText(roiFile);
-targetAnimal = strtrimSafe(meta.animalID);
-targetSess   = strtrimSafe(meta.session);
-targetScan   = strtrimSafe(meta.scanID);
-
-cand = dir(fullfile(roiDir,'*.mat'));
-bestScore = -inf;
-bestFile = '';
-
-for i = 1:numel(cand)
-    fp = fullfile(cand(i).folder, cand(i).name);
-
-    % skip obvious non-data files
-    if isScmGroupBundleFile(fp)
-        continue;
-    end
-
-    nmL = lower(cand(i).name);
-    if contains(nmL,'roi') || contains(nmL,'groupanalysis') || contains(nmL,'groupexport')
-        continue;
-    end
-
-    score = 0;
-    m2 = parseMetaSingleText(fp);
-
-    if ~isempty(targetAnimal) && ~strcmpi(targetAnimal,'N/A') && strcmpi(strtrimSafe(m2.animalID), targetAnimal)
-        score = score + 10;
-    end
-    if ~isempty(targetSess) && ~strcmpi(targetSess,'N/A') && strcmpi(strtrimSafe(m2.session), targetSess)
-        score = score + 5;
-    end
-    if ~isempty(targetScan) && ~strcmpi(targetScan,'N/A') && strcmpi(strtrimSafe(m2.scanID), targetScan)
-        score = score + 5;
-    end
-
-    % prefer files that at least look like main data files
-    if contains(lower(fp),'brain') || contains(lower(fp),'raw') || contains(lower(fp),'data')
-        score = score + 1;
-    end
-
-    if score > bestScore
-        bestScore = score;
-        bestFile = fp;
-    end
-end
-
-if ~isempty(bestFile)
-    dataFile = bestFile;
-    return;
-end
-
-% fallback: also try parent folder
-parDir = fileparts(roiDir);
-if ~isempty(parDir) && exist(parDir,'dir') == 7
-    cand = dir(fullfile(parDir,'*.mat'));
-    bestScore = -inf;
-    bestFile = '';
-
-    for i = 1:numel(cand)
-        fp = fullfile(cand(i).folder, cand(i).name);
-
-        if isScmGroupBundleFile(fp)
-            continue;
-        end
-
-        nmL = lower(cand(i).name);
-        if contains(nmL,'roi') || contains(nmL,'groupanalysis') || contains(nmL,'groupexport')
-            continue;
-        end
-
-        score = 0;
-        m2 = parseMetaSingleText(fp);
-
-        if ~isempty(targetAnimal) && ~strcmpi(targetAnimal,'N/A') && strcmpi(strtrimSafe(m2.animalID), targetAnimal)
-            score = score + 10;
-        end
-        if ~isempty(targetSess) && ~strcmpi(targetSess,'N/A') && strcmpi(strtrimSafe(m2.session), targetSess)
-            score = score + 5;
-        end
-        if ~isempty(targetScan) && ~strcmpi(targetScan,'N/A') && strcmpi(strtrimSafe(m2.scanID), targetScan)
-            score = score + 5;
-        end
-
-        if score > bestScore
-            bestScore = score;
-            bestFile = fp;
-        end
-    end
-
-    if ~isempty(bestFile)
-        dataFile = bestFile;
-    end
-end
-end
 
 function P = studio_resolve_paths(studio, moduleName, datasetLabel)
 if nargin < 1 || isempty(studio) || ~isstruct(studio)
@@ -4328,93 +2901,9 @@ root = fullfile(rootBase, 'AnalysedData');
 safeMkdirIfNeeded(root);
 end
 
-function d = getPreferredPacapRootDir(S)
-    d = '';
 
-    if ispc
-        cands = {getpref('deConfUSIon','pacapAnalysedRoot','Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData\AprilStayLeuven\PACAP')};
-    else
-        cands = {};
-    end
 
-    try
-        if isfield(S,'opt') && isfield(S.opt,'studio') && isstruct(S.opt.studio)
-            if isfield(S.opt.studio,'exportPath') && ~isempty(S.opt.studio.exportPath)
-                cands{end+1} = char(S.opt.studio.exportPath); %#ok<AGROW>
-            end
-            if isfield(S.opt.studio,'loadedPath') && ~isempty(S.opt.studio.loadedPath)
-                cands{end+1} = char(S.opt.studio.loadedPath); %#ok<AGROW>
-            end
-        end
-    catch
-    end
 
-    for i = 1:numel(cands)
-        cc = strtrimSafe(cands{i});
-        if ~isempty(cc) && exist(cc,'dir') == 7
-            d = cc;
-            return;
-        end
-    end
-end
-
-    function updateMapGroupSideLabels()
-    S0 = guidata(hFig);
-
-    if isfield(S0,'hMapPreviewSideLabel') && ishghandle(S0.hMapPreviewSideLabel)
-        set(S0.hMapPreviewSideLabel,'String','Inj side:','FontSize',10);
-    end
-
-    if isfield(S0,'hMapRefSideLabel') && ishghandle(S0.hMapRefSideLabel)
-        set(S0.hMapRefSideLabel,'String','Ref hemi:','FontSize',10);
-    end
-end
-
-    function [S, nApplied] = applyUseStateToMatchingRows(S, rRef, useVal)
-    nApplied = 0;
-
-    rows = findMatchingRowsByMetaOrBundle(S, rRef);
-    if isempty(rows)
-        rows = rRef;
-    end
-
-    for i = 1:numel(rows)
-        rr = rows(i);
-        S.subj{rr,1} = logical(useVal);
-
-        if useVal
-            st = lower(strtrimSafe(S.subj{rr,9}));
-            if contains(st,'not used') || contains(st,'excluded')
-                S.subj{rr,9} = '';
-            end
-        else
-            S.subj{rr,9} = 'Not used';
-        end
-
-        nApplied = nApplied + 1;
-    end
-
-    S = sanitizeTableStruct(S);
-    S = ensureRowPacapSideSize(S);
-end
-
-    function colors = buildMapSideTableColors(rows, mapRows)
-    n = size(rows,1);
-    colors = repmat([0.12 0.12 0.12], max(n,2), 1);
-
-    for i = 1:n
-        if isempty(mapRows) || i > numel(mapRows) || ~isfinite(mapRows(i))
-            colors(i,:) = [0.12 0.12 0.12];
-            continue;
-        end
-
-        if logicalCellValue(rows{i,1})
-            colors(i,:) = [0.12 0.30 0.16];
-        else
-            colors(i,:) = [0.35 0.12 0.12];
-        end
-    end
-end
 
 function safeMkdirIfNeeded(d)
 if isempty(d), return; end
@@ -4473,107 +2962,11 @@ if numel(s) > maxLen
 end
 end
 
-   function tf = metaLooseFieldMatch(a, b)
-    a = strtrimSafe(a);
-    b = strtrimSafe(b);
-
-    aUnknown = isempty(a) || strcmpi(a,'N/A');
-    bUnknown = isempty(b) || strcmpi(b,'N/A');
-
-    % both unknown -> okay, treat as equal
-    if aUnknown && bUnknown
-        tf = true;
-        return;
-    end
-
-    % one known and one unknown -> NOT a match
-    if aUnknown || bUnknown
-        tf = false;
-        return;
-    end
-
-    % both known -> exact match only
-    tf = strcmpi(a, b);
-end
-
-    function idx = findBestMetaBundleRow(S0, metaIn, preferPacap, requireEmptyBundle)
-        idx = [];
-        firstAny = [];
-
-        for r = 1:size(S0.subj,1)
-            metaRow = extractMetaFromSources(S0.subj{r,2}, S0.subj{r,6}, S0.subj{r,7}, S0.subj{r,8});
-
-            if ~metaMatchesGA(metaRow, metaIn)
-                continue;
-            end
-
-            if isempty(firstAny)
-                firstAny = r;
-            end
-
-            if requireEmptyBundle && ~isempty(strtrimSafe(S0.subj{r,8}))
-                continue;
-            end
-
-            if preferPacap
-                if isPacapRowGA(S0.subj(r,:))
-                    idx = r;
-                    return;
-                end
-            else
-                idx = r;
-                return;
-            end
-        end
-
-        if ~requireEmptyBundle && isempty(idx)
-            idx = firstAny;
-        end
-    end
-
-    function tf = isPacapRowGA(row)
-        grp = upper(strtrimSafe(row{3}));
-        cnd = upper(strtrimSafe(row{4}));
-
-        tf = contains(grp,'PACAP') || contains(grp,'GROUPA') || strcmp(grp,'A') || ...
-             contains(cnd,'CONDA') || strcmp(cnd,'A');
-    end
-
-    function row = makeEmptyGARow(subj, gdef, cdef, S0)
-        row = {true, subj, gdef, cdef, '', '', '', '', ''};
-        if get(S0.hAutoPair,'Value') == 1
-            row{5} = subj;
-        end
-    end
 
 
-function colors = buildMapSideTableColorsDisplayOnly(rows, mapRows)
-% Fallback table coloring helper for Group Maps side table.
-% Does not require S, so it is safe in split modules.
 
-    n = size(rows,1);
-    colors = repmat([0.12 0.12 0.12], max(n,2), 1);
 
-    for i = 1:n
-        if isempty(mapRows) || i > numel(mapRows) || ~isfinite(mapRows(i))
-            colors(i,:) = [0.12 0.12 0.12];
-            continue;
-        end
 
-        side = '';
-        try
-            side = strtrimSafe(rows{i,4});
-        catch
-            side = '';
-        end
-
-        if strcmpi(side,'Unknown') || isempty(side) || strcmp(side,'-')
-            colors(i,:) = [0.28 0.16 0.08];
-        else
-            colors(i,:) = [0.12 0.30 0.16];
-        end
-    end
-end
 function updatePreviewAxes(varargin)
 % Safe fallback for GroupAnalysis ROI preview axes styling.
 % This is intentionally simple and GUI-safe.

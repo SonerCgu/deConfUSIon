@@ -44,3 +44,9 @@ cleanup_reports/
 !allen_brain_atlas.mat
 Thumbs.db
 .DS_Store
+
+# added by cleanup phase 1
+probe_smooth_backup/
+probe_aspect_backup_*/
+probe_aspect_patch_data.txt
+_cleanup_backup/

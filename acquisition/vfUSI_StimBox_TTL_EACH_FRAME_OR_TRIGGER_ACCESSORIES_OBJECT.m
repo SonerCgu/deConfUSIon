@@ -12,18 +12,24 @@ classdef vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT < handle
     %   - user stop requests
     %   - motor scheduling inside a trial
     %
-    % IMPORTANT FIX IN THIS VERSION
+    % CALLBACK CONTRACT IN THIS VERSION
     % -------------------------------------------------------------
-    % processRF may pass RF/image data, not a frame index.
-    % Also, processRF may expect the callback to return data.
+    % The OpenfUS reference object is:
+    %       function newImage(PO, imag)
+    % where imag is the FRAME INDEX and nothing is returned.
     %
-    % Therefore:
-    %   - newImage(obj, rfIn) returns rfOut = rfIn unchanged
-    %   - frame counting is handled internally by frame_counter
+    % newImage here handles both contracts:
+    %   - uses the supplied value as the frame index when it looks like
+    %     one (numeric real finite scalar integer >= 1);
+    %   - otherwise falls back to the internal frame_counter;
+    %   - always assigns rfOut = rfIn, so calling with nargout 0 or 1
+    %     both work and no "Output argument not assigned" error occurs.
     %
-    % This avoids callback contract mismatch which can cause:
-    %   Output argument "I" (and maybe others) not assigned during
-    %   call to "echoScan/doppler".
+    % PROBE SUPPORT
+    % -------------------------------------------------------------
+    % Works with 2D linear and 3D volumetric probes. The only probe
+    % dependency here is bookkeeping (probe_type / tr_unit_s);
+    % scheduling is per acquired frame/volume in both cases.
 
     properties
         port = []
@@ -89,6 +95,33 @@ classdef vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT < handle
         pulsepal_trigger_frames = []
 
         % -------------------------------------------------------------
+        % Probe type (2D linear vs 3D matrix / volumetric)
+        % -------------------------------------------------------------
+        % probe_type    : '2D' or '3D'
+        % tr_unit_s     : seconds per nblocksImage unit
+        %                 2D -> 0.02, 3D -> 0.03
+        % These are informational for the object itself, but they are
+        % stored so that logs and metadata stay consistent.
+        % -------------------------------------------------------------
+        probe_type = '2D'
+        tr_unit_s = 0.02
+
+        % -------------------------------------------------------------
+        % Frame index source
+        %
+        % The company reference object uses:
+        %     function newImage(PO, imag)
+        % where imag IS the frame index supplied by echoScan.
+        %
+        % When accept_external_frame_index is true, newImage uses the
+        % supplied value when it looks like a valid frame index, and
+        % falls back to the internal counter otherwise (for example when
+        % a version of processRF passes RF data instead).
+        % -------------------------------------------------------------
+        accept_external_frame_index = true
+        external_index_seen = false
+
+        % -------------------------------------------------------------
         % General
         % -------------------------------------------------------------
         verbose = true
@@ -108,6 +141,11 @@ classdef vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT < handle
         motor_frames_per_position = NaN
         motor_periodic = false
         motor_settle_pause_s = 0.05
+
+        % When false, in-scan motor moves are issued without blocking the
+        % frame callback (Zaber waitUntilIdle = false). This keeps the
+        % acquisition running while the stage travels.
+        motor_wait_until_idle = true
 
         motor_start_frame = 1
         motor_duration_frames = 1
@@ -138,6 +176,7 @@ classdef vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT < handle
 
         function prepareTrial(obj)
             obj.frame_counter = 0;
+            obj.external_index_seen = false;
             obj.motor_current_index = 1;
             obj.motor_move_count = 0;
             obj.motor_last_move_frame = NaN;
@@ -204,19 +243,55 @@ classdef vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT < handle
 
         function rfOut = newImage(obj, rfIn)
             % ---------------------------------------------------------
-            % IMPORTANT:
-            % processRF may pass RF/image data, not a frame number.
-            % Some implementations also expect callback output.
+            % DUAL-CONTRACT CALLBACK
             %
-            % So:
-            %   1) return data unchanged
-            %   2) use internal frame counter for scheduling
+            % The company reference object is:
+            %       function newImage(PO, imag)
+            % i.e. echoScan passes the FRAME INDEX and expects no output.
+            %
+            % Other builds pass RF/image data and may expect the callback
+            % to return it. This method handles both:
+            %
+            %   - if the argument looks like a frame index
+            %     (numeric, real, scalar, finite, >= 1) it is used
+            %     directly, so triggers stay locked to the scanner's own
+            %     frame numbering even if a frame is dropped;
+            %   - otherwise the internal counter is used;
+            %   - the argument is always returned unchanged, which is
+            %     harmless when the caller requests no output.
+            %
+            % Declaring rfOut and always assigning it means MATLAB is
+            % happy whether echoScan calls this with nargout 0 or 1.
             % ---------------------------------------------------------
             rfOut = rfIn;
 
             try
-                obj.frame_counter = obj.frame_counter + 1;
-                imag = obj.frame_counter;
+                imag = [];
+
+                if obj.accept_external_frame_index && nargin > 1 && ...
+                        isnumeric(rfIn) && isscalar(rfIn) && isreal(rfIn) && ...
+                        isfinite(rfIn) && rfIn >= 1 && rfIn == round(rfIn)
+
+                    % Scanner supplied a usable frame index.
+                    imag = double(rfIn);
+                    obj.frame_counter = imag;
+
+                    if ~obj.external_index_seen
+                        obj.external_index_seen = true;
+                        obj.localEmitEvent(sprintf( ...
+                            'Frame index source: scanner (first index = %d).', imag));
+                    end
+                end
+
+                if isempty(imag)
+                    obj.frame_counter = obj.frame_counter + 1;
+                    imag = obj.frame_counter;
+
+                    if obj.frame_counter == 1
+                        obj.localEmitEvent( ...
+                            'Frame index source: internal counter (callback did not pass a frame index).');
+                    end
+                end
 
                 % -----------------------------------------------------
                 % User stop check
@@ -498,7 +573,30 @@ classdef vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT < handle
 
         function localMoveMotorToPosition(obj, targetPos, imag, idxLabel, totalLabel) %#ok<INUSD>
             try
-                obj.motor_axis.moveAbsolute(targetPos, zaber.motion.Units.LENGTH_MILLIMETRES);
+                % ---------------------------------------------------------
+                % In continuous mode the callback runs between frames, so a
+                % blocking move stalls the acquisition for the whole travel
+                % time. When motor_wait_until_idle is false the move is
+                % issued asynchronously (Zaber waitUntilIdle = false) and
+                % the stage travels while imaging continues.
+                % ---------------------------------------------------------
+                movedAsync = false;
+
+                if ~obj.motor_wait_until_idle
+                    try
+                        obj.motor_axis.moveAbsolute(targetPos, ...
+                            zaber.motion.Units.LENGTH_MILLIMETRES, false);
+                        movedAsync = true;
+                    catch
+                        % Older Zaber Motion builds do not accept the
+                        % waitUntilIdle argument. Fall back to blocking.
+                        movedAsync = false;
+                    end
+                end
+
+                if ~movedAsync
+                    obj.motor_axis.moveAbsolute(targetPos, zaber.motion.Units.LENGTH_MILLIMETRES);
+                end
 
                 if ~isempty(obj.motor_settle_pause_s) && isnumeric(obj.motor_settle_pause_s) && obj.motor_settle_pause_s > 0
                     pause(obj.motor_settle_pause_s);

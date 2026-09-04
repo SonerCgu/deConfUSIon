@@ -2894,25 +2894,6 @@ end
         rgb = ind2rgb(idx, gray(256));
     end
 
-    function [U, label] = loadUnderlayInteractive()
-        U = [];
-        label = '';
-
-        [f,p] = uigetfile({'*.mat;*.nii;*.nii.gz;*.png;*.jpg;*.tif;*.tiff', ...
-                           'Underlay files'}, 'Select underlay file');
-        if isequal(f,0)
-            return;
-        end
-        fullf = fullfile(p,f);
-
-        U = loadUnderlayFile(fullf);
-        if isempty(U)
-            return;
-        end
-
-        [~,nm,ext] = fileparts(f);
-        label = ['File: ' nm ext];
-    end
 
     function U = loadUnderlayFile(f)
         U = [];
@@ -3257,7 +3238,11 @@ function syncImageAxesToCurrentFrame(C)
     axis(ax,'off');
     % ===== 3D PROBE ASPECT FIX (nZ>1 only; 2D / 2D+motor untouched) =====
     if exist('nZ','var') && nZ > 1
-        probeViewAspect = 1.0;   % <-- EDIT: >1 makes the tall probe image wider/shorter
+        probeViewAspect = 1.0;   % DECONF_ASPECT_V1
+        try
+            if exist('par','var'), probeViewAspect = deConfUSIon_view_aspect(par);
+            else,                  probeViewAspect = deConfUSIon_view_aspect(); end
+        catch, probeViewAspect = 1.0; end
         if exist('par','var') && isstruct(par) && isfield(par,'probeViewAspect') ...
                 && isscalar(par.probeViewAspect) && isfinite(par.probeViewAspect) && par.probeViewAspect > 0
             probeViewAspect = double(par.probeViewAspect);

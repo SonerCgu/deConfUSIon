@@ -1458,44 +1458,6 @@ function X = detrendColumns(X)
     end
 end
 
-function h = xlineCompat(x, varargin)
-    ax = gca;
-    col = 'k';
-    lw  = 1.5;
-    ls  = '-';
-
-    if ~isempty(varargin) && ischar(varargin{1}) && numel(varargin{1}) <= 2
-        col = varargin{1};
-        varargin(1) = [];
-    end
-
-    k = 1;
-    while k <= numel(varargin)
-        if ischar(varargin{k})
-            switch lower(varargin{k})
-                case 'color'
-                    col = varargin{k+1};
-                    k = k + 2;
-                    continue;
-                case 'linewidth'
-                    lw = varargin{k+1};
-                    k = k + 2;
-                    continue;
-                case 'linestyle'
-                    ls = varargin{k+1};
-                    k = k + 2;
-                    continue;
-            end
-        end
-        k = k + 1;
-    end
-
-    holdState = ishold(ax);
-    hold(ax,'on');
-    yl = get(ax,'YLim');
-    h = plot(ax, [x x], yl, 'Color', col, 'LineWidth', lw, 'LineStyle', ls);
-    if ~holdState, hold(ax,'off'); end
-end
 
 function h = ylineCompat(y, varargin)
     ax = gca;

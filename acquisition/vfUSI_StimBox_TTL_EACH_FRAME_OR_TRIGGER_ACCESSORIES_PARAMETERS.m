@@ -329,6 +329,32 @@ H.ePause = localMakeLabeledEdit(pAcq, ...
     'Pause (s)', [xLlbl y4 0.18 0.055], [xLedt y4-0.008 wLedt 0.075], ...
     '1', C, panelFs, C.panel);
 
+% ------------------------------------------------------------------
+% Probe type selector
+%
+% 2D probe -> TR = nblocksImage x 0.02 s
+% 3D probe -> TR = nblocksImage x 0.03 s
+% ------------------------------------------------------------------
+uicontrol(pAcq, 'Style', 'text', ...
+    'Units', 'normalized', ...
+    'Position', [xRlbl y4 0.16 0.055], ...
+    'String', 'Probe', ...
+    'HorizontalAlignment', 'left', ...
+    'FontSize', panelFs, ...
+    'FontWeight', 'bold', ...
+    'ForegroundColor', C.titleAcq, ...
+    'BackgroundColor', C.panel);
+
+H.pProbeType = uicontrol(pAcq, 'Style', 'popupmenu', ...
+    'Units', 'normalized', ...
+    'Position', [xRedt y4-0.012 wRedt+0.06 0.075], ...
+    'String', {'2D probe','3D probe'}, ...
+    'Value', 1, ...
+    'FontSize', panelFs, ...
+    'BackgroundColor', C.editbg, ...
+    'ForegroundColor', [0 0 0], ...
+    'Callback', @(src,evt)localUpdateTRDisplay(fig));
+
 H.hCalcTitle = uicontrol(pAcq, 'Style', 'text', ...
     'Units', 'normalized', ...
     'Position', [xLlbl y5 0.28 0.055], ...
@@ -766,6 +792,28 @@ H.eMStep = localMakeLabeledEdit(pMotor, ...
 H.eMFrames = localMakeLabeledEdit(pMotor, ...
     'Frames/slice', [xRlbl y4 0.18 0.055], [xRedt y4-0.008 wRedt 0.075], ...
     '50', C, panelFs, C.panel);
+
+% ------------------------------------------------------------------
+% Slice timing controls (split mode)
+%
+% Fast pipeline: the move to the next slice is issued as soon as the
+% current scan ends, so the stage travels while the file is written.
+% ------------------------------------------------------------------
+H.cMotorFastPipeline = uicontrol(pMotor, 'Style', 'checkbox', ...
+    'Units', 'normalized', ...
+    'Position', [xLlbl y5 0.42 0.06], ...
+    'String', 'Fast slice pipeline', ...
+    'Value', 1, ...
+    'FontSize', panelFs, ...
+    'FontWeight', 'bold', ...
+    'ForegroundColor', C.titleMotor, ...
+    'BackgroundColor', C.panel, ...
+    'TooltipString', ...
+    'Overlap the next motor move with the current file save to remove dead time between slices.');
+
+H.eMotorSettle = localMakeLabeledEdit(pMotor, ...
+    'Settle (s)', [xRlbl y5 0.18 0.055], [xRedt y5-0.008 wRedt 0.075], ...
+    '0.02', C, panelFs, C.panel);
 
 H.cMotorRepeat = uicontrol(pMotor, 'Style', 'checkbox', ...
     'Units', 'normalized', ...
@@ -1297,7 +1345,7 @@ function localRefreshMotorPanel(fig)
 
     motorHandlesAlways = [ ...
         H.pMotorAcqMode H.pMotorMode H.eMotorCom ...
-        H.eMStart H.cReturnZero H.bReadMotor];
+        H.eMStart H.cReturnZero H.bReadMotor H.eMotorSettle];
 
     motorHandlesStepped = [H.eMEnd H.eMStep H.eMFrames];
 
@@ -1306,6 +1354,10 @@ function localRefreshMotorPanel(fig)
     if motorOn
         localSetHandleGroup(motorHandlesStepped, steppedMode);
     end
+
+    % The fast slice pipeline only applies to split mode, where the motor
+    % moves between separate scans.
+    localSetHandleGroup(H.cMotorFastPipeline, motorOn && splitMode);
 
     % Old continuous-only controls.
     % In split mode they are not used because each slice is its own scan.
@@ -1378,11 +1430,13 @@ function localUpdateTRDisplay(fig)
     H = guidata(fig);
 
     nblocks = str2double(get(H.eNBlocks, 'String'));
+    trUnit = localGetTRUnit(fig);
+
     if isnan(nblocks) || nblocks <= 0
         tr = NaN;
         set(H.hTR, 'String', 'NA');
     else
-        tr = nblocks * 0.02;
+        tr = nblocks * trUnit;
         set(H.hTR, 'String', sprintf('%.3f s', tr));
     end
 
@@ -1436,13 +1490,98 @@ function localCalcFramesToSec(fig)
     set(H.eCalcSec, 'String', sprintf('%.3f', secVal));
 end
 
+function tf = localIsZaberAvailableGUI()
+    % Runtime check for the Zaber Motion toolbox.
+    %
+    % Deliberately does NOT use an import statement: MATLAB resolves
+    % imports at parse time, which would prevent this GUI from opening
+    % at all on a machine where the Zaber toolbox is not installed.
+
+    persistent cachedTF
+
+    if ~isempty(cachedTF)
+        tf = cachedTF;
+        return;
+    end
+
+    tf = false;
+
+    try
+        if exist('zaber.motion.Units', 'class') == 8
+            tf = true;
+        end
+    catch
+    end
+
+    if ~tf
+        try
+            zaber.motion.Units.LENGTH_MILLIMETRES;
+            tf = true;
+        catch
+            tf = false;
+        end
+    end
+
+    cachedTF = tf;
+end
+
 function tr = localGetTR(fig)
     H = guidata(fig);
     nblocks = str2double(get(H.eNBlocks, 'String'));
     if isnan(nblocks) || nblocks <= 0
         tr = NaN;
     else
-        tr = nblocks * 0.02;
+        tr = nblocks * localGetTRUnit(fig);
+    end
+end
+
+function trUnit = localGetTRUnit(fig)
+    % Seconds per nblocksImage unit.
+    %   2D probe -> 0.02
+    %   3D probe -> 0.03
+
+    trUnit = 0.02;
+
+    try
+        H = guidata(fig);
+
+        if ~isfield(H, 'pProbeType') || ~ishandle(H.pProbeType)
+            return;
+        end
+
+        items = get(H.pProbeType, 'String');
+        idx = get(H.pProbeType, 'Value');
+
+        if iscell(items) && idx >= 1 && idx <= numel(items)
+            if ~isempty(strfind(upper(items{idx}), '3D'))
+                trUnit = 0.03;
+            end
+        end
+    catch
+    end
+end
+
+function probeStr = localGetProbeType(fig)
+    % Returns '2D' or '3D'.
+
+    probeStr = '2D';
+
+    try
+        H = guidata(fig);
+
+        if ~isfield(H, 'pProbeType') || ~ishandle(H.pProbeType)
+            return;
+        end
+
+        items = get(H.pProbeType, 'String');
+        idx = get(H.pProbeType, 'Value');
+
+        if iscell(items) && idx >= 1 && idx <= numel(items)
+            if ~isempty(strfind(upper(items{idx}), '3D'))
+                probeStr = '3D';
+            end
+        end
+    catch
     end
 end
 
@@ -1563,10 +1702,21 @@ function localTryReadMotorPos(fig, quiet)
 
     connection = [];
     try
-        import zaber.motion.ascii.Connection;
-        import zaber.motion.Units;
+        % IMPORTANT: no "import zaber.motion..." here.
+        % MATLAB resolves imports at PARSE time, so a static import would
+        % stop this entire GUI file from loading on a machine without the
+        % Zaber Motion toolbox. Fully qualified names are used instead.
 
-        connection = Connection.openSerialPort(comName);
+        if ~localIsZaberAvailableGUI()
+            localSetCurrentPos(fig, NaN);
+            if ~quiet
+                localAppendLog(fig, ...
+                    'Zaber Motion toolbox not found: motor position cannot be read.');
+            end
+            return;
+        end
+
+        connection = zaber.motion.ascii.Connection.openSerialPort(comName);
         deviceList = connection.detectDevices();
 
         if isempty(deviceList)
@@ -1601,7 +1751,7 @@ function localTryReadMotorPos(fig, quiet)
         end
 
         axis = device.getAxis(axisIdx);
-        posMM = axis.getPosition(Units.LENGTH_MILLIMETRES);
+        posMM = axis.getPosition(zaber.motion.Units.LENGTH_MILLIMETRES);
 
     setappdata(fig, 'motorCurrentPosAbsMM', posMM);
 localSetCurrentPos(fig, posMM);
@@ -1768,6 +1918,7 @@ set(H.pSaveOwner, 'Value', 1);   % 1 = Soner, 2 = Yan, 3 = Guest
     set(H.eNTrials, 'String', '1');
     set(H.eNBlocks, 'String', '16');
     set(H.ePause, 'String', '1');
+    set(H.pProbeType, 'Value', 1);   % 1 = 2D probe, 2 = 3D probe
 
     % StimBox
     set(H.cStimEnable, 'Value', 0);
@@ -1836,6 +1987,9 @@ set(H.eMStep, 'String', '0.5');
 set(H.eMFrames, 'String', '50');    % frames per slice
 set(H.cPeriodic, 'Value', 0);
 set(H.cReturnZero, 'Value', 1);
+
+set(H.cMotorFastPipeline, 'Value', 1);
+set(H.eMotorSettle, 'String', '0.02');
     % Calculator
     set(H.eCalcSec, 'String', '10');
     set(H.eCalcFrames, 'String', '31');
@@ -1877,6 +2031,10 @@ cfg.output_root = 'C:\Data';
     cfg.n_trials     = localParseNumeric(get(H.eNTrials, 'String'), 'Trials');
     cfg.nblocksImage = localParseNumeric(get(H.eNBlocks, 'String'), 'nblocksImage');
     cfg.time_pause   = localParseNumeric(get(H.ePause, 'String'), 'Pause');
+
+    % Probe type drives the TR unit: 2D = 0.02 s, 3D = 0.03 s per block.
+    cfg.probe_type = localGetProbeType(fig);
+    cfg.tr_unit_s  = localGetTRUnit(fig);
 
     % StimBox
     cfg.stimbox = struct();
@@ -1971,7 +2129,26 @@ end
  cfg.motor.frames_per_position = localParseNumeric(get(H.eMFrames, 'String'), 'Frames per slice');
     cfg.motor.periodic = logical(get(H.cPeriodic, 'Value'));
     cfg.motor.return_to_zero = logical(get(H.cReturnZero, 'Value'));
-    cfg.motor.settle_pause_s = 0.05;  % reduced split-mode motor settling pause
+
+    % -------------------------------------------------------------
+    % Slice timing
+    %
+    % settle_pause_s : pause after the stage reports idle, before the
+    %                  next acquisition starts. Keep small.
+    % fast_pipeline  : overlap the next motor move with the current
+    %                  file save so there is no dead time between
+    %                  slices.
+    % -------------------------------------------------------------
+    settleVal = localParseNumericNoError(get(H.eMotorSettle, 'String'));
+    if isnan(settleVal) || settleVal < 0
+        settleVal = 0.02;
+    end
+    cfg.motor.settle_pause_s = settleVal;
+
+    cfg.motor.fast_pipeline = logical(get(H.cMotorFastPipeline, 'Value'));
+
+    % In continuous mode, do not block the frame callback during travel.
+    cfg.motor.wait_until_idle_in_scan = false;
 
     % Optional compatibility metadata
     if cfg.stimbox.enable
@@ -2522,7 +2699,9 @@ function localShowHelpWindow()
         'OpenfUS Trigger Controller - Help\n\n' ...
         '1) Acquisition\n' ...
         '   - Frames / trial: total number of acquired frames in one trial.\n' ...
-        '   - nblocksImage: determines TR for a 2D probe as TR = nblocksImage x 0.02 s.\n' ...
+        '   - Probe: select 2D or 3D. This sets the TR unit used everywhere.\n' ...
+        '   - nblocksImage: TR = nblocksImage x 0.02 s for a 2D probe,\n' ...
+        '     and TR = nblocksImage x 0.03 s for a 3D probe.\n' ...
         '   - Trials: number of repeated acquisitions.\n' ...
         '   - Pause (s): pause between trials.\n\n' ...
         '2) StimBox\n' ...
@@ -2612,8 +2791,8 @@ function localEditJournalNote(fig)
 
     defaultTemplate = sprintf([ ...
         'Experimental Scheme: Baseline 5 min, Injection 10 min, Post-injection 30 min\n' ...
-        'Left: (µM, µL, µL/min)\n' ...
-        'Right: (µM, µL, µL/min)\n' ...
+        'Left: (uM, uL, uL/min)\n' ...
+        'Right: (uM, uL, uL/min)\n' ...
         'Notes: ']);
 
     if isempty(strtrim(prevNote))

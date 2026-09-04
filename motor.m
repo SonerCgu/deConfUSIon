@@ -1681,60 +1681,6 @@ end
 
 end
 
-function motor_scale_reconstruction_dialog(dlg, sx, sy, fontScale)
-    if nargin < 2 || isempty(sx), sx = 1.0; end
-    if nargin < 3 || isempty(sy), sy = sx; end
-    if nargin < 4 || isempty(fontScale), fontScale = max(sx,sy); end
-
-    try
-        hs = findall(dlg);
-    catch
-        return;
-    end
-
-    for ii = 1:numel(hs)
-        h = hs(ii);
-        try
-            if isequal(h, dlg)
-                continue;
-            end
-        catch
-        end
-
-        try
-            typ = get(h,'Type');
-        catch
-            typ = '';
-        end
-
-        if ~(strcmpi(typ,'uicontrol') || strcmpi(typ,'uipanel'))
-            continue;
-        end
-
-        try
-            oldUnits = get(h,'Units');
-            set(h,'Units','pixels');
-            p = get(h,'Position');
-            if isnumeric(p) && numel(p) >= 4
-                p(1) = round(p(1) * sx);
-                p(2) = round(p(2) * sy);
-                p(3) = round(p(3) * sx);
-                p(4) = round(p(4) * sy);
-                set(h,'Position',p);
-            end
-            set(h,'Units',oldUnits);
-        catch
-        end
-
-        try
-            fs = get(h,'FontSize');
-            if isnumeric(fs) && isfinite(fs) && fs > 0
-                set(h,'FontSize',max(10, round(fs * fontScale)));
-            end
-        catch
-        end
-    end
-end
 
 
 
