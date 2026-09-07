@@ -36,6 +36,11 @@ for i = 1:numel(keys)
     end
 
     if isempty(fullName), fullName = key; end
+    source='';
+    for f={'savedFile','lazyFile'}
+        if isfield(d,f{1}) && ~isempty(d.(f{1})), source=d.(f{1}); break; end
+    end
+    fullName=deConfUSIon_best_visible_dataset_name(fullName,d,source);
 
     try
         if isfield(d,'displayNameShort') && ~isempty(d.displayNameShort)

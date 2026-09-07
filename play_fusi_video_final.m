@@ -254,7 +254,7 @@ fig = figure('Color','k', ...
     'MenuBar','none', ...
     'ToolBar','none');
 % HUMoR_FORCE_FULLSCREEN_PATCH32
-try, deConfUSIon_force_fullscreen_fig(fig); catch, end
+try, deConfUSIon_utils('deConfUSIon_force_fullscreen_fig',fig); catch, end
 
 
 set(fig,'DefaultUicontrolFontName','Arial');
@@ -2395,6 +2395,7 @@ end
 % HELP
 % =========================================================
     function showHelpDialog(~,~)
+        deConfUSIon_ui('help','Video'); return;
         hf = figure('Name','Help - fUSI Video GUI', ...
             'Color',[0.06 0.06 0.06], ...
             'MenuBar','none','ToolBar','none', ...
@@ -3240,8 +3241,8 @@ function syncImageAxesToCurrentFrame(C)
     if exist('nZ','var') && nZ > 1
         probeViewAspect = 1.0;   % DECONF_ASPECT_V1
         try
-            if exist('par','var'), probeViewAspect = deConfUSIon_view_aspect(par);
-            else,                  probeViewAspect = deConfUSIon_view_aspect(); end
+            if exist('par','var'), probeViewAspect = deConfUSIon_utils('deConfUSIon_view_aspect',par);
+            else,                  probeViewAspect = deConfUSIon_utils('deConfUSIon_view_aspect'); end
         catch, probeViewAspect = 1.0; end
         if exist('par','var') && isstruct(par) && isfield(par,'probeViewAspect') ...
                 && isscalar(par.probeViewAspect) && isfinite(par.probeViewAspect) && par.probeViewAspect > 0
@@ -4280,13 +4281,7 @@ end
         Rout3  = imref3d(outSize3);
 
         if ndims(X) == 4
-            nTT = size(X,4);
-            Y = zeros([outSize3 nTT], 'single');
-
-            for tt = 1:nTT
-                Y(:,:,:,tt) = imwarp(single(X(:,:,:,tt)), ...
-                    tform3, 'linear', 'OutputView', Rout3);
-            end
+            Y=AtlasRegistration('warp',X,T);
             return;
         end
 

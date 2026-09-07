@@ -34,6 +34,9 @@ for ii = 1:numel(figs)
     if isempty(kind)
         continue;
     end
+    % Apply the shared action-color hierarchy after the popup has created its
+    % controls: Help blue, Run/Apply green, Cancel/Close red.
+    try, deConfUSIon_ui('style',f); catch, end
 
     try
         localPolishFigure(f,kind);
@@ -389,4 +392,3 @@ for ii = 1:numel(hs)
     end
 end
 end
-

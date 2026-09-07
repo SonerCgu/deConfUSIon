@@ -1,4 +1,9 @@
-function standardizedAnalysis(studioFig)
+function out = standardizedAnalysis(studioFig)
+% Programmatic preset query: steps = standardizedAnalysis('A') through ('G').
+out=[];
+if nargin>0 && ischar(studioFig) && numel(studioFig)==1 && any(upper(studioFig)=='ABCDEFG')
+    out=presetSteps(upper(studioFig)); return;
+end
 % standardizedAnalysis.m - deConfUSIon standardized workflow manager
 % V11 clean stable version: no nested-function/end-style mix.
 % Row click only selects. Run checkbox only changes when checkbox is clicked.
@@ -18,8 +23,8 @@ if ~isempty(old)
 end
 
 ss = get(0,'ScreenSize');
-w = max(1350,round(ss(3)*0.96));
-h = max(830,round(ss(4)*0.90));
+w = min(ss(3)-40,max(1050,round(ss(3)*0.96)));
+h = min(ss(4)-80,max(680,round(ss(4)*0.90)));
 x = max(1,round((ss(3)-w)/2));
 y = max(1,round((ss(4)-h)/2));
 
@@ -37,7 +42,8 @@ movegui(fig,'center');
 S = struct();
 S.fig = fig;
 S.studioFig = studioFig;
-S.steps = makeDefaultSteps();
+S.steps = presetSteps('A');
+S.presetKey='A';
 S.selectedRow = 1;
 S.listPanel = [];
 S.paramPanel = [];
@@ -56,14 +62,14 @@ uicontrol(fig,'Style','text', ...
     'Position',[0.015 0.935 0.55 0.050], ...
     'BackgroundColor',[0.020 0.025 0.040], ...
     'ForegroundColor',[1.00 0.68 0.22], ...
-    'FontSize',32, ...
+    'FontSize',24, ...
     'FontWeight','bold', ...
     'HorizontalAlignment','left');
 
 uicontrol(fig,'Style','text', ...
-    'String','Option A = PCA drop PC1 -> Imregdemons median n=50 -> SCM GUI. Option B = detailed analysis path. Click a row to select it; only the checkbox changes Run/Skip.', ... % DECONF_OPTA_V1
+    'String','Choose a preset, review QC and timing, then edit the checked steps. Component removal is manual by default.', ... % DECONF_OPTA_V1
     'Units','normalized', ...
-    'Position',[0.015 0.900 0.74 0.032], ...
+    'Position',[0.015 0.900 0.69 0.032], ...
     'BackgroundColor',[0.020 0.025 0.040], ...
     'ForegroundColor',[0.92 0.94 0.98], ...
     'FontSize',16, ...
@@ -113,14 +119,14 @@ S.statusText = uicontrol(fig,'Style','text', ...
     'HorizontalAlignment','left');
 
 btnW = 0.118; btnH = 0.045; gap = 0.014;
-uicontrol(fig,'Style','pushbutton','String','Option A Fast', ...
-    'Units','normalized','Position',[0.735 0.900 btnW 0.040], ...
-    'FontSize',14,'FontWeight','bold','BackgroundColor',[0.32 0.19 0.07],'ForegroundColor',[1 1 1], ...
-    'Callback',@onOptionAFast);
-uicontrol(fig,'Style','pushbutton','String','Option B Detailed', ...
-    'Units','normalized','Position',[0.735+btnW+gap 0.900 btnW 0.040], ...
-    'FontSize',14,'FontWeight','bold','BackgroundColor',[0.20 0.22 0.30],'ForegroundColor',[1 1 1], ...
-    'Callback',@onOptionBDetailed);
+S.presetPopup=uicontrol(fig,'Style','popupmenu', ...
+    'Units','normalized','Position',[0.735 0.900 0.250 0.043], ...
+    'String',{'A | Standard A fast','B | Standard B slow','C | 2D awake', ...
+    'D | 2D anesthesized','E | 3D awake','F | 3D anesthesized','G | Motor anesthesized'}, ...
+    'Value',1,'Tag','deConfUSIonWorkflowPreset','Callback',@onPresetChanged);
+uicontrol(fig,'Style','pushbutton','String','Help', ...
+    'Units','normalized','Position',[0.867 0.845 0.118 0.040], ...
+    'Callback',@(~,~)deConfUSIon_ui('help','Standardized Analysis'));
 uicontrol(fig,'Style','pushbutton','String','Save / Load', ...
     'Units','normalized','Position',[0.735 0.845 btnW 0.040], ...
     'FontSize',14,'FontWeight','bold','BackgroundColor',[0.20 0.22 0.30],'ForegroundColor',[1 1 1], ...
@@ -362,6 +368,7 @@ else
     end
 end
 set(S.detailBox,'String',makeDetailText(st));
+deConfUSIon_ui('style',fig);
 end
 
 function editParam(src,~,fieldName)
@@ -383,6 +390,8 @@ function onRunWorkflow(src,~)
 fig = ancestor(src,'figure');
 if isempty(fig) || ~ishghandle(fig), return; end
 S = guidata(fig);
+[ok,message]=validatePresetData(S);
+if ~ok, errordlg(message,'Workflow data mismatch'); return; end
 idx = find([S.steps.run]);
 if isempty(idx)
     setStatus(fig,'No workflow steps are ticked.',[1.00 0.55 0.45]);
@@ -517,14 +526,15 @@ function onSaveLoad(src,~)
 fig = ancestor(src,'figure');
 S = guidata(fig);
 choice = questdlg('Preset action:','Save / Load workflow preset','Save','Load','Cancel','Save');
-presetFile = fullfile(fileparts(which('standardizedAnalysis')),'standardizedAnalysis_preset.mat');
+presetFile = fullfile(prefdir,'deConfUSIon_workflow_preset.mat');
 if strcmp(choice,'Save')
-    steps = S.steps; %#ok<NASGU>
-    save(presetFile,'steps');
+    steps = S.steps; presetKey=S.presetKey; schemaVersion=2; %#ok<NASGU>
+    save(presetFile,'steps','presetKey','schemaVersion');
     setStatus(fig,['Preset saved: ' presetFile],[0.80 0.95 0.85]);
 elseif strcmp(choice,'Load')
     if exist(presetFile,'file')
-        X = load(presetFile,'steps');
+        X = load(presetFile);
+        if isfield(X,'presetKey'), S.presetKey=X.presetKey; end
         if isfield(X,'steps')
             S.steps = normalizeLoadedSteps(X.steps);
             S = renumberSteps(S);
@@ -583,7 +593,7 @@ steps(5).filterType = 1; steps(5).fcLow = 0.001; steps(5).fcHigh = 0.20; steps(5
 steps(6).tempMode = 1; steps(6).tempWinSec = 60; steps(6).tempNsub = 50; steps(6).tempMethod = 1;
 steps(7).pcaicaMethod = 1; steps(7).pcaNcomp = 50; steps(7).icaNcomp = 30;
 % DECONF_OPTA_V1 : signal window + PCA auto-drop presets
-steps(7).pcaDropPC = 1; steps(7).pcaAutoApply = 1;
+steps(7).pcaDropPC = NaN; steps(7).pcaAutoApply = 0;
 for kk = 1:numel(steps)
     if any(strcmpi(strtrim(steps(kk).name),{'SCM GUI','Video GUI','Time-Course Viewer'}))
         steps(kk).sig1 = 840; steps(kk).sig2 = 900;
@@ -985,5 +995,66 @@ if ~isempty(scmIdx)
     steps(s1).amin  = 10;  steps(s1).amax  = 15;
     steps(s1).sig1  = 120; steps(s1).sig2  = 180;
     steps(s1).desc = 'baseline 30-60 s, display 0-50 %, alpha mod 10-15 %, signal 120-180 s';
+end
+end
+function onPresetChanged(src,~)
+fig=ancestor(src,'figure'); S=guidata(fig); keys='ABCDEFG';
+S.presetKey=keys(get(src,'Value')); S.steps=presetSteps(S.presetKey); S.selectedRow=1;
+guidata(fig,S); refreshRows(fig); refreshSelectedPanel(fig);
+setStatus(fig,['Preset ' S.presetKey ': review the checked steps and acquisition-specific timing.'],[.55 .86 .82]);
+end
+
+function steps=presetSteps(key)
+steps=makeDefaultSteps();
+for k=1:numel(steps)
+    steps(k).run=false; steps(k).pcaAutoApply=0; steps(k).pcaDropPC=NaN;
+    steps(k).nsub=2;
+    if any(strcmp(steps(k).name,{'SCM GUI','Video GUI','Time-Course Viewer'}))
+        steps(k).base1=0; steps(k).base2=60; steps(k).sig1=120; steps(k).sig2=180;
+        steps(k).cmin=-50; steps(k).cmax=50; steps(k).amin=0; steps(k).amax=20;
+    end
+end
+switch key
+    case 'A', names={'Full QC','Time-Course Viewer','SCM GUI'};
+    case 'B', names={'Full QC','Imregdemons','Time-Course Viewer','Video GUI','Mask Editor','Registration to Atlas','SCM GUI','Segmentation','Functional Connectivity'};
+    case 'C', names={'Full QC','Imregdemons','Time-Course Viewer','SCM GUI','Mask Editor'};
+    case 'D', names={'Full QC','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
+    case 'E', names={'Full QC','Imregdemons','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas'};
+    case 'F', names={'Full QC','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
+    case 'G', names={'Motor','Full QC','Imregdemons','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
+end
+for k=1:numel(steps), steps(k).run=any(strcmp(steps(k).name,names)); end
+% Fast triage uses only the first QC and first SCM instance.
+if key=='A'
+    for name={'Full QC','SCM GUI'}
+        ids=find(strcmp({steps.name},name{1})); for k=ids(2:end), steps(k).run=false; end
+    end
+end
+for k=1:numel(steps)
+    if strcmp(steps(k).name,'Imregdemons'), steps(k).desc='Motion correction; median n=2. Review temporal reduction and motion QC.';
+    elseif strcmp(steps(k).name,'PCA / ICA'), steps(k).desc='Optional manual component review; no automatic PC1 removal.';
+    elseif any(strcmp(steps(k).name,{'SCM GUI','Video GUI','Time-Course Viewer'})), steps(k).desc='Edit baseline/event windows for this acquisition; signed PSC display.';
+    elseif strcmp(steps(k).name,'Full QC'), steps(k).desc='Inspect timing, motion, valid signal and artifact traces.'; end
+end
+end
+
+function [ok,message]=validatePresetData(S)
+ok=true; message='';
+if ~isfield(S,'presetKey'), return; end
+try
+    studio=guidata(S.studioFig);
+    if ~isfield(studio,'activeDataset') || isempty(studio.activeDataset), return; end
+    D=studio.datasets.(studio.activeDataset);
+    if ~isfield(D,'I') || isempty(D.I), return; end
+    key=S.presetKey;
+    if any(key=='CD') && ndims(D.I)~=3
+        ok=false; message='This preset requires 2D + time data. Select a 3D or motor preset.';
+    elseif any(key=='EF') && ndims(D.I)~=4
+        ok=false; message='This preset requires 3D + time data. Confirm the loaded axes.';
+    elseif any(key=='EF') && isfield(D,'isStepMotor') && D.isStepMotor
+        ok=false; message='The dataset is marked step-motor. Use preset G.';
+    end
+catch ME
+    ok=false; message=ME.message;
 end
 end

@@ -158,7 +158,7 @@ fig = figure('Name',['fUSI Viewer v8 - ' systemType], ...
     'DefaultAxesFontName','Helvetica', ...
     'DefaultAxesFontSize',11);
 % HUMoR_FORCE_FULLSCREEN_PATCH31
-try, deConfUSIon_force_fullscreen_fig(fig); catch, end
+try, deConfUSIon_utils('deConfUSIon_force_fullscreen_fig',fig); catch, end
 
 
 drawnow;
@@ -555,7 +555,15 @@ else
     frame0 = I(:,:,1);
 end
 
-frameH = imagesc(ax1, rot90(normalizeVol(frame0),2));
+% Original viewer convention: flip rows in CData and use upward Y axes.
+% ROI picking below uses the same Ny-y+1 mapping for both probe types.
+frameH = imagesc(ax1, flipud(normalizeVol(frame0)));
+set(ax1,'YDir','normal','XDir','normal','PlotBoxAspectRatioMode','auto', ...
+    'XLim',[0.5 Nx+0.5],'YLim',[0.5 Ny+0.5]);
+% Lock square display pixels AFTER installing the image. Filling a wide
+% axes rectangle with axis normal stretches both 2D and matrix-probe data.
+axis(ax1,'image');
+axis(ax1,'off');
 colormap(ax1,'gray');
 set(ax1,'CLim',[0 1]);
 
@@ -891,7 +899,7 @@ set(fig,'CloseRequestFcn',@cleanup);
             F = histeq(F);
         end
 
-        set(frameH,'CData',fliplr(rot90(F,2)));
+        set(frameH,'CData',flipud(F));
 
         maps = {'gray','hot'};
         colormap(ax1, maps{get(mapDropdown,'Value')});
@@ -1959,6 +1967,7 @@ end
     end
 
     function showHelpWindow(varargin)
+        deConfUSIon_ui('help','Time course'); return;
         helpFig = figure('Name','Help and User Manual', ...
             'Color','k', ...
             'MenuBar','none', ...

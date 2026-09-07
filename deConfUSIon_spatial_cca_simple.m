@@ -28,8 +28,9 @@ Xf = localZvox(Xf); Xn = localZvox(Xn);
 rankW = max(2,round(double(localGet(opts,'ccaWhitenRank',50))));
 Uf = Uf(:,1:min(rankW,size(Uf,2)));
 Un = Un(:,1:min(rankW,size(Un,2)));
-G = Uf*Uf' + Un*Un'; G = (G+G')/2;
-[U,S] = eig(G); [ev,ord] = sort(real(diag(S)),'descend'); U = real(U(:,ord));
+% Thin SVD has the same nonzero eigenspace as Uf*Uf'+Un*Un',
+% without allocating a dense T-by-T matrix.
+[U,S,~]=svd([Uf Un],'econ'); ev=diag(S).^2;
 th = max(1,round(double(localGet(opts,'ccaThreshold',10))));
 nPos = sum(ev > max(eps,max(ev)*1e-12));
 th = min([th,nPos,size(U,2)]);

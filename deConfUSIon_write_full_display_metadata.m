@@ -29,6 +29,7 @@ try
     save(matFile,'displayNameFull','displayNameShort', ...
         'preprocDisplayName','HUMOR_fullDisplayName', ...
         'datasetSortTime','-append');
-catch
+catch ME
+    warning('deConfUSIon:MetadataSave','Could not append dataset metadata to %s: %s',matFile,ME.message);
 end
 end

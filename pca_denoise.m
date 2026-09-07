@@ -17,6 +17,7 @@ if ~isfield(opts,'logFcn'),           opts.logFcn = []; end
 % DECONF_OPTA_V1 : automatic / preselected component removal
 if ~isfield(opts,'autoSelect'),       opts.autoSelect = []; end
 if ~isfield(opts,'autoApply'),        opts.autoApply = false; end
+if ~isfield(opts,'basisMethod'),      opts.basisMethod = 'auto'; end
 
 isStruct = isstruct(dataIn);
 if isStruct
@@ -81,6 +82,7 @@ if ~isempty(opts.onApply) && isa(opts.onApply,'function_handle')
 end
 
 stats.nComponents = K;
+stats.decomposition=st.basisInfo;
 stats.explainedPerComponent = st.expl(:)';
 stats.selectedComponents = selected;
 stats.percentExplainedRemoved = 100 * sum(st.expl(selected));
@@ -154,33 +156,12 @@ stats.qcMeanImageFile = '';
                 Xc = bsxfun(@minus, Xvt, muVec);
                 mu = [];
         end
-        K = min([opts.nCompMax, T-1, 200]);
+        K = min([opts.nCompMax, V, T-1, 200]);
         if K < 1, error('Not enough time points for PCA.'); end
-        Xtv = double(Xc');
-        useFallback = false;
-        try
-            [U,S,W] = svds(Xtv,K);
-        catch
-            useFallback = true;
-        end
-        if useFallback
-            Ct = Xtv * Xtv';
-            Ct = (Ct + Ct') * 0.5;
-            [U,L] = eigs(Ct,K,'largestreal');
-            s = sqrt(max(diag(L),0));
-            S = diag(s);
-            W = Xtv' * U;
-            for ii = 1:K
-                if s(ii) > 0, W(:,ii) = W(:,ii) ./ s(ii); end
-            end
-        end
-        sing = diag(S);
-        [sing,ord] = sort(sing(:),'descend');
-        U = U(:,ord); W = W(:,ord);
-        expl = sing.^2;
-        expl = expl ./ max(eps,sum(expl));
+        [U,sing,W,totalEnergy,basisInfo] = deConfUSIon_signal('basis',Xc,K,struct('showProgress',~opts.autoApply,'method',opts.basisMethod));
+        K=numel(sing); expl=sing.^2/max(eps,totalEnergy);
         st = struct('U',U,'W',W,'sing',sing,'expl',expl,'Xc',Xc,'mu',mu,'muVec',muVec, ...
-            'Y',Y,'X',X,'Z',Z,'T',T,'K',K,'scopeInfo',scopeInfo);
+            'Y',Y,'X',X,'Z',Z,'T',T,'K',K,'scopeInfo',scopeInfo,'basisInfo',basisInfo);
     end
 
     function [selected, applyFlag, st] = pca_v12_gui(I4orig_unused, TR, opts_unused, tag_unused) %#ok<INUSD>
@@ -201,16 +182,20 @@ stats.qcMeanImageFile = '';
         tmin = ((0:T-1)*TR)/60; tmin = tmin(idx); tmax = max(tmin);
         perPage=25; nPages=max(1,ceil(K/perPage)); page=1;
         fig=figure('Name','PCA Components — slice-aware V12', 'Color',bgFig,'MenuBar','none','ToolBar','none','NumberTitle','off', 'Position',[60 40 1800 980]);
-        try, deConfUSIon_force_fullscreen_fig(fig); catch, end
-        gridX=0.03; gridY=0.08; gridW=0.66; gridH=0.86; rightX=0.71; rightY=0.08; rightW=0.27; rightH=0.90;
-        hdr=uicontrol('Parent',fig,'Style','text','Units','normalized','Position',[gridX 0.965 gridW 0.03],'String','','BackgroundColor',bgFig,'ForegroundColor',fg,'FontSize',13,'FontWeight','bold','HorizontalAlignment','left');
+        try, deConfUSIon_utils('deConfUSIon_force_fullscreen_fig',fig); catch, end
+        deConfUSIon_ui('identity',fig,dataIn,tag,'PCA');
+        gridX=0.03; gridY=0.08; gridW=0.66; gridH=0.81; rightX=0.71; rightY=0.08; rightW=0.27; rightH=0.83;
+        hdr=uicontrol('Parent',fig,'Style','text','Units','normalized','Position',[gridX 0.905 gridW 0.03],'String','','BackgroundColor',bgFig,'ForegroundColor',fg,'FontSize',13,'FontWeight','bold','HorizontalAlignment','left');
         rightPanel=uipanel('Parent',fig,'Units','normalized','Position',[rightX rightY rightW rightH],'BackgroundColor',[0.08 0.08 0.09],'ForegroundColor',fg,'Title','Selection + Slice Scope','FontWeight','bold','FontSize',13);
         uicontrol('Parent',rightPanel,'Style','text','Units','normalized','Position',[0.06 0.915 0.88 0.055],'String','PCA INPUT SCOPE', 'BackgroundColor',get(rightPanel,'BackgroundColor'),'ForegroundColor',[0.85 0.95 1.00],'FontWeight','bold','FontSize',14);
         scopePopup=uicontrol('Parent',rightPanel,'Style','popupmenu','Units','normalized','Position',[0.06 0.855 0.88 0.055],'String',{'All slices together','Selected slice only'},'Value',1,'BackgroundColor',[0.16 0.16 0.18],'ForegroundColor',fg,'FontWeight','bold','FontSize',12,'Callback',@scopeChanged);
         scopeText=uicontrol('Parent',rightPanel,'Style','text','Units','normalized','Position',[0.06 0.805 0.88 0.050],'String',sprintf('All slices 1-%d',Z0),'BackgroundColor',get(rightPanel,'BackgroundColor'),'ForegroundColor',[1.00 0.95 0.55],'FontWeight','bold','FontSize',13);
         stepSmall=1/max(1,Z0-1);
-        scopeSlider=uicontrol('Parent',rightPanel,'Style','slider','Units','normalized','Position',[0.06 0.755 0.88 0.045],'Min',1,'Max',max(1,Z0),'Value',1,'SliderStep',[stepSmall min(1,stepSmall*2)],'Enable','off','Callback',@scopeChanged);
+        scopeSlider=uicontrol('Parent',rightPanel,'Style','slider','Units','normalized','Position',[0.06 0.755 0.88 0.045],'Min',1,'Max',max(2,Z0),'Value',1,'SliderStep',[stepSmall min(1,stepSmall*2)],'Enable','off','Callback',@scopeChanged);
         if Z0 <= 1, set(scopePopup,'Enable','off'); set(scopeSlider,'Enable','off'); set(scopeText,'String','2D / single-slice data'); end
+        basisPopup=uicontrol(rightPanel,'Style','popupmenu','Units','normalized','Position',[.06 .705 .88 .04], ...
+            'String',{'Automatic: fast approximation for long recordings','Exact PCA (slower; recomputes)'}, ...
+            'Value',1+strcmp(opts.basisMethod,'exact'),'FontSize',10,'BackgroundColor',[.16 .16 .18],'ForegroundColor',fg,'Callback',@basisChanged);
         axPrev=axes('Parent',rightPanel,'Units','normalized','Position',[0.10 0.535 0.84 0.165],'Color',bgAx,'XColor',fg,'YColor',fg); title(axPrev,'PC timecourse preview','Color',fg);
         txtInfo=uicontrol('Parent',rightPanel,'Style','text','Units','normalized','Position',[0.08 0.470 0.84 0.045],'String','Selected: 0 PCs', 'BackgroundColor',get(rightPanel,'BackgroundColor'),'ForegroundColor',[0.85 0.95 1.00],'FontWeight','bold','FontSize',13);
         lb=uicontrol('Parent',rightPanel,'Style','listbox','Units','normalized','Position',[0.08 0.225 0.84 0.225],'String',{'<none>'},'BackgroundColor',[0.16 0.16 0.18],'ForegroundColor',fg,'FontName','Courier New','FontSize',13);
@@ -229,7 +214,7 @@ stats.qcMeanImageFile = '';
             set(axGrid(ii),'ButtonDownFcn',@(h,~)onCellClick(h)); set(lnGrid(ii),'ButtonDownFcn',@(h,~)onCellClick(h));
         end
         set(fig,'WindowKeyPressFcn',@onKey,'WindowScrollWheelFcn',@onScrollWheel,'CloseRequestFcn',@cancelAndClose);
-        renderPage(); previewComponent(1); uiwait(fig);
+        renderPage(); previewComponent(1); deConfUSIon_ui('style',fig); uiwait(fig);
         function scopeChanged(~,~)
             if Z0 > 1 && get(scopePopup,'Value') == 2
                 z=round(get(scopeSlider,'Value')); z=max(1,min(Z0,z)); set(scopeSlider,'Value',z,'Enable','on');
@@ -244,15 +229,18 @@ stats.qcMeanImageFile = '';
         end
         function renderPage()
             firstPC=(page-1)*perPage+1; lastPC=min(K,page*perPage); set(hdr,'String',sprintf('PCs %d-%d of %d | %s',firstPC,lastPC,K,scopeLabel()));
+            if st.basisInfo.approximate, set(hdr,'String',sprintf('PCs %d-%d of %d | Fast approximation | residual %.3g | %s',firstPC,lastPC,K,st.basisInfo.relativeResidual,scopeLabel())); end
             set(btnPrev,'Enable',onoff(page>1)); set(btnNext,'Enable',onoff(page<nPages));
             for jj=1:25
                 k=(page-1)*perPage+jj; compIdx(jj)=k;
                 if k<=K
                     tc=st.U(:,k); tc=tc(idx); set(lnGrid(jj),'XData',tmin,'YData',tc,'Visible','on'); set(axGrid(jj),'Visible','on','XLim',[0 max(tmin)]);
-                    set(pcLabel(jj),'String',sprintf('PC%d %.2f%%',k,100*st.expl(k)));
-                    if any(selected==k), set(axGrid(jj),'XColor',selRed,'YColor',selRed,'LineWidth',2.2); set(pcLabel(jj),'Color',selRed); else, set(axGrid(jj),'XColor',fgDim*0.35,'YColor',fgDim*0.35,'LineWidth',1); set(pcLabel(jj),'Color',fg); end
+                    set(pcLabel(jj),'String',sprintf('PC%d %.2f%%',k,100*st.expl(k)),'Visible','on');
+                    if any(selected==k), set(axGrid(jj),'XColor',selRed,'YColor',selRed,'LineWidth',2.2); set(pcLabel(jj),'Color',selRed); else, set(axGrid(jj),'XColor',fgDim,'YColor',fgDim,'LineWidth',1); set(pcLabel(jj),'Color',fg); end
                 else
                     set(axGrid(jj),'Visible','off');
+                    set(lnGrid(jj),'Visible','off');
+                    set(pcLabel(jj),'Visible','off');
                 end
             end
             refreshSelectionUI(); drawnow;
@@ -263,6 +251,10 @@ stats.qcMeanImageFile = '';
             k=compIdx(ii); if ~isfinite(k)||k<1||k>K, return; end
             if strcmp(get(fig,'SelectionType'),'alt'), selected(selected==k)=[]; else, if any(selected==k), selected(selected==k)=[]; else, selected(end+1)=k; end, end
             selected=sort(unique(selected)); renderPage(); previewComponent(k);
+        end
+        function basisChanged(~,~)
+            if get(basisPopup,'Value')==2, opts.basisMethod='exact'; else, opts.basisMethod='auto'; end
+            scopeChanged([],[]);
         end
         function previewComponent(k)
             if k<1||k>K, return; end; cla(axPrev); plot(axPrev,tmin,st.U(idx,k),'Color',lineCol,'LineWidth',1.4); grid(axPrev,'on'); set(axPrev,'Color',bgAx,'XColor',fg,'YColor',fg); title(axPrev,sprintf('PC%d | %s',k,scopeLabel()),'Color',fg);
@@ -294,7 +286,7 @@ stats.qcMeanImageFile = '';
             set(scopeSlider,'Value',z);
             scopeChanged([],[]);
         end
-        function showHelp(~,~), msgbox(sprintf('Use scope control at top-right to switch All slices vs Selected slice. Mouse wheel also changes slices and recomputes PCA for the selected slice.'),'PCA help','modal'); end
+        function showHelp(~,~), deConfUSIon_ui('help','PCA'); end
         function s=scopeLabel(), if st.scopeInfo.sliceSpecific, s=sprintf('slice %d/%d',st.scopeInfo.zIndex,st.scopeInfo.nSlices); else, s=sprintf('all slices 1-%d',Z0); end, end
     end
 

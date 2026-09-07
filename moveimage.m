@@ -15,6 +15,8 @@ classdef moveimage < handle
         a
         at
         T0
+        onCommit = []
+        onPreview = []
    end
 
    properties(Access=protected)
@@ -118,6 +120,11 @@ classdef moveimage < handle
             tf = (M.flagmove == 1);
         end
 
+        function A = pendingTransform(M)
+            A=M.T0;
+            if M.flagmove==1, A=A*M.T1; end
+        end
+
     end
 
     methods(Access=private)
@@ -153,7 +160,9 @@ classdef moveimage < handle
         end
 
         function startDrag(M, ~, ~)
-
+            if isappdata(M.figure,'AtlasAutoBusy') && getappdata(M.figure,'AtlasAutoBusy')
+                return;
+            end
             if isempty(M.axes) || ~ishandle(M.axes)
                 return;
             end
@@ -210,6 +219,7 @@ classdef moveimage < handle
             end
 
             M.refresh();
+            if ~isempty(M.onPreview), M.onPreview(); end
         end
 
         function mouseUp(M, ~, ~)
@@ -233,6 +243,7 @@ classdef moveimage < handle
             catch
             end
             M.armCallbacks();
+            if ~isempty(M.onCommit), M.onCommit(); end
         end
 
         function clearMotionCallbacks(M)

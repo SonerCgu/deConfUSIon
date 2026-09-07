@@ -1143,6 +1143,7 @@ end
     end
 
     function onHelp(~, ~)
+        deConfUSIon_ui('help','Registration'); return;
         helpFig = figure('Name','2D Registration Help','Color',[0.08 0.08 0.09], ...
             'MenuBar','none','ToolBar','none','NumberTitle','off','Resize','off','WindowStyle','modal', ...
             'Position',[220 120 900 720]);

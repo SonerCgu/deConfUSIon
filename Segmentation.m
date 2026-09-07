@@ -156,6 +156,15 @@ end
 % -------------------------------------------------------------------------
 logMsg(logFcn,'Extracting left/right/bilateral region time courses...');
 [LeftRaw, RightRaw, BothRaw, region] = extractRegionTimecourses(D4, R, validDataMask, labelInfo, cfg.minVoxels, logFcn);
+
+% Optional coarse atlas resolution: combine detailed labels into stable
+% anatomical families (cortex, hippocampus, thalamus, ...). The atlas label
+% volume is untouched; only the extracted time-course rows are aggregated.
+if isfield(cfg,'regionResolution') && strcmpi(cfg.regionResolution,'coarse')
+    [LeftRaw, RightRaw, BothRaw, region] = aggregateCoarseRegions( ...
+        LeftRaw, RightRaw, BothRaw, region);
+    logMsg(logFcn,sprintf('Coarse region mode: aggregated to %d anatomical families.',numel(region.names)));
+end
 try
     if isfield(cfg,'regionNameFile') && ~isempty(cfg.regionNameFile) && exist(cfg.regionNameFile,'file') == 2
         region = deConfUSIon_apply_region_names_to_region(region,cfg.regionNameFile);
@@ -233,6 +242,7 @@ cfg.cancelled = true;
 cfg.sourceMode = 'active_i';
 cfg.sourceFile = '';
 cfg.atlasMode = 'manual_label';
+cfg.regionResolution = 'detailed';
 cfg.labelFile = '';
 cfg.reg2DFiles = {};
 cfg.stepMotorFolder = '';
@@ -528,6 +538,14 @@ makeText(setPanel,[0.680 0.695 0.060 0.110],'sec',fgDim,11,'bold');
 
 makeText(setPanel,[0.040 0.500 0.250 0.110],'Minimum voxels / region',fg,12,'bold');
 hMinVox = makeEdit(setPanel,[0.315 0.505 0.100 0.110],'5');
+hRegionResolution = uicontrol('Parent',setPanel,'Style','popupmenu', ...
+    'Units','normalized','Position',[0.455 0.505 0.49 0.110], ...
+    'String',{'Detailed atlas regions','Coarse anatomical families'}, ...
+    'Value',1,'BackgroundColor',panel2,'ForegroundColor',fg, ...
+    'FontName','Arial','FontSize',11,'FontWeight','bold', ...
+    'Callback',@updateSummary);
+makeText(setPanel,[0.455 0.625 0.45 0.065], ...
+    'Region resolution',fgDim,11,'bold');
 hPSC = uicontrol('Parent',setPanel,'Style','checkbox', ...
     'Units','normalized', ...
     'Position',[0.040 0.290 0.390 0.110], ...
@@ -790,6 +808,11 @@ waitfor(dlg);
         cfg.baselineStartSec = str2double(get(hBaseStart,'String'));
         cfg.baselineEndSec = str2double(get(hBaseEnd,'String'));
         cfg.minVoxels = round(str2double(get(hMinVox,'String')));
+        if get(hRegionResolution,'Value') == 2
+            cfg.regionResolution = 'coarse';
+        else
+            cfg.regionResolution = 'detailed';
+        end
         cfg.computePSC = logical(get(hPSC,'Value'));
         cfg.cancelled = false;
 
@@ -1668,6 +1691,51 @@ region.minVoxels = minVoxels;
 
 end
 
+function [Lout,Rout,Bout,Gout] = aggregateCoarseRegions(Lin,Rin,Bin,region)
+% Combine detailed region traces with voxel-count weighting. NaN rows remain
+% excluded at each time point, so a missing small label cannot bias a family.
+names = region.names;
+if isempty(names)
+    Lout=Lin; Rout=Rin; Bout=Bin; Gout=region; return;
+end
+G = deConfUSIon_region_groups(struct('names',{names}),'coarse');
+nG = numel(G.names);
+Lout = nan(nG,size(Lin,2)); Rout=Lout; Bout=Lout;
+for g=1:nG
+    idx=find(G.map==g);
+    if isempty(idx), continue; end
+    for t=1:size(Lin,2)
+        Lout(g,t)=weightedFamilyValue(Lin(idx,t),region.countsLeft(idx));
+        Rout(g,t)=weightedFamilyValue(Rin(idx,t),region.countsRight(idx));
+        Bout(g,t)=weightedFamilyValue(Bin(idx,t),region.countsBoth(idx));
+    end
+end
+Gout=region;
+Gout.labels=(1:nG).';
+Gout.acronyms=cellfun(@(s)upper(regexprep(s,'[^A-Za-z0-9]','')),G.names,'UniformOutput',false).';
+Gout.names=G.names(:);
+Gout.volumeAtlas=zeros(nG,1);
+Gout.countsLeft=zeros(nG,1); Gout.countsRight=zeros(nG,1); Gout.countsBoth=zeros(nG,1);
+for g=1:nG
+    idx=find(G.map==g);
+    if isempty(idx), continue; end
+    Gout.volumeAtlas(g)=sum(region.volumeAtlas(idx),'omitnan');
+    Gout.countsLeft(g)=sum(region.countsLeft(idx));
+    Gout.countsRight(g)=sum(region.countsRight(idx));
+    Gout.countsBoth(g)=sum(region.countsBoth(idx));
+end
+Gout.groupMode='coarse anatomical families';
+Gout.sourceDetailedNames=names;
+Gout.sourceDetailedLabels=region.labels;
+end
+
+function v=weightedFamilyValue(x,w)
+x=double(x(:)); w=double(w(:));
+ok=isfinite(x) & isfinite(w) & w>0;
+if ~any(ok), v=NaN; return; end
+v=sum(x(ok).*w(ok))/sum(w(ok));
+end
+
 function Mz = zscoreBaselineMatrix(M, baseIdx)
 % Robust baseline z-scoring for region x time matrices.
 %
@@ -2184,4 +2252,3 @@ else
     T = struct('labels',[],'names',{{}});
 end
 end
-

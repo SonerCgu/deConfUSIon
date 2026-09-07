@@ -78,7 +78,12 @@ try
     part2 = fusi_studio_callback('source');
     runtimeCode = [part1 sprintf('\n') part2];
 
-    runtimeDir = fullfile(tempdir,'deConfUSIon_fUSI_Studio_runtime');
+    % Separate checkouts and revisions cannot overwrite each other's runtime.
+    md=java.security.MessageDigest.getInstance('SHA-256');
+    md.update(unicode2native([root runtimeCode],'UTF-8'));
+    digest=typecast(md.digest(),'uint8');
+    runtimeKey=lower(reshape(dec2hex(digest(1:8),2).',1,[]));
+    runtimeDir = fullfile(tempdir,['deConfUSIon_runtime_' runtimeKey]);
     if exist(runtimeDir,'dir') ~= 7
         mkdir(runtimeDir);
     end
@@ -134,7 +139,6 @@ end
 fprintf('deConfUSIon / fUSI Studio root:\n%s\n\n', root);
 
 % Launch assembled Studio runtime.
-try, deConfUSIon_popup_autofit_timer('start'); catch, end
 rehash;
 clear fusi_studio_runtime;
 fusi_studio_runtime;

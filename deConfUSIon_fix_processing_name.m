@@ -13,7 +13,7 @@ nameOut = local_compact(nameOut);
 
 % If the visible name is only an internal short save name, use folder context first.
 try
-    if exist('deConfUSIon_is_bad_display_name','file') == 2 && deConfUSIon_is_bad_display_name(nameOut) && ~isempty(matFile)
+    if exist('deConfUSIon_utils','file') == 2 && deConfUSIon_utils('deConfUSIon_is_bad_display_name',nameOut) && ~isempty(matFile)
         if exist('deConfUSIon_display_from_file_context','file') == 2
             [~,stem] = fileparts(matFile);
             nameOut = deConfUSIon_display_from_file_context(matFile, stem);

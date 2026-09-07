@@ -74,7 +74,8 @@ if strcmp(ext,'.mat')
     end
     if isempty(C), error('deConfUSIon:BadCustomMAT','No numeric matrix found in MAT file.'); end
 else
-    C = readmatrix(fn);
+    if exist('readmatrix','file')==2, C=readmatrix(fn);
+    else, C=dlmread(fn); end
 end
 C = double(C);
 if size(C,1) ~= T && size(C,2) == T, C = C'; end

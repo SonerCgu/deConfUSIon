@@ -59,11 +59,21 @@ classdef registration_ccf < handle
         overlayWinMax = 1.00
         showAtlasLines = true
 
-        overlayCoronalOnly = true
+        overlayCoronalOnly = false
         atlasStepCor = 1
 
         lastScrollT = -inf
         scrollMinDt = 0.03
+        autoBusy = false
+        autoSetupBusy = false
+        autoReport = []
+        autoUndo = []
+        scanGeometry = []
+        reviewBusy = false
+        reviewBundle = []
+        reviewMatrix = []
+        reviewTarget = ''
+        lastDragPreview = -inf
     end
 
     properties (Access=protected)
@@ -108,6 +118,7 @@ classdef registration_ccf < handle
         uiScaleSagY
         uiScaleAxiZ
         uiAuto
+        uiUndoAuto
         uiApply
         uiSave
         uiSaveStatus
@@ -150,6 +161,7 @@ classdef registration_ccf < handle
 
             if ~isempty(initialTransf) && isstruct(initialTransf) && isfield(initialTransf,'M')
                 R.T0 = initialTransf.M;
+                if isfield(initialTransf,'autoRegistration'), R.autoReport=initialTransf.autoRegistration; end
             else
                 R.T0 = eye(4);
             end
@@ -177,6 +189,7 @@ classdef registration_ccf < handle
             end
 
             R.atlas = atlas;
+            if isfield(scananatomy,'Geometry'), R.scanGeometry=scananatomy.Geometry; end
             R.log(sprintf('[Atlas GUI] Save directory: %s', R.saveDir));
             % deConfUSIon 3D registration patch START: voxel-aware coronal scrolling
             atlasStepUm = 50;
@@ -207,7 +220,7 @@ classdef registration_ccf < handle
 
             % Normalize anatomy overlay and bring it into atlas voxel/orientation space
             scananatomy.Data = equalizeImages(double(scananatomy.Data));
-            tmp = interpolate3D(atlas, scananatomy);
+            tmp = AtlasRegistration('prepare',scananatomy,atlas);
 
             R.ms2 = mapscan(double(tmp.Data), gray(256), 'fix');
             R.ms2.caxis = [0 1];
@@ -254,6 +267,7 @@ classdef registration_ccf < handle
                 'Position',[x0 y0 W Hh]);
 
             R.H.figure1 = f;
+            set(f,'CloseRequestFcn',@(src,evt)R.onClose());
             set(f,'WindowScrollWheelFcn',@(src,evt)R.onScroll(evt));
 
             % open maximised: the six axes are unusable in a small window
@@ -272,17 +286,17 @@ classdef registration_ccf < handle
             midX  = 0.35;
             ctrlX = 0.68;
             axW   = 0.28;
-            axH   = 0.24;
+            axH   = 0.18;
             gapY  = 0.04;
 
-            yTop = 0.70;
-            yMid = yTop - axH - gapY;
-            yBot = yMid - axH - gapY;
+            yTop = 0.51;
+            yMid = 0.27;
+            yBot = 0.04;
 
             uicontrol(f,'Style','text', ...
                 'Units','normalized', ...
                 'Position',[0.03 0.94 0.63 0.045], ...
-                'String','Atlas GUI - Register anatomy first, then preview functional in atlas space', ...
+                'String','3D Atlas Registration - automatic alignment and manual review', ...
                 'BackgroundColor',bg, ...
                 'ForegroundColor',fg, ...
                 'FontSize',16, ...
@@ -299,11 +313,11 @@ classdef registration_ccf < handle
                 'FontWeight','bold', ...
                 'HorizontalAlignment','right');
 
-            R.H.axes1 = axes('Parent',f,'Units','normalized','Position',[leftX yTop axW axH], 'Color','k');
+            R.H.axes1 = axes('Parent',f,'Units','normalized','Position',[leftX yTop axW 0.38], 'Color','k');
             R.H.axes2 = axes('Parent',f,'Units','normalized','Position',[leftX yMid axW axH], 'Color','k');
             R.H.axes3 = axes('Parent',f,'Units','normalized','Position',[leftX yBot axW axH], 'Color','k');
 
-            R.H.axes4 = axes('Parent',f,'Units','normalized','Position',[midX yTop axW axH], 'Color','k');
+            R.H.axes4 = axes('Parent',f,'Units','normalized','Position',[midX yTop axW 0.38], 'Color','k');
             R.H.axes5 = axes('Parent',f,'Units','normalized','Position',[midX yMid axW axH], 'Color','k');
             R.H.axes6 = axes('Parent',f,'Units','normalized','Position',[midX yBot axW axH], 'Color','k');
 
@@ -315,38 +329,38 @@ classdef registration_ccf < handle
             end
 
             uicontrol(f,'Style','text','Units','normalized', ...
-                'Position',[leftX yTop+axH+0.005 axW 0.02], ...
+                'Position',[leftX yTop+0.38+0.005 axW 0.02], ...
                 'String','Atlas - Coronal', ...
                 'BackgroundColor',bg,'ForegroundColor',fg, ...
                 'FontSize',11,'FontWeight','bold','HorizontalAlignment','center');
 
             uicontrol(f,'Style','text','Units','normalized', ...
                 'Position',[leftX yMid+axH+0.005 axW 0.02], ...
-                'String','Atlas - Sagittal', ...
+                'String','Atlas - Axial (sanity check)', ...
                 'BackgroundColor',bg,'ForegroundColor',fg, ...
                 'FontSize',11,'FontWeight','bold','HorizontalAlignment','center');
 
             uicontrol(f,'Style','text','Units','normalized', ...
                 'Position',[leftX yBot+axH+0.005 axW 0.02], ...
-                'String','Atlas - Axial', ...
+                'String','Atlas - Sagittal (sanity check)', ...
                 'BackgroundColor',bg,'ForegroundColor',fg, ...
                 'FontSize',11,'FontWeight','bold','HorizontalAlignment','center');
 
             uicontrol(f,'Style','text','Units','normalized', ...
-                'Position',[midX yTop+axH+0.005 axW 0.02], ...
-                'String','Overlay on Atlas - Coronal', ...
+                'Position',[midX yTop+0.38+0.005 axW 0.02], ...
+                'String','Acquired coronal anatomy on fixed atlas', ...
                 'BackgroundColor',bg,'ForegroundColor',fg, ...
                 'FontSize',11,'FontWeight','bold','HorizontalAlignment','center');
 
             uicontrol(f,'Style','text','Units','normalized', ...
                 'Position',[midX yMid+axH+0.005 axW 0.02], ...
-                'String','Overlay on Atlas - Sagittal', ...
+                'String','Anatomy on atlas - Axial (sanity check)', ...
                 'BackgroundColor',bg,'ForegroundColor',fg, ...
                 'FontSize',11,'FontWeight','bold','HorizontalAlignment','center');
 
             uicontrol(f,'Style','text','Units','normalized', ...
                 'Position',[midX yBot+axH+0.005 axW 0.02], ...
-                'String','Overlay on Atlas - Axial', ...
+                'String','Anatomy on atlas - Sagittal (sanity check)', ...
                 'BackgroundColor',bg,'ForegroundColor',fg, ...
                 'FontSize',11,'FontWeight','bold','HorizontalAlignment','center');
 
@@ -360,9 +374,20 @@ classdef registration_ccf < handle
                 'FontWeight','bold');
 
             % Overlay display panel
+            R.uiAuto = uicontrol(ctrlPanel,'Style','pushbutton','Units','normalized', ...
+                'Position',[0.05 0.91 0.57 0.065], ...
+                'String','Automatic 3D registration', ...
+                'Tag','Automatic3DRegistration', ...
+                'BackgroundColor',[0.16 0.60 0.34],'ForegroundColor','w', ...
+                'FontName','Arial','FontSize',13,'FontWeight','bold', ...
+                'Callback',@(src,evt)R.onAutoRegister());
+            uicontrol(ctrlPanel,'Style','pushbutton','Units','normalized', ...
+                'Position',[.65 .91 .30 .065],'String','ITK-SNAP review', ...
+                'Tag','ReviewInITKSNAP','BackgroundColor',[.16 .42 .75],'ForegroundColor','w', ...
+                'FontWeight','bold','Callback',@(~,~)R.onReviewSnap());
             ovPanel = uipanel(ctrlPanel, ...
                 'Units','normalized', ...
-                'Position',[0.05 0.69 0.90 0.28], ...
+                'Position',[0.05 0.675 0.90 0.215], ...
                 'BackgroundColor',panelBG2, ...
                 'ForegroundColor',fg, ...
                 'Title','Overlay display', ...
@@ -371,11 +396,12 @@ classdef registration_ccf < handle
 
             uicontrol(ovPanel,'Style','text','Units','normalized', ...
                 'Position',[0.06 0.79 0.26 0.12], ...
-                'String','Opacity', ...
+                'String','Anatomy opacity', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
             R.uiOpacity = uicontrol(ovPanel,'Style','slider','Units','normalized', ...
+                'Tag','AnatomyOpacity', ...
                 'Position',[0.36 0.82 0.58 0.10], ...
                 'Min',0,'Max',1,'Value',R.overlayOpacity, ...
                 'BackgroundColor',panelBG2, ...
@@ -450,7 +476,7 @@ classdef registration_ccf < handle
 
             uicontrol(trPanel,'Style','text','Units','normalized', ...
                 'Position',[0.05 0.66 0.36 0.16], ...
-                'String','Scale X', ...
+                'String','Depth scale', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
@@ -462,7 +488,7 @@ classdef registration_ccf < handle
 
             uicontrol(trPanel,'Style','text','Units','normalized', ...
                 'Position',[0.05 0.40 0.36 0.16], ...
-                'String','Scale Y', ...
+                'String','AP scale', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
@@ -474,7 +500,7 @@ classdef registration_ccf < handle
 
             uicontrol(trPanel,'Style','text','Units','normalized', ...
                 'Position',[0.05 0.14 0.36 0.16], ...
-                'String','Scale Z', ...
+                'String','LR scale', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
@@ -484,13 +510,13 @@ classdef registration_ccf < handle
                 'BackgroundColor',[0.12 0.12 0.12], ...
                 'ForegroundColor',fg);
 
-            R.uiAuto = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
+            R.uiUndoAuto = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
                 'Position',[0.56 0.68 0.37 0.18], ...
-                'String','0. Auto init', ...
-                'BackgroundColor',[0.45 0.35 0.85], ...
+                'String','Undo auto','Enable','off', ...
+                'BackgroundColor',[0.82 0.60 0.18], ...
                 'ForegroundColor','w', ...
                 'FontWeight','bold', ...
-                'Callback',@(src,evt)R.onAutoRegister());
+                'Callback',@(src,evt)R.onUndoAuto());
 
             R.uiApply = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
                 'Position',[0.56 0.40 0.37 0.18], ...
@@ -502,14 +528,14 @@ classdef registration_ccf < handle
 
             R.uiSave = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
                 'Position',[0.56 0.12 0.37 0.18], ...
-                'String','2. Save', ...
+                'String','Save reviewed', ...
                 'BackgroundColor',[0.15 0.70 0.55], ...
                 'ForegroundColor','w', ...
                 'FontWeight','bold', ...
                 'Callback',@(src,evt)R.onSave());
 
-            R.uiSaveStatus = uicontrol(trPanel,'Style','text','Units','normalized', ...
-                'Position',[0.05 0.01 0.88 0.10], ...
+            R.uiSaveStatus = uicontrol(f,'Style','text','Units','normalized', ...
+                'Position',[0.03 0.008 0.94 0.035], ...
                 'String','', ...
                 'BackgroundColor',panelBG2, ...
                 'ForegroundColor',[0.7 0.95 0.7], ...
@@ -676,10 +702,10 @@ classdef registration_ccf < handle
 
             cla(R.H.axes4);
             R.im4Under = image(zeros(R.ms1.ny, R.ms1.nz, 3), 'Parent', R.H.axes4);
-            set(R.im4Under,'HitTest','off');
+            set(R.im4Under,'HitTest','off','Tag','FixedAtlas');
             hold(R.H.axes4,'on');
             R.im4 = imagesc(zeros(R.ms2.ny, R.ms2.nz), 'Parent', R.H.axes4);
-            set(R.im4,'AlphaData',R.overlayOpacity,'HitTest','on');
+            set(R.im4,'AlphaData',R.overlayOpacity,'HitTest','on','Tag','MovingAnatomy');
             hold(R.H.axes4,'off');
             uistack(R.im4,'top');
 
@@ -727,10 +753,12 @@ classdef registration_ccf < handle
             R.hlinesT = gobjects(0);
 
             set(R.uiEditCor,'String',num2str(R.ms1.x0));
-            set(R.uiEditSag,'String',num2str(R.ms1.y0));
-            set(R.uiEditAxi,'String',num2str(R.ms1.z0));
+            set(R.uiEditSag,'String',num2str(R.ms1.z0));
+            set(R.uiEditAxi,'String',num2str(R.ms1.y0));
 
-            R.bumpControlFonts(ctrlPanel, 12);        end
+            for k=1:numel(axAll), axis(axAll(k),'image'); axis(axAll(k),'off'); end
+            R.bumpControlFonts(ctrlPanel, 12);
+        end
 
 
         function bumpControlFonts(R, parentObj, minFS)
@@ -750,6 +778,8 @@ classdef registration_ccf < handle
 
         function restartMove(R)
             R.r1 = moveimage(R.H.axes4, R.im4);
+            R.r1.onCommit=@()R.onApply();
+            R.r1.onPreview=@()R.previewAlignment();
 
             if R.overlayCoronalOnly
                 R.r2 = [];
@@ -757,6 +787,8 @@ classdef registration_ccf < handle
             else
                 R.r2 = moveimage(R.H.axes5, R.im5);
                 R.r3 = moveimage(R.H.axes6, R.im6);
+                R.r2.onCommit=@()R.onApply(); R.r3.onCommit=@()R.onApply();
+                R.r2.onPreview=@()R.previewAlignment(); R.r3.onPreview=@()R.previewAlignment();
             end
         end
 
@@ -775,6 +807,11 @@ classdef registration_ccf < handle
             TransfNow = struct();
             TransfNow.M = R.T0 * TS * R.Trot * tot;
             TransfNow.size = size(R.ms1.D);
+            TransfNow.scanGeometry = R.scanGeometry;
+            if ~isempty(TransfNow.scanGeometry)
+                TransfNow.scanGeometry.atlasVoxelSizeUm=double(R.atlas.VoxelSize(:)');
+            end
+            TransfNow.autoRegistration = R.autoReport;
         end
 
         function apply(R)
@@ -807,11 +844,11 @@ classdef registration_ccf < handle
             z0 = R.ms1.z0;
 
             set(R.uiSliceInfo,'String',sprintf('Coronal: %d/%d   Sagittal: %d/%d   Axial: %d/%d', ...
-                x0, R.ms1.nx, y0, R.ms1.ny, z0, R.ms1.nz));
+                x0, R.ms1.nx, z0, R.ms1.nz, y0, R.ms1.ny));
 
             set(R.uiEditCor,'String',num2str(x0));
-            set(R.uiEditSag,'String',num2str(y0));
-            set(R.uiEditAxi,'String',num2str(z0));
+            set(R.uiEditSag,'String',num2str(z0));
+            set(R.uiEditAxi,'String',num2str(y0));
 
             [aCor, aSag, aAxi] = R.ms1.cuts();
 
@@ -861,16 +898,18 @@ classdef registration_ccf < handle
                 R.r3.setImageData(oAxi);
             end
 
-            set(R.im4,'Visible','on','AlphaData',R.overlayOpacity);
+            set(R.im4,'Visible','on','AlphaData',R.overlayOpacity*single(squeeze(R.ms2.D(x0,:,:))>0));
 
             if R.overlayCoronalOnly
                 set(R.im5,'Visible','off','AlphaData',0);
                 set(R.im6,'Visible','off','AlphaData',0);
             else
-                set(R.im5,'Visible','on','AlphaData',R.overlayOpacity);
-                set(R.im6,'Visible','on','AlphaData',R.overlayOpacity);
+                set(R.im5,'Visible','on','AlphaData',R.overlayOpacity*single(squeeze(R.ms2.D(:,y0,:))>0));
+                set(R.im6,'Visible','on','AlphaData',R.overlayOpacity*single(squeeze(R.ms2.D(:,:,z0))'>0));
             end
 
+            set([R.im4Under R.im5Under R.im6Under],'AlphaData',1);
+            for imageHandle=[R.im4 R.im5 R.im6], uistack(imageHandle,'top'); end
             set(R.line1x,'XData',[1 R.ms1.nz],'YData',[y0 y0]);
             set(R.line1y,'XData',[z0 z0],'YData',[1 R.ms1.ny]);
 
@@ -971,12 +1010,12 @@ classdef registration_ccf < handle
             axi = round(str2double(get(R.uiEditAxi,'String')));
 
             if isnan(cor), cor = R.ms1.x0; end
-            if isnan(sag), sag = R.ms1.y0; end
-            if isnan(axi), axi = R.ms1.z0; end
+            if isnan(sag), sag = R.ms1.z0; end
+            if isnan(axi), axi = R.ms1.y0; end
 
             R.ms1.x0 = cor;
-            R.ms1.y0 = sag;
-            R.ms1.z0 = axi;
+            R.ms1.y0 = axi;
+            R.ms1.z0 = sag;
 
             R.ms2.x0 = R.ms1.x0;
             R.ms2.y0 = R.ms1.y0;
@@ -1031,45 +1070,134 @@ classdef registration_ccf < handle
             R.log('[Atlas GUI] Apply executed.');
         end
 
-        function onAutoRegister(R)
-
-            try
-                set(R.H.figure1,'Pointer','watch');
-                drawnow limitrate;
-
-                % Rough 3D rigid initialization: atlas histology = fixed, anatomy overlay = moving.
-                fixed  = single(rescaleSafe(double(R.mapHistology.D)));
-                moving = single(rescaleSafe(double(R.DataNoScale)));
-
-                [optimizer, metric] = imregconfig('multimodal');
-                optimizer.MaximumIterations = 80;
-
-                tform = imregtform(moving, fixed, 'rigid', optimizer, metric);
-
-                R.T0    = tform.T;
-                R.Trot  = eye(4);
-                R.scale = [1 1 1];
-
-                set(R.uiScaleCorX,'String','1');
-                set(R.uiScaleSagY,'String','1');
-                set(R.uiScaleAxiZ,'String','1');
-
-                R.apply();
-                R.refresh();
-
-                set(R.H.figure1,'Pointer','arrow');
-                set(R.uiSaveStatus,'String','Auto init finished. Fine-tune manually, then Save.');
-                R.log('[Atlas GUI] Auto init finished.');
-
-            catch ME
-                try, set(R.H.figure1,'Pointer','arrow'); catch, end
-                set(R.uiSaveStatus,'String',['Auto init failed: ' ME.message]);
-                R.log(['[Atlas GUI] Auto init failed: ' ME.message]);
+        function onAutoRegister(R,cfg)
+            if R.autoBusy
+                setappdata(R.H.figure1,'AtlasAutoCancel',true); return;
             end
+            if R.autoSetupBusy, return; end
+            if nargin<2
+                R.autoSetupBusy=true; setupGuard=onCleanup(@()R.finishAutoSetup());
+                cfg=AtlasRegistration('settings',R.H.figure1);
+                clear setupGuard;
+            end
+            if isempty(cfg), return; end
+            previous=R.getCurrentTransform();
+            controls=findall(R.H.figure1,'Type','uicontrol');
+            enabled=get(controls,'Enable');
+            R.autoBusy=true; setappdata(R.H.figure1,'AtlasAutoCancel',false);
+            setappdata(R.H.figure1,'AtlasAutoBusy',true);
+            guard=onCleanup(@()R.finishAuto(controls,enabled)); %#ok<NASGU>
+            set(controls,'Enable','off');
+            set(R.uiAuto,'Enable','on','String','Cancel registration','BackgroundColor',[.65 .2 .24]);
+            cfg.cancelFcn=@()getappdata(R.H.figure1,'AtlasAutoCancel');
+            cfg.progressFcn=@(msg)set(R.uiSaveStatus,'String',msg);
+            cfg.voxelSizeUm=double(R.atlas.VoxelSize(:)');
+            try
+                if strcmpi(cfg.target,'histology'), fixed=R.mapHistology.D;
+                else, fixed=R.mapVascular.D; end
+                [M,report]=AtlasRegistration('register',fixed,R.DataNoScale,cfg,previous.M);
+                R.autoUndo=previous;
+                R.installMatrix(M); R.autoReport=report;
+                R.overlayOpacity=.5; set(R.uiOpacity,'Value',.5);
+                R.onAtlasMode(cfg.target); R.refresh();
+                msg=sprintf('Automatic proposal ready (%s): NMI %.3f -> %.3f. Review all planes, then Save reviewed, or Undo auto.', ...
+                    report.engine,report.nmiBefore,report.nmiAfter);
+                set(R.uiSaveStatus,'String',msg); R.log(['[Atlas GUI] ' msg]);
+                if strcmpi(cfg.engine,'greedy') && isfield(cfg,'openReview') && cfg.openReview, R.onReviewSnap(); end
+            catch ME
+                R.installMatrix(previous.M); R.autoReport=previous.autoRegistration;
+                set(R.uiSaveStatus,'String',ME.message); R.log(['[Atlas GUI] ' ME.message]);
+            end
+        end
+
+        function finishAutoSetup(R)
+            drawnow; R.autoSetupBusy=false;
+        end
+
+        function finishAuto(R,controls,enabled)
+            R.autoBusy=false;
+            for k=1:numel(controls)
+                if isgraphics(controls(k)), set(controls(k),'Enable',enabled{k}); end
+            end
+            if ~isgraphics(R.H.figure1), return; end
+            setappdata(R.H.figure1,'AtlasAutoBusy',false);
+            set(R.uiAuto,'String','Automatic 3D registration','BackgroundColor',[.16 .60 .34]);
+            if ~isempty(R.autoUndo), set(R.uiUndoAuto,'Enable','on'); end
+            set(R.H.figure1,'Pointer','arrow');
+        end
+
+        function onReviewSnap(R)
+            if R.reviewBusy, return; end
+            R.reviewBusy=true;
+            guard=onCleanup(@()R.finishReview()); %#ok<NASGU>
+            try
+                proposal=R.getCurrentTransform();
+                target='vascular'; fixed=R.mapVascular.D;
+                if R.ms1==R.mapHistology, target='histology'; fixed=R.mapHistology.D; end
+                if ~isempty(R.reviewBundle) && isequal(proposal.M,R.reviewMatrix) && strcmp(target,R.reviewTarget)
+                    try
+                        if R.reviewBundle.process.isAlive()
+                            set(R.uiSaveStatus,'String','This alignment is already open in ITK-SNAP.'); return;
+                        end
+                    catch
+                    end
+                end
+                bundle=AtlasRegistration('review',fixed,R.DataNoScale,R.atlas.Regions, ...
+                    R.atlas.infoRegions,proposal.M,R.atlas.VoxelSize,R.saveDir,true);
+                R.reviewBundle=bundle; R.reviewMatrix=proposal.M; R.reviewTarget=target;
+                set(R.uiSaveStatus,'String',['ITK-SNAP review opened. Return here to Save reviewed or Undo auto. Files: ' bundle.folder]);
+                R.log(['[Atlas GUI] Review bundle: ' bundle.folder]);
+            catch ME
+                set(R.uiSaveStatus,'String',['ITK-SNAP review: ' ME.message]); R.log(ME.message);
+            end
+        end
+
+        function finishReview(R)
+            % Drain repeated clicks while the review guard is still active.
+            drawnow; R.reviewBusy=false;
+        end
+
+        function previewAlignment(R)
+            t=now*86400;
+            if R.autoBusy || t-R.lastDragPreview<.12, return; end
+            R.lastDragPreview=t;
+            proposal=R.getCurrentTransform();
+            [cor,axi,sag]=AtlasRegistration('previewcuts',R.DataNoScale,proposal.M,size(R.ms1.D), ...
+                [R.ms1.x0 R.ms1.y0 R.ms1.z0]);
+            views={cor,axi,sag}; movers={R.r1,R.r2,R.r3}; handles=[R.im4 R.im5 R.im6];
+            for k=1:3
+                if safeIsDragging(movers{k})
+                    set(handles(k),'AlphaData',R.overlayOpacity*single(views{k}>0)); continue;
+                end
+                D=views{k}; if R.overlayInvert, D=1-D; end
+                set(handles(k),'CData',D,'AlphaData',R.overlayOpacity*single(views{k}>0));
+            end
+        end
+
+        function installMatrix(R,M)
+            % Clear uncommitted mouse drags before applying a replacement
+            % matrix, otherwise the old drag would be applied a second time.
+            safeResetMove(R.r1); safeResetMove(R.r2); safeResetMove(R.r3);
+            R.T0=M; R.Trot=eye(4); R.scale=[1 1 1];
+            set([R.uiScaleCorX R.uiScaleSagY R.uiScaleAxiZ],'String','1');
+            R.apply(); R.refresh();
+        end
+
+        function onUndoAuto(R)
+            if isempty(R.autoUndo) || R.autoBusy, return; end
+            previous=R.autoUndo; R.installMatrix(previous.M);
+            R.autoReport=previous.autoRegistration; R.autoUndo=[];
+            set(R.uiUndoAuto,'Enable','off');
+            set(R.uiSaveStatus,'String','Automatic proposal discarded. Previous alignment restored.');
         end
 
         function onSave(R)
             Transf = R.getCurrentTransform();
+            if isstruct(Transf.autoRegistration) && ~isempty(Transf.autoRegistration)
+                Transf.autoRegistration.reviewRequired=false;
+                Transf.autoRegistration.reviewedSavedAt=datestr(now,30);
+                Transf.autoRegistration.savedMatrix=Transf.M;
+            end
             outFile = fullfile(R.saveDir,'Transformation.mat');
 
             try
@@ -1186,8 +1314,8 @@ classdef registration_ccf < handle
             ax3 = axes('Parent',hf,'Units','normalized','Position',[0.68 0.12 0.29 0.76], 'Color','k');
 
             drawOverlayPreview(ax1, aCor, rescaleSafe(oCor), [R.overlayWinMin R.overlayWinMax], cmap, R.overlayOpacity, sprintf('Coronal x = %d', x0));
-            drawOverlayPreview(ax2, aSag, rescaleSafe(oSag), [R.overlayWinMin R.overlayWinMax], cmap, R.overlayOpacity, sprintf('Sagittal y = %d', y0));
-            drawOverlayPreview(ax3, permute(aAxi,[2 1 3]), rescaleSafe(oAxi), [R.overlayWinMin R.overlayWinMax], cmap, R.overlayOpacity, sprintf('Axial z = %d', z0));
+            drawOverlayPreview(ax2, aSag, rescaleSafe(oSag), [R.overlayWinMin R.overlayWinMax], cmap, R.overlayOpacity, sprintf('Axial depth = %d', y0));
+            drawOverlayPreview(ax3, permute(aAxi,[2 1 3]), rescaleSafe(oAxi), [R.overlayWinMin R.overlayWinMax], cmap, R.overlayOpacity, sprintf('Sagittal left/right = %d', z0));
 
             uicontrol('Style','text','Parent',hf,'Units','normalized', ...
                 'Position',[0.02 0.93 0.96 0.05], ...
@@ -1199,6 +1327,7 @@ classdef registration_ccf < handle
         end
 
         function onHelp(R)
+            deConfUSIon_ui('help','Registration'); return;
             bg = [0.06 0.06 0.06];
             fg = [0.95 0.95 0.95];
 
@@ -1237,6 +1366,10 @@ classdef registration_ccf < handle
         end
 
         function onClose(R)
+            if R.autoBusy
+                setappdata(R.H.figure1,'AtlasAutoCancel',true);
+                return;
+            end
             try
                 delete(R.H.figure1);
             catch
@@ -1244,7 +1377,7 @@ classdef registration_ccf < handle
         end
 
         function onScroll(R, evt)
-
+            if R.autoBusy, return; end
             if R.anyDragging()
                 return;
             end
@@ -1368,35 +1501,11 @@ end
 function tot = build3DrotationMatrix(R)
 
 tot = eye(4);
-
-if isempty(R.r1) || isempty(R.r2) || isempty(R.r3)
-    return;
+movers={R.r1,R.r2,R.r3}; planes={'coronal','axial','sagittal'};
+for k=1:3
+    if isempty(movers{k}), continue; end
+    tot=tot*AtlasRegistration('planematrix',movers{k}.pendingTransform(),planes{k});
 end
-
-tmpx = R.r1.T0;
-tmpx(1:2,1:2) = tmpx(1:2,1:2)';
-tmpx(3,1:2)   = fliplr(tmpx(3,1:2));
-tmp = [tmpx(1,:); zeros(1,3); tmpx(2:end,:)];
-tmp = [tmp(:,1), zeros(4,1), tmp(:,2:end)];
-tmp(2,2) = 1;
-tot = tot * tmp;
-
-tmpx = R.r2.T0;
-tmpx(1:2,1:2) = tmpx(1:2,1:2)';
-tmpx(3,1:2)   = fliplr(tmpx(3,1:2));
-tmp = [zeros(1,3); tmpx(1:end,:)];
-tmp = [zeros(4,1), tmp(:,1:end)];
-tmp(1,1) = 1;
-tot = tot * tmp;
-
-tmpx = R.r3.T0;
-tmpx(1:2,1:2) = tmpx(1:2,1:2)';
-tmpx(3,1:2)   = fliplr(tmpx(3,1:2));
-tmp = [tmpx(1:2,:); zeros(1,3); tmpx(3:end,:)];
-tmp = [tmp(:,1:2), zeros(4,1), tmp(:,3:end)];
-tmp(3,3) = 1;
-tot = tot * tmp;
-
 end
 
 
@@ -1585,6 +1694,9 @@ end
 
 for i = 1:numel(fields)
     v = S.(fields{i});
+    if isstruct(v) && isscalar(v) && isfield(v,'I') && isnumeric(v.I) && ~isempty(v.I)
+        v.Data=v.I;
+    end
     if isstruct(v) && isfield(v,'Data') && isnumeric(v.Data) && ~isempty(v.Data)
         if ndims(v.Data) >= 2 && ndims(v.Data) <= 4
             scanBest = struct();
@@ -1636,16 +1748,9 @@ if ndims(D) == 4
     descText = sprintf('Preview = mean over time of 4D [%s]', joinDimsLocal(size(D)));
 
 elseif ndims(D) == 3
-    if size(D,3) == 1
-        scanPrev.Data = D;
-        descText = sprintf('Preview = single-plane 3D [%s]', joinDimsLocal(size(D)));
-    elseif size(D,3) > 16
-        scanPrev.Data = reshape(mean(D,3), [size(D,1) size(D,2) 1]);
-        descText = sprintf('Preview = mean over dim3 of 3D [%s]', joinDimsLocal(size(D)));
-    else
-        scanPrev.Data = D;
-        descText = sprintf('Preview = static 3D volume [%s]', joinDimsLocal(size(D)));
-    end
+    % Slice count does not identify a time axis: a 54-slice anatomy is 3D.
+    scanPrev.Data = D;
+    descText = sprintf('Preview = static 3D volume [%s]', joinDimsLocal(size(D)));
 
 elseif ndims(D) == 2
     scanPrev.Data = reshape(D, [size(D,1) size(D,2) 1]);
@@ -1691,33 +1796,9 @@ if ndims(D) == 4
     descText = sprintf('Full 4D scan registered [%s]', joinDimsLocal(size(D)));
 
 elseif ndims(D) == 3
-    if size(D,3) > 16
-        T = size(D,3);
-
-        tmpFirst = struct();
-        tmpFirst.Data = reshape(D(:,:,1), [size(D,1) size(D,2) 1]);
-        tmpFirst.VoxelSize = scanIn.VoxelSize;
-        reg1 = register_data(atlas, tmpFirst, TransfNow);
-
-        regAll = zeros([size(reg1) T], 'single');
-        regAll(:,:,:,1) = single(reg1);
-
-        for t = 2:T
-            tmp = struct();
-            tmp.Data = reshape(D(:,:,t), [size(D,1) size(D,2) 1]);
-            tmp.VoxelSize = scanIn.VoxelSize;
-            regAll(:,:,:,t) = single(register_data(atlas, tmp, TransfNow));
-        end
-
-        registered.Data = regAll;
-        descText = sprintf('3D data treated as YXT and registered framewise [%s]', joinDimsLocal(size(D)));
-    else
-        tmp = struct();
-        tmp.Data = D;
-        tmp.VoxelSize = scanIn.VoxelSize;
-        registered.Data = single(register_data(atlas, tmp, TransfNow));
-        descText = sprintf('Static 3D volume registered [%s]', joinDimsLocal(size(D)));
-    end
+    tmp=struct('Data',D,'VoxelSize',scanIn.VoxelSize);
+    registered.Data = single(register_data(atlas, tmp, TransfNow));
+    descText = sprintf('Static 3D volume registered [%s]', joinDimsLocal(size(D)));
 
 elseif ndims(D) == 2
     tmp = struct();
@@ -1921,6 +2002,11 @@ end
 % Example: example03_correlation.m
 %%
 function ras=register_data(atlas,x,Transf)
+if isfield(Transf,'scanGeometry') && ~isempty(Transf.scanGeometry)
+    Transf.scanGeometry.atlasVoxelSizeUm=double(atlas.VoxelSize(:)');
+    ras=AtlasRegistration('warp',x.Data,Transf);
+    return;
+end
 Dint=interpolate3D(atlas,x);
 T=affine3d(Transf.M);
 ref=imref3d(Transf.size);
@@ -2027,5 +2113,3 @@ for k = 1:3
     end
 end
 end
-
-

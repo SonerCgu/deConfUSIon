@@ -1,6 +1,8 @@
 # deConfUSIon
 
-**deConfUSIon** is a MATLAB-based graphical toolbox for functional ultrasound imaging (fUSI) analysis. It supports data loading, quality control, preprocessing, percentage signal change (PSC) computation, signal-change-map (SCM) visualization, masking, atlas registration, segmentation, functional connectivity, and group analysis - 11th of June 2026.
+**deConfUSIon** is a MATLAB-based graphical toolbox for functional ultrasound imaging (fUSI) analysis. It supports data loading, quality control, preprocessing, percentage signal change (PSC) computation, signal-change-map (SCM) visualization, masking, atlas registration, segmentation, functional connectivity, and group analysis.
+
+The 2026-09-06 repair release adds a shared numerical contract, safer timing and baseline handling, chunked large-data operations, a consistent GUI theme, context Help, dynamic SCM rebasing, dataset identity headers in PCA/ICA, and seven validated Standardized Analysis presets. Existing files are backed up in `_backup_repair_20260906_131128`.
 
 This repository was previously developed as **HUMoR / HUMOR-Analysis-Tool**. The active launcher and current repository name are now **deConfUSIon**.
 
@@ -12,16 +14,20 @@ This repository was previously developed as **HUMoR / HUMOR-Analysis-Tool**. The
 
 Open the current full updated user manual:
 
-- [Open the current deConfUSIon fUSI Studio User Manual PDF](docs/deConfUSIon_fUSI_Studio_Full_Updated_User_Manual_2026-06-24.pdf)
-- [Open on GitHub](https://github.com/SonerCgu/deConfUSIon/blob/main/docs/deConfUSIon_fUSI_Studio_Full_Updated_User_Manual_2026-06-24.pdf)
-- [Direct PDF download / browser open](https://github.com/SonerCgu/deConfUSIon/raw/main/docs/deConfUSIon_fUSI_Studio_Full_Updated_User_Manual_2026-06-24.pdf)
+- [Open the current HTML user manual](docs/deConfUSIon_User_Manual_2026-09-06.html)
 
-This manual covers installation/startup, expected folder structure, Standardized Analysis workflows A and B, QC, preprocessing, frame rejection, scrubbing, despiking, SCM and Video GUI, mask editing, atlas registration, segmentation, functional connectivity, group analysis, exports, abbreviations, mathematical calculations, and troubleshooting.
+- [Open the current deConfUSIon fUSI Studio User Manual PDF](docs/deConfUSIon_User_Manual_2026-09-06.pdf)
+- [Open on GitHub](https://github.com/SonerCgu/deConfUSIon/blob/main/docs/deConfUSIon_User_Manual_2026-09-06.pdf)
+- [Direct PDF download / browser open](https://github.com/SonerCgu/deConfUSIon/raw/main/docs/deConfUSIon_User_Manual_2026-09-06.pdf)
+
+The HTML manual documents installation/startup, data naming and timing, QC, preprocessing, frame rejection, scrubbing, despiking, SCM baseline rebasing, PCA/ICA memory behavior, all Standardized Analysis presets A–G, functional connectivity/FDR, group alignment, exports, and troubleshooting. The June 2026 PDF remains available as a legacy reference.
+
+The implementation review and GUI regression notes are in [the repair review](docs/deConfUSIon_review_2026-09-06.md) and [the GUI follow-up report](docs/deConfUSIon_GUI_followup_2026-09-06.md).
 
 In MATLAB you can also open the same manual directly with:
 
 ```matlab
-web(fullfile(pwd,'docs','deConfUSIon_fUSI_Studio_Full_Updated_User_Manual_2026-06-24.pdf'),'-browser')
+web(fullfile(pwd,'docs','deConfUSIon_User_Manual_2026-09-06.html'),'-browser')
 ```
 
 ---
@@ -45,9 +51,9 @@ deConfUSIon
 
 The current source package contains approximately:
 
-- 80 root MATLAB runtime/helper files
+- 90 root MATLAB runtime/helper files (including the shared repair utilities)
 - 2 MATLAB utilities inside `atlas_tools`
-- 1 current full updated PDF user manual inside `docs`
+- 1 current HTML manual plus the June 2026 legacy PDF inside `docs`
 - atlas support files including `allen_brain_atlas.mat`, `rgb2acr.xlsx`, and `list_selected_regions.txt`
 
 The current code is best suited for:
@@ -108,9 +114,7 @@ Some export workflows may depend on Windows-specific features, Microsoft PowerPo
 
 7. After each preprocessing step, check the active dataset dropdown.
 
-8. For a guided workflow, use **Standardized Analysis**:
-   - **Option A Fast** ticks only Motor, Imregdemons, Video GUI, Time-Course Viewer, and SCM GUI.
-   - **Option B Detailed** restores the longer current workflow with mask, atlas registration, segmentation, and Functional Connectivity.
+8. For a guided workflow, use **Standardized Analysis**. Presets are **A Standard A fast**, **B Standard B slow**, **C 2D awake**, **D 2D anesthesized**, **E 3D awake**, **F 3D anesthesized**, and **G motor anesthesized**. Dimension checks run before a preset starts.
 
 9. Use the Time-Course Viewer, Video GUI, and SCM GUI to inspect PSC maps and signal dynamics.
 
@@ -178,10 +182,17 @@ Some export workflows may depend on Windows-specific features, Microsoft PowerPo
 | `Segmentation.m` | Segmentation workflow | Yes |
 | `FunctionalConnectivity.m` | Functional connectivity workflow | Yes |
 | `GroupAnalysis*.m` | Group analysis modules | Yes |
+| `deConfUSIon_signal.m` | Shared PSC, interpolation, compact-basis, and FC statistics contract | Yes |
+| `deConfUSIon_ui.m` | Shared theme, dataset headers, and context Help | Yes |
+| `deConfUSIon_utils.m` | Consolidated small naming/display/filesystem helpers | Yes |
 | `atlas_tools/` | JM atlas color/order files and manual utilities | Yes |
-| `docs/` | User manual PDF | Yes |
+| `docs/` | Current HTML manual, Help topics, review, and legacy PDF | Yes |
 
 ---
+
+## Consolidated helpers
+
+Short stateless naming/display/filesystem helpers are dispatched through `deConfUSIon_utils.m`; drift and SVD/clutter workflows use the public `DriftCompensation.m`, `Drift.m`, and `ClutterFilter.m` entry points. The compatibility names remain available so older analysis scripts continue to run. GUI timer and acquisition-specific helpers stay external because they own callbacks, timers, or hardware state.
 
 ## Files That Should Stay External
 
@@ -195,7 +206,6 @@ Keep these external:
 deConfUSIon_popup_autofit_apply.m
 deConfUSIon_popup_autofit_timer.m
 deConfUSIon_popup_polish_now.m
-deConfUSIon_force_fullscreen_fig.m
 ```
 
 ### Functional connectivity / step-motor shared helpers
@@ -223,7 +233,6 @@ deConfUSIon_commit_full_display_name.m
 deConfUSIon_best_visible_dataset_name.m
 deConfUSIon_display_from_file_context.m
 deConfUSIon_display_name_from_sources.m
-deConfUSIon_is_bad_display_name.m
 ```
 
 Some metadata fields still contain legacy names such as `HUMOR_fullDisplayName`. Keep these compatibility fields so older `.mat` outputs continue to load.
@@ -432,8 +441,8 @@ Functional Connectivity usually receives data from deConfUSIon Studio. If called
 Before adding new modules:
 
 1. Keep runtime files in root unless there is a strong reason to move them.
-2. Keep shared GUI/helper functions external if they are called by callbacks or multiple modules.
-3. Avoid deleting small helper files only because they are small.
+2. Keep callback, timer, acquisition, and hardware helpers external when they own state.
+3. Consolidate only stateless helpers through `deConfUSIon_utils.m`, with a documented dispatcher action.
 4. Add generated outputs to `.gitignore`.
 5. Test with both normal 2D and 2D step-motor data.
 

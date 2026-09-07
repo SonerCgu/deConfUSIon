@@ -239,6 +239,12 @@ metaForViewer.activeDataset = studio.activeDataset;
         % -----------------------------------------------------
         metaForViewer.activeDataset = studio.activeDataset;
         metaForViewer.datasetDisplayName = getDatasetDisplayName(studio, studio.activeDataset);
+        % Preserve acquisition geometry for physically correct 3-D display.
+        % loadFUSIData exposes this at data.voxelSize; older datasets keep it
+        % under metadata/rawMetadata, which fUSI_Live_Studio also understands.
+        if isfield(data,'voxelSize') && ~isempty(data.voxelSize)
+            metaForViewer.voxelSize = data.voxelSize;
+        end
 
         viewerFig = fUSI_Live_Studio( ...
             I, ...
@@ -399,6 +405,8 @@ end
     par.previewCaxis = [];
     par.exportPath = studio.exportPath;
     par.datasetTag = studio.activeDataset;
+    par.meta = studio.meta;
+    if isfield(data,'voxelSize') && ~isempty(data.voxelSize), par.voxelSize = data.voxelSize; end
 par.selectorRoot = studio.exportPath;
 
 par.visualizationPath = fullfile(studio.exportPath,'Visualization');
@@ -707,6 +715,8 @@ baseline = struct( ...
     par.exportPath = studio.exportPath;
     par.datasetTag = studio.activeDataset;
     par.activeDataset = studio.activeDataset;
+    par.meta = studio.meta;
+    if isfield(data,'voxelSize') && ~isempty(data.voxelSize), par.voxelSize = data.voxelSize; end
 par.selectorRoot = studio.exportPath;
 
 par.visualizationPath = fullfile(studio.exportPath,'Visualization');
@@ -1039,6 +1049,7 @@ end
 %  DATASET DROPDOWN CALLBACK
 % =========================================================
 function datasetDropdownCallback(src,~)
+    if isequal(getappdata(fig,'StudioActionBusy'),true), return; end
 
     studio = guidata(fig);
 
@@ -1066,7 +1077,6 @@ end
 function refreshDatasetDropdown()
     studio = guidata(fig);
     try
-        studio = deConfUSIon_add_preproc_lazy_datasets(studio);
         studio = deConfUSIon_fix_studio_dataset_names(studio);
         guidata(fig, studio);
     catch ME_scan
@@ -1105,38 +1115,12 @@ function refreshDatasetDropdown()
     labels = cell(size(keys));
     for i = 1:numel(keys)
         labels{i} = getDatasetDisplayName(studio, keys{i});
+        labels{i} = deConfUSIon_ui('datedlabel',labels{i},studio.datasets.(keys{i}),studio.loadedFile);
     end
 
-    % Always select latest analysis output. If only raw exists, select latest raw.
-    analysisExpr = 'frameRej|framerej|scrub|despike|despiking|despiked|motor|pca|ica|imreg|BPF|LPF|HPF|tsmooth|temporalSmooth|submean|submed|subsample|filter|driftComp|driftcomp|DRIFTCOMP';
-    idx = [];
-    bestTime = -Inf;
-    for i = 1:numel(keys)
-        blob = [labels{i} '_' keys{i}];
-        try
-            d = studio.datasets.(keys{i});
-            if isstruct(d) && isfield(d,'preprocessing') && ~isempty(d.preprocessing)
-                blob = [blob '_' char(d.preprocessing)];
-            end
-            if isstruct(d) && isfield(d,'savedFile') && ~isempty(d.savedFile)
-                blob = [blob '_' char(d.savedFile)];
-            end
-            if isstruct(d) && isfield(d,'lazyFile') && ~isempty(d.lazyFile)
-                blob = [blob '_' char(d.lazyFile)];
-            end
-        catch
-        end
-        if ~isempty(regexpi(blob, analysisExpr, 'once'))
-            if sortVals(i) >= bestTime
-                bestTime = sortVals(i);
-                idx = i;
-            end
-        end
-    end
-
-    if isempty(idx)
-        [~,idx] = max(sortVals);
-    end
+    % Keep the explicitly selected or just-created in-memory dataset.
+    idx=find(strcmp(keys,studio.activeDataset),1);
+    if isempty(idx), [~,idx]=max(sortVals); end
     idx = max(1,min(numel(keys),idx));
     studio.activeDataset = keys{idx};
 
@@ -1184,122 +1168,29 @@ function data = getActiveData()
 
         try
             oldLazy = data;
-            tmp = [];
-
-            try
-                m = matfile(oldLazy.lazyFile);
-                tmp = m.newData;
-            catch
-                S_lazy = load(oldLazy.lazyFile);
-                if isfield(S_lazy,'newData')
-                    tmp = S_lazy.newData;
-                elseif isfield(S_lazy,'data')
-                    tmp = S_lazy.data;
-                else
-                    [tmp,~] = loadFUSIData(oldLazy.lazyFile, []);
-                end
+            % Read the selected data variable once. The old fallback loaded
+            % the entire raw MAT and then loaded it again through the loader.
+            variables=whos('-file',oldLazy.lazyFile);
+            if any(strcmp({variables.name},'newData'))
+                saved=load(oldLazy.lazyFile,'newData'); data=saved.newData;
+            elseif any(strcmp({variables.name},'data') & strcmp({variables.class},'struct'))
+                saved=load(oldLazy.lazyFile,'data'); data=saved.data;
+            else
+                [data,~]=loadFUSIData(oldLazy.lazyFile,[]);
             end
-
-            data = tmp;
-            % HUMOR_V29_FORCE_LOADED_FULL_NAME
-            try
-                if isstruct(data)
-                    seedName = selected;
-                    if isfield(data,'HUMOR_fullDisplayName') && ~isempty(data.HUMOR_fullDisplayName), seedName = data.HUMOR_fullDisplayName; end
-                    if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull), seedName = data.displayNameFull; end
-                    if isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName), seedName = data.preprocDisplayName; end
-                    fullNameNow = deConfUSIon_display_name_from_sources(seedName,data,oldLazy.lazyFile);
-                    data.HUMOR_fullDisplayName = fullNameNow;
-                    data.displayNameFull = fullNameNow;
-                    data.preprocDisplayName = fullNameNow;
-                    studio.datasets.(selected).HUMOR_fullDisplayName = fullNameNow;
-                    studio.datasets.(selected).displayNameFull = fullNameNow;
-                    studio.datasets.(selected).preprocDisplayName = fullNameNow;
-                    guidata(fig,studio);
-                end
-            catch
+            if ~isstruct(data) || ~isfield(data,'I') || isempty(data.I)
+                error('deConfUSIon:EmptyDataset','Selected file contains no usable image time series.');
             end
-            % HUMOR_V28_FORCE_EXACT_LAZY_NAME
-            try
-                if isstruct(data)
-                    seedName = selected;
-                    if isfield(data,'HUMOR_fullDisplayName') && ~isempty(data.HUMOR_fullDisplayName)
-                        seedName = data.HUMOR_fullDisplayName;
-                    elseif isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
-                        seedName = data.displayNameFull;
-                    elseif isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName)
-                        seedName = data.preprocDisplayName;
-                    end
-                    fullNameNow = deConfUSIon_best_visible_dataset_name(seedName, data, oldLazy.lazyFile);
-                    data.HUMOR_fullDisplayName = fullNameNow;
-                    data.displayNameFull = fullNameNow;
-                    data.preprocDisplayName = fullNameNow;
-                    studio.datasets.(selected).HUMOR_fullDisplayName = fullNameNow;
-                    studio.datasets.(selected).displayNameFull = fullNameNow;
-                    studio.datasets.(selected).preprocDisplayName = fullNameNow;
-                    try, deConfUSIon_commit_full_display_name(oldLazy.lazyFile, data, fullNameNow); catch, end
-                    guidata(fig, studio);
-                end
-            catch
-            end
-            % HUMOR_V27_FORCE_FULL_LAZY_NAME
-            try
-                if isstruct(data)
-                    nameSeed = selected;
-                    if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
-                        nameSeed = data.displayNameFull;
-                    elseif isfield(data,'preprocDisplayName') && ~isempty(data.preprocDisplayName)
-                        nameSeed = data.preprocDisplayName;
-                    end
-                    fullNameNow = deConfUSIon_best_visible_dataset_name(nameSeed, data, oldLazy.lazyFile);
-                    data.displayNameFull = fullNameNow;
-                    data.preprocDisplayName = fullNameNow;
-                    studio.datasets.(selected).displayNameFull = fullNameNow;
-                    studio.datasets.(selected).preprocDisplayName = fullNameNow;
-                    studio.datasets.(selected).HUMOR_fullDisplayName = fullNameNow;
-                    try, deConfUSIon_commit_full_display_name(oldLazy.lazyFile, data, fullNameNow); catch, end
-                    guidata(fig, studio);
-                end
-            catch
-            end
-            % HUMOR_V26_FIX_LOADED_LAZY_NAME
-            try
-                if isstruct(data)
-                    if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
-                        nameSeed = data.displayNameFull;
-                    else
-                        nameSeed = selected;
-                    end
-                    data.displayNameFull = deConfUSIon_full_ordered_label_for_dataset(nameSeed, data, oldLazy.lazyFile);
-                    data.preprocDisplayName = data.displayNameFull;
-                    studio.datasets.(selected).displayNameFull = data.displayNameFull;
-                    studio.datasets.(selected).preprocDisplayName = data.displayNameFull;
-                    try, deConfUSIon_write_full_display_metadata(oldLazy.lazyFile, data); catch, end
-                    guidata(fig, studio);
-                end
-            catch
-            end
-            try
-                if isstruct(data)
-                    if isfield(data,'displayNameFull') && ~isempty(data.displayNameFull)
-                        data.displayNameFull = deConfUSIon_fix_processing_name(data.displayNameFull, data, oldLazy.lazyFile);
-                    else
-                        data.displayNameFull = deConfUSIon_fix_processing_name(selected, data, oldLazy.lazyFile);
-                    end
-                    studio.datasets.(selected).displayNameFull = data.displayNameFull;
-                    guidata(fig, studio);
-                end
-            catch
-            end
-
-            if ~isfield(data,'displayNameFull') || isempty(data.displayNameFull)
-                if isfield(oldLazy,'displayNameFull') && ~isempty(oldLazy.displayNameFull)
-                    data.displayNameFull = oldLazy.displayNameFull;
-                else
-                    data.displayNameFull = selected;
-                end
-            end
-
+            seedName=selected;
+            if isfield(oldLazy,'displayNameFull'), seedName=oldLazy.displayNameFull; end
+            fullNameNow=deConfUSIon_best_visible_dataset_name(seedName,data,oldLazy.lazyFile);
+            fullNameNow=deConfUSIon_fix_processing_name(fullNameNow,data,oldLazy.lazyFile);
+            data.HUMOR_fullDisplayName=fullNameNow;
+            data.displayNameFull=fullNameNow; data.preprocDisplayName=fullNameNow;
+            data.displayNameShort=deConfUSIon_display_short_name(fullNameNow,data,oldLazy.lazyFile);
+            if isfield(oldLazy,'datasetSortTime'), data.datasetSortTime=oldLazy.datasetSortTime; end
+            % Selection is read-only: never append naming metadata to a raw
+            % acquisition or rewrite its creation/sort date while opening it.
             data.isLazy = false;
             if isfield(oldLazy,'lazyFile')
                 data.lazyFile = oldLazy.lazyFile;
@@ -1341,7 +1232,8 @@ function unlockAllButtons()
         if ~isempty(h) && ishghandle(h)
             try
                 if isprop(h,'Tag') && strcmp(get(h,'Tag'),'dcModernButton')
-                    setModernButtonEnabled(h,true);
+                    ud=get(h,'UserData');
+                    setModernButtonEnabled(h,studio.isLoaded || strcmp(ud.styleKey,'primary'));
                 else
                     set(h, 'Enable','on', 'BackgroundColor',theme.buttonEnabled, 'ForegroundColor',theme.text);
                 end
@@ -1542,6 +1434,7 @@ end
 % =========================================================
 function helpCallback(~,~)
 
+    deConfUSIon_ui('help','Overview'); return;
     bgColor = [0.08 0.08 0.08];
     fgColor = [1 1 1];
 
@@ -1623,31 +1516,31 @@ function addLog(msg)
         return;
     end
 
-    studio = guidata(fig);
+    logState = guidata(fig);
 
     timestamp = datestr(now,'HH:MM:SS');
     newEntry = sprintf('[%s] %s', timestamp, msg);
     wrappedEntries = wrapLogMessage(newEntry, 115);
 
-    if isfield(studio,'logBoxJava') && ~isempty(studio.logBoxJava)
+    if isfield(logState,'logBoxJava') && ~isempty(logState.logBoxJava)
         try
-            oldText = char(studio.logBoxJava.getText());
+            oldText = char(logState.logBoxJava.getText());
             if isempty(oldText)
                 combined = strjoin(wrappedEntries, sprintf('\n'));
             else
                 combined = [oldText sprintf('\n') strjoin(wrappedEntries, sprintf('\n'))];
             end
 
-            studio.logBoxJava.setText(combined);
-            studio.logBoxJava.setCaretPosition(studio.logBoxJava.getDocument().getLength());
-            drawnow;
+            javaMethodEDT('setText',logState.logBoxJava,combined);
+            javaMethodEDT('setCaretPosition',logState.logBoxJava,logState.logBoxJava.getDocument().getLength());
+            drawnow limitrate nocallbacks;
             return;
         catch
         end
     end
 
-    if isfield(studio,'logBox') && ~isempty(studio.logBox) && ishghandle(studio.logBox)
-        current = get(studio.logBox,'String');
+    if isfield(logState,'logBox') && ~isempty(logState.logBox) && ishghandle(logState.logBox)
+        current = get(logState.logBox,'String');
 
         if isempty(current)
             current = {};
@@ -1661,8 +1554,12 @@ function addLog(msg)
             current = {};
         end
 
-        set(studio.logBox,'String',[current; wrappedEntries(:)]);
-        drawnow;
+        entries=[current(:); wrappedEntries(:)];
+        set(logState.logBox,'String',entries,'Value',numel(entries));
+        if strcmp(get(logState.logBox,'Style'),'listbox')
+            set(logState.logBox,'ListboxTop',max(1,numel(entries)-3));
+        end
+        drawnow limitrate nocallbacks;
     end
 end
 
@@ -1695,9 +1592,9 @@ end
 
 function setProgramStatus(isReady)
 
-    studio = guidata(fig);
-    statusPanel = studio.statusPanel;
-    statusText = studio.statusText;
+    statusState = guidata(fig);
+    statusPanel = statusState.statusPanel;
+    statusText = statusState.statusText;
 
     bgReady = [0.08 0.42 0.30];
     bgNotReady = [0.44 0.16 0.20];
@@ -1723,7 +1620,7 @@ function setProgramStatus(isReady)
         'FontWeight','bold', ...
         'FontSize',16);
 
-    drawnow;
+    drawnow limitrate nocallbacks;
 end
 
 %% =========================================================
@@ -1846,7 +1743,7 @@ function stem = getCurrentNamingStem(studio)
         end
     catch
     end
-    try, stem = deConfUSIon_full_ordered_label_for_dataset(stem, [], ''); catch, end
+    try, stem = deConfUSIon_utils('deConfUSIon_full_ordered_label_for_dataset',stem, [], ''); catch, end
 
     % Clean base before creating the next operation name.
     try, stem = char(stem); catch, stem = 'dataset'; end
@@ -2034,7 +1931,7 @@ stepMotorUnderlayKind = 'histology';
     uicontrol('Parent',infoPanel,'Style','text', ...
         'Units','normalized', ...
         'Position',[0.025 0.52 0.95 0.34], ...
-        'String',shortenMiddle(datasetTxt,150), ...
+        'String',deConfUSIon_utils('shortenMiddle',datasetTxt,150), ...
         'TooltipString',datasetTxt, ...
         'BackgroundColor',panel3, ...
         'ForegroundColor',[0.45 1.00 0.62], ...
@@ -2339,18 +2236,8 @@ uicontrol('Parent',filePanel,'Style','text', ...
 
     setStatusForChoice(defaultChoice);
 
+    deConfUSIon_ui('present',dlg,fig);
     set(dlg,'Visible','on');
-% HUMOR_FINAL_POPUP_ALIGN_20260527
-drawnow;
-try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end
-% HUMOR_SCM_VIDEO_FINAL_BIG_POPUP_20260527
-drawnow;
-try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end
-% HUMOR_SCM_VIDEO_FONT_REFINEMENT_20260527
-try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end
-% HUMOR_SCM_VIDEO_BIG_UI_SAFE_20260527
-try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end
-    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
     waitfor(dlg);
 
     function h = makeLabel(parent,pos,str,fs,col)
@@ -2481,7 +2368,7 @@ end
         loadedFileLabel = labelText;
         loadedFileInfo = info;
 
-        set(txtUnderlayStatus,'String',shortenMiddle(['Loaded: ' labelText],90));
+        set(txtUnderlayStatus,'String',deConfUSIon_utils('shortenMiddle',['Loaded: ' labelText],90));
         setStatus(['Loaded underlay: ' labelText], [0.70 1.00 0.80]);
 
     catch ME
@@ -2691,8 +2578,7 @@ end
         try
             if strcmpi(ev.Key,'escape')
                 onCancel();
-            elseif strcmpi(ev.Key,'return')
-                onOpen();
+
             end
         catch
         end
@@ -5018,477 +4904,6 @@ function answ = studio_silent_tr_answer_for_old_prompt()
     answ = {num2str(studio_get_last_tr_default())};
 end
 
-function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_options_dark_dialog(initialTR, autoDatasetFolder, analysedRoot, datasetName, probeType, defaultTR, data, meta)
-    TR = initialTR;
-    datasetFolder = autoDatasetFolder;
-    wasCancelled = false;
-
-    if nargin < 7
-        data = struct();
-    end
-    if nargin < 8
-        meta = struct();
-    end
-
-    if nargin < 5 || isempty(probeType) || nargin < 6 || isempty(defaultTR) || ~isnumeric(defaultTR) || ~isfinite(defaultTR) || defaultTR <= 0
-        try
-            [probeType, defaultTR] = detectProbeTypeFromMeta(data, meta);
-    defaultTR = studio_probe_default_tr_seconds(probeType, data);
-        catch
-            probeType = '2D Probe';
-            defaultTR = 0.320;
-        end
-    end
-
-    if nargin < 1 || isempty(initialTR) || ~isnumeric(initialTR) || ~isfinite(initialTR) || initialTR <= 0
-        initialTR = defaultTR;
-    end
-    if nargin < 2 || isempty(autoDatasetFolder)
-        autoDatasetFolder = fullfile(pwd,'AnalysedData', 'Dataset');
-    end
-    if nargin < 3 || isempty(analysedRoot)
-        analysedRoot = fileparts(autoDatasetFolder);
-    end
-    if nargin < 4 || isempty(datasetName)
-        datasetName = 'Dataset';
-    end
-
-    fileTR = [];
-    fileTRSource = 'not found';
-    try
-        [fileTR, fileTRSource] = studio_get_file_tr_candidate(data, meta);
-    catch
-        fileTR = [];
-        fileTRSource = 'not found';
-    end
-
-    customTRmsDefault = defaultTR * 1000;
-    if ~isempty(fileTR) && isfinite(fileTR) && fileTR > 0
-        customTRmsDefault = fileTR * 1000;
-    end
-
-    bg       = [0.07 0.08 0.10];
-    panel    = [0.12 0.13 0.16];
-    panel2   = [0.16 0.17 0.21];
-    fg       = [0.94 0.94 0.94];
-    muted    = [0.72 0.74 0.78];
-    green    = [0.10 0.50 0.24];
-    red      = [0.62 0.13 0.12];
-    blue     = [0.12 0.28 0.52];
-    orange   = [0.85 0.45 0.12];
-
-    W = 1000;
-    H = 760;
-    scr = get(0,'ScreenSize');
-    x0 = max(30, round((scr(3)-W)/2));
-    y0 = max(30, round((scr(4)-H)/2));
-
-    dlg = figure('Name','Load dataset options', ...
-        'NumberTitle','off', ...
-        'MenuBar','none', ...
-        'ToolBar','none', ...
-        'Color',bg, ...
-        'Units','pixels', ...
-        'Position',[x0 y0 W H], ...
-        'Resize','off', ...
-        'WindowStyle','modal', ...
-        'CloseRequestFcn',@onCancel);
-
-    result = struct();
-    result.cancel = true;
-    result.TR = defaultTR;
-    result.datasetFolder = autoDatasetFolder;
-    setappdata(dlg,'result',result);
-
-    uicontrol(dlg,'Style','text', ...
-        'String','Load dataset options', ...
-        'Units','pixels', ...
-        'Position',[35 595 790 36], ...
-        'BackgroundColor',bg, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',21, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','left');
-
-    uicontrol(dlg,'Style','text', ...
-        'String','Confirm probe/TR settings and choose where analysed data should be saved.', ...
-        'Units','pixels', ...
-        'Position',[35 565 790 24], ...
-        'BackgroundColor',bg, ...
-        'ForegroundColor',muted, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left');
-
-    % Probe/TR panel
-    uipanel('Parent',dlg, ...
-        'Units','pixels', ...
-        'Position',[35 390 790 160], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'BorderType','line', ...
-        'HighlightColor',panel2);
-
-    uicontrol(dlg,'Style','text', ...
-        'String','Probe and temporal resolution', ...
-        'Units','pixels', ...
-        'Position',[60 515 500 26], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','left');
-
-    infoText = sprintf('Detected probe: %s     |     Probe default TR: %.0f ms (%.3f s)', probeType, defaultTR*1000, defaultTR);
-    if ~isempty(fileTR)
-        infoText = sprintf('%s     |     File TR: %.0f ms (%.3f s)', infoText, fileTR*1000, fileTR);
-    end
-
-    uicontrol(dlg,'Style','text', ...
-        'String',infoText, ...
-        'Units','pixels', ...
-        'Position',[60 487 735 24], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',muted, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left');
-
-    hUseDefaultTR = uicontrol(dlg,'Style','radiobutton', ...
-        'String',sprintf('Use probe default TR: %.0f ms', defaultTR*1000), ...
-        'Value',1, ...
-        'Units','pixels', ...
-        'Position',[60 450 320 28], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'Callback',@onUseDefaultTR);
-
-    hUseCustomTR = uicontrol(dlg,'Style','radiobutton', ...
-        'String','Use custom TR', ...
-        'Value',0, ...
-        'Units','pixels', ...
-        'Position',[410 450 190 28], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'Callback',@onUseCustomTR);
-
-    hCustomTRms = uicontrol(dlg,'Style','edit', ...
-        'String',sprintf('%.0f', customTRmsDefault), ...
-        'Units','pixels', ...
-        'Position',[590 448 105 32], ...
-        'BackgroundColor',[0.24 0.24 0.27], ...
-        'ForegroundColor',[0.85 0.85 0.85], ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','center', ...
-        'Enable','off');
-
-    uicontrol(dlg,'Style','text', ...
-        'String','ms', ...
-        'Units','pixels', ...
-        'Position',[705 452 40 24], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',muted, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left');
-
-    if ~isempty(fileTR) && isfinite(fileTR) && fileTR > 0
-        trHintString = sprintf('Default TR is 320 ms. File TR %.0f ms is pre-filled in Custom TR. Source: %s', fileTR*1000, fileTRSource);
-    else
-        trHintString = 'Default TR is 320 ms and is pre-selected. Use Custom TR if needed.';
-    end
-
-    hTRHint = uicontrol(dlg,'Style','text', ...
-        'String',trHintString, ...
-        'Units','pixels', ...
-        'Position',[60 414 735 24], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',orange, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left');
-
-    % Output panel
-    uipanel('Parent',dlg, ...
-        'Units','pixels', ...
-        'Position',[35 115 790 260], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'BorderType','line', ...
-        'HighlightColor',panel2);
-
-    uicontrol(dlg,'Style','text', ...
-        'String','Output folder', ...
-        'Units','pixels', ...
-        'Position',[60 340 250 26], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','left');
-
-    hAuto = uicontrol(dlg,'Style','radiobutton', ...
-        'String','Automatic output folder (recommended)', ...
-        'Value',1, ...
-        'Units','pixels', ...
-        'Position',[60 305 360 28], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'Callback',@onAuto);
-
-    hCustom = uicontrol(dlg,'Style','radiobutton', ...
-        'String','Choose custom output parent folder', ...
-        'Value',0, ...
-        'Units','pixels', ...
-        'Position',[440 305 330 28], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'Callback',@onCustom);
-
-    uicontrol(dlg,'Style','text', ...
-        'String','Automatic dataset folder:', ...
-        'Units','pixels', ...
-        'Position',[60 272 300 22], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',muted, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left');
-
-    hAutoPath = uicontrol(dlg,'Style','edit', ...
-        'String',autoDatasetFolder, ...
-        'Units','pixels', ...
-        'Position',[60 238 710 30], ...
-        'BackgroundColor',panel2, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left', ...
-        'Enable','inactive');
-
-    uicontrol(dlg,'Style','text', ...
-        'String','Custom parent folder. The dataset folder will be created inside this folder:', ...
-        'Units','pixels', ...
-        'Position',[60 202 650 22], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',muted, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left');
-
-    startDir = analysedRoot;
-    try
-        if ispref('fusi_studio','lastOutputParent')
-            prefDir = getpref('fusi_studio','lastOutputParent');
-            if ischar(prefDir) && exist(prefDir,'dir')
-                startDir = prefDir;
-            end
-        end
-    catch
-    end
-    if isempty(startDir) || exist(startDir,'dir') ~= 7
-        startDir = fileparts(autoDatasetFolder);
-    end
-    if isempty(startDir) || exist(startDir,'dir') ~= 7
-        startDir = pwd;
-    end
-
-    hParent = uicontrol(dlg,'Style','edit', ...
-        'String',startDir, ...
-        'Units','pixels', ...
-        'Position',[60 165 585 32], ...
-        'BackgroundColor',[0.24 0.24 0.27], ...
-        'ForegroundColor',[0.85 0.85 0.85], ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left', ...
-        'Enable','off');
-
-    hBrowse = uicontrol(dlg,'Style','pushbutton', ...
-        'String','Browse', ...
-        'Units','pixels', ...
-        'Position',[660 165 110 32], ...
-        'BackgroundColor',blue, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'FontWeight','bold', ...
-        'Enable','off', ...
-        'Callback',@onBrowse);
-
-    hHint = uicontrol(dlg,'Style','text', ...
-        'String','Automatic mode is selected. This keeps your current workflow unchanged.', ...
-        'Units','pixels', ...
-        'Position',[60 128 710 24], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',orange, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left');
-
-    % Buttons
-    uicontrol(dlg,'Style','pushbutton', ...
-        'String','Cancel', ...
-        'Units','pixels', ...
-        'Position',[535 40 130 46], ...
-        'BackgroundColor',red, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'FontWeight','bold', ...
-        'Callback',@onCancel);
-
-    uicontrol(dlg,'Style','pushbutton', ...
-        'String','Proceed', ...
-        'Units','pixels', ...
-        'Position',[685 40 140 46], ...
-        'BackgroundColor',green, ...
-        'ForegroundColor',fg, ...
-        'FontName','Arial', ...
-        'FontSize',10, ...
-        'FontWeight','bold', ...
-        'Callback',@onProceed);
-
-    try
-        studio_scale_load_options_dialog(dlg, 1.16, 1.12, 1.18);
-    catch
-    end
-
-    drawnow;
-    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
-    uiwait(dlg);
-
-    if ishandle(dlg)
-        result = getappdata(dlg,'result');
-        try delete(dlg); catch, end
-    else
-        result = struct('cancel',true,'TR',defaultTR,'datasetFolder',autoDatasetFolder);
-    end
-
-    if isfield(result,'cancel') && result.cancel
-        wasCancelled = true;
-        return;
-    end
-
-    TR = result.TR;
-    datasetFolder = result.datasetFolder;
-    wasCancelled = false;
-
-    function onUseDefaultTR(~,~)
-        if ~ishandle(dlg), return; end
-        set(hUseDefaultTR,'Value',1);
-        set(hUseCustomTR,'Value',0);
-        set(hCustomTRms,'Enable','off','BackgroundColor',[0.24 0.24 0.27],'ForegroundColor',[0.85 0.85 0.85]);
-        set(hTRHint,'String','Probe default TR is pre-selected. If file TR is detected, it is pre-filled in Custom TR.','ForegroundColor',orange);
-    end
-
-    function onUseCustomTR(~,~)
-        if ~ishandle(dlg), return; end
-        set(hUseDefaultTR,'Value',0);
-        set(hUseCustomTR,'Value',1);
-        set(hCustomTRms,'Enable','on','BackgroundColor',[0.98 0.98 0.98],'ForegroundColor',[0 0 0]);
-        set(hTRHint,'String','Custom TR selected. Enter the value in milliseconds.','ForegroundColor',muted);
-    end
-
-    function onAuto(~,~)
-        if ~ishandle(dlg), return; end
-        set(hAuto,'Value',1);
-        set(hCustom,'Value',0);
-        set(hParent,'Enable','off','BackgroundColor',[0.24 0.24 0.27],'ForegroundColor',[0.85 0.85 0.85]);
-        set(hBrowse,'Enable','off');
-        set(hHint,'String','Automatic mode is selected. This keeps your current workflow unchanged.','ForegroundColor',orange);
-    end
-
-    function onCustom(~,~)
-        if ~ishandle(dlg), return; end
-        set(hAuto,'Value',0);
-        set(hCustom,'Value',1);
-        set(hParent,'Enable','on','BackgroundColor',[0.98 0.98 0.98],'ForegroundColor',[0 0 0]);
-        set(hBrowse,'Enable','on');
-        set(hHint,'String','Custom mode: DatasetName folder will be created inside the selected parent folder.','ForegroundColor',muted);
-    end
-
-    function onBrowse(~,~)
-        if ~ishandle(dlg), return; end
-        currentDir = get(hParent,'String');
-        if isempty(currentDir) || exist(currentDir,'dir') ~= 7
-            currentDir = startDir;
-        end
-        picked = uigetdir(currentDir, 'Select output parent folder');
-        if isequal(picked,0)
-            return;
-        end
-        set(hParent,'String',picked);
-        onCustom();
-    end
-
-    function onProceed(~,~)
-        if ~ishandle(dlg), return; end
-
-        useCustomTR = get(hUseCustomTR,'Value') == 1;
-        if useCustomTR
-            trMs = str2double(strtrim(get(hCustomTRms,'String')));
-            if isempty(trMs) || ~isfinite(trMs) || trMs <= 0
-                errordlg('Please enter a valid positive custom TR in milliseconds.','Invalid TR');
-                return;
-            end
-            trVal = trMs / 1000;
-        else
-            trVal = defaultTR;
-        end
-
-        useCustomOutput = get(hCustom,'Value') == 1;
-
-        if useCustomOutput
-            parentDir = strtrim(get(hParent,'String'));
-            if isempty(parentDir) || exist(parentDir,'dir') ~= 7
-                errordlg('Please choose a valid output parent folder.','Invalid output folder');
-                return;
-            end
-            outFolder = fullfile(parentDir, datasetName);
-            try setpref('fusi_studio','lastOutputParent',parentDir); catch, end
-        else
-            outFolder = autoDatasetFolder;
-        end
-
-        try setpref('fusi_studio','lastTR',trVal); catch, end
-
-        result = struct();
-        result.cancel = false;
-        result.TR = trVal;
-        result.datasetFolder = outFolder;
-        setappdata(dlg,'result',result);
-        uiresume(dlg);
-    end
-
-    function onCancel(~,~)
-        if ishandle(dlg)
-            result = struct();
-            result.cancel = true;
-            result.TR = defaultTR;
-            result.datasetFolder = autoDatasetFolder;
-            setappdata(dlg,'result',result);
-            uiresume(dlg);
-        end
-    end
-end
-
-
-%% =========================================================
-%  LOAD OPTIONS DIALOG SCALING HELPER
-% =========================================================
 function studio_scale_load_options_dialog(dlg, sx, sy, fontScale)
     if nargin < 2 || isempty(sx), sx = 1.0; end
     if nargin < 3 || isempty(sy), sy = sx; end
@@ -5696,6 +5111,12 @@ end
 %  CLOSE HANDLER
 % =========================================================
 function onCloseStudio(~,~)
+    saves=DataIO('status');
+    if ~isempty(saves) && any(ismember({saves.state},{'queued','saving','failed'}))
+        DataIO('show');
+        addLog('Finish or retry pending saves before closing Studio.');
+        return;
+    end
     try
         delete(fig);
     catch

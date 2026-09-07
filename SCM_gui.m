@@ -135,6 +135,8 @@ end
 
 %% ---------------- STATE ----------------
 state = struct();
+state.baseKey=[]; state.baseMean=[];
+state.signalKey=[]; state.signalMean=[];
 state.z   = max(1, round(nZ/2));
 state.cax = [-100 100];
 state.alphaModOn = true;
@@ -360,8 +362,8 @@ axis(ax, 'off');
 if exist('nZ','var') && nZ > 1
     probeViewAspect = 1.0;   % DECONF_ASPECT_V1
     try
-        if exist('par','var'), probeViewAspect = deConfUSIon_view_aspect(par);
-        else,                  probeViewAspect = deConfUSIon_view_aspect(); end
+        if exist('par','var'), probeViewAspect = deConfUSIon_utils('deConfUSIon_view_aspect',par);
+        else,                  probeViewAspect = deConfUSIon_utils('deConfUSIon_view_aspect'); end
     catch, probeViewAspect = 1.0; end
     if exist('par','var') && isstruct(par) && isfield(par,'probeViewAspect') ...
             && isscalar(par.probeViewAspect) && isfinite(par.probeViewAspect) && par.probeViewAspect > 0
@@ -456,7 +458,8 @@ hSigTxt = text(axTC, 0, 0, '', 'Color', [1.00 0.75 0.35], ...
 hLivePSC = plot(axTC, state.tminHover, nan(1, numel(state.tminHover)), ':', 'LineWidth', 3.0);
 hLivePSC.Color = [1.00 0.60 0.10];
 hLivePSC.Visible = 'off';
-hRoiCoordTxt = text(axTC, 0.99, 0.98, '', ...
+set(hLivePSC,'Tag','SCM_LiveROI');
+hRoiCoordTxt = text(axTC, 0.99, 1.12, '', ...
     'Units', 'normalized', 'HorizontalAlignment', 'right', ...
     'VerticalAlignment', 'top', 'Color', [0.92 0.92 0.92], ...
     'FontSize', 11, 'FontWeight', 'bold', 'Interpreter', 'none', 'Visible', 'off');
@@ -487,9 +490,11 @@ btnTabUnderlay = uicontrol(tabBar, 'Style', 'togglebutton', 'String', 'Underlay'
     'BackgroundColor', bgTabOff, 'ForegroundColor', fgMain, ...
     'FontName', 'Arial', 'FontSize', 14, 'FontWeight', 'bold', 'Value', 0);
 
-pOverlay = uipanel('Parent', controlsPanel, 'Units', 'pixels', ...
+controlViewport=uipanel('Parent',controlsPanel,'Units','pixels','BorderType','none','BackgroundColor',bgPanel);
+controlScroll=uicontrol('Parent',controlsPanel,'Style','slider','Units','pixels','Min',0,'Max',1,'Value',1,'Callback',@scrollControls);
+pOverlay = uipanel('Parent', controlViewport, 'Units', 'pixels', ...
     'BorderType', 'none', 'BackgroundColor', bgPanel);
-pUnderlay = uipanel('Parent', controlsPanel, 'Units', 'pixels', ...
+pUnderlay = uipanel('Parent', controlViewport, 'Units', 'pixels', ...
     'BorderType', 'none', 'BackgroundColor', bgPanel, 'Visible', 'off');
 info1 = uicontrol(controlsPanel, 'Style', 'text', 'String', '', ...
     'Units', 'pixels', 'ForegroundColor', fgSub, 'BackgroundColor', bgPanel, ...
@@ -529,16 +534,21 @@ set(txtROIsz, 'TooltipString', 'Type ROI size in pixels, then press Enter.');
 
 lblRoiXY = mkLbl(pOverlay, 'Add ROI by center (x y)');
 ebRoiXY = mkEdit(pOverlay, '', @roiXYNoop);
+set(ebRoiXY,'Tag','SCM_ROICenter');
 set(ebRoiXY, 'TooltipString', 'Type x y, for example 120 80 or 120,80, then press Enter.');
 set(ebRoiXY, 'KeyPressFcn', @roiXYKey);
 btnRoiAddXY = mkBtn(pOverlay, 'ADD ROI', @addRoiFromXY, colBtnNeutral, 12);
+set(btnRoiAddXY,'Tag','SCM_AddROI');
 
 lblBase = mkLblImp(pOverlay, 'Baseline window (s)');
 ebBase = mkEdit(pOverlay, sprintf('%g-%g', baseStart0, baseEnd0), @onWindowEdited);
+set(ebBase,'Tag','SCM_BaselineWindow','TooltipString','Baseline in seconds. Press Enter or leave the field to refresh maps and all ROI curves.');
 set(ebBase, 'ForegroundColor', [1.00 0.35 0.35]);
+set(ebBase, 'KeyPressFcn', @windowKeyPress);
 lblSig = mkLblImp(pOverlay, 'Signal window (s)');
 ebSig = mkEdit(pOverlay, sprintf('%g-%g', sigStart0, sigEnd0), @onWindowEdited);
 set(ebSig, 'ForegroundColor', [1.00 0.35 0.35]);
+set(ebSig, 'KeyPressFcn', @windowKeyPress);
 
 lblAlpha = mkLbl(pOverlay, 'Overlay alpha (%)');
 slAlpha = mkSlider(pOverlay, 0, 100, 100, @updateView);
@@ -552,7 +562,8 @@ set(ebCax, 'ForegroundColor', [1.00 0.35 0.35]);
 lblSignMode = mkLblImp(pOverlay, 'Signal sign display');
 popSignMode = mkPopup(pOverlay, {'Positive only','Negative only','Positive + Negative'}, state.signMode, @updateView);
 lblAlphaMod = mkLblImp(pOverlay, 'Alpha modulation');
-cbAlphaMod = mkChk(pOverlay, 'Alpha modulate by |SCM|', double(state.alphaModOn), @alphaModToggled);
+cbAlphaMod = mkChk(pOverlay, 'Scale by |SCM|', double(state.alphaModOn), @alphaModToggled);
+set(cbAlphaMod,'TooltipString','Scale overlay opacity by the absolute SCM percentage.');
 lblModMin = mkLblImp(pOverlay, 'Mod Min (abs %)');
 ebModMin = mkEdit(pOverlay, sprintf('%g', state.modMin), @updateView);
 set(ebModMin, 'ForegroundColor', [1.00 0.35 0.35]);
@@ -575,6 +586,9 @@ end
 lblSigma = mkLblImp(pOverlay, 'SCM smoothing sigma');
 ebSigma = mkEdit(pOverlay, '1', @computeSCM);
 set(ebSigma, 'ForegroundColor', [1.00 0.35 0.35]);
+set(ebCax,'Tag','SCM_DisplayRange');
+set(ebSig,'Tag','SCM_SignalWindow');
+deConfUSIon_ui('liveedit',[ebBase ebSig ebThr ebCax ebModMin ebModMax ebSigma]);
 
 btnRoiExport   = mkBtn(pOverlay, 'EXPORT ROIs (TXT)', @exportROIsCB, colBtnExport, 13);
 btnScmExport   = mkBtn(pOverlay, 'EXPORT SCM IMAGE', @exportSCMImageCB, colBtnExport, 13);
@@ -688,6 +702,7 @@ end
 alphaModToggled();
 updateUnderlayControlsEnable();
 updateInfoLines();
+deConfUSIon_ui('present',fig);
 layoutUI();
 tcAxisModeChanged();
 updateSliceIndicators();
@@ -724,15 +739,11 @@ function layoutUI()
     pos = get(fig, 'Position');
     W = pos(3); Hh = pos(4);
 
-    leftM = 64; rightM = 36; topM = 58; botM = 60; gapX = 36; gapY = 24;
+    leftM = 64; rightM = 24; topM = 38; botM = 46; gapX = 28; gapY = 24;
     panelW = min(760, max(520, round(0.36 * W)));
-    if Hh < 980
-        btnH = 46; btnGap = 8;
-    else
-        btnH = 54; btnGap = 12;
-    end
+    btnH = max(28,min(40,round(Hh*0.033))); btnGap = 6;
 
-    yClose = 28; yHelp = yClose;
+    yClose = 12; yHelp = yClose;
     yOpen = yClose + btnH + btnGap;
     yMask = yOpen + btnH + btnGap;
     yComp = yMask + btnH + btnGap;
@@ -749,7 +760,7 @@ function layoutUI()
     set(btnHelp,  'Position', [panelX yHelp halfW btnH]);
     set(btnClose, 'Position', [panelX + halfW + 14 yClose halfW btnH]);
 
-    tcCtrlH = 30;
+    tcCtrlH = 60;
     tcCtrlGap = 20;
     tcHfull = min(250, max(190, round(0.24 * Hh)));
     tcPlotH = max(120, tcHfull - tcCtrlH - tcCtrlGap);
@@ -765,14 +776,14 @@ function layoutUI()
     set(axTC, 'Position', [axX + tcLeftPad, botM + tcCtrlH + tcCtrlGap, leftW - tcLeftPad, tcPlotH]);
     set(tcAxisBar, 'Position', [axX + tcLeftPad, botM - 6, leftW - tcLeftPad, tcCtrlH]);
 
-    x = 0; y = 4; hh = tcCtrlH - 8;
-    wChk = 62; wEdit = 95; wBtn = 72; g = 8;
-    set(cbTcFixY, 'Position', [x+4 y wChk hh]); x = x + wChk + g;
-    set(ebTcYLim, 'Position', [x y wEdit hh]); x = x + wEdit + g;
-    set(btnTcYFromCax, 'Position', [x y wBtn hh]); x = x + wBtn + 20;
-    set(cbTcFixX, 'Position', [x y wChk hh]); x = x + wChk + g;
-    set(ebTcXLim, 'Position', [x y wEdit hh]); x = x + wEdit + g;
-    set(btnTcXAll, 'Position', [x y wBtn hh]);
+    hh=24; y=32; x=4; wChk=62; wEdit=95; wBtn=72; g=8;
+    set(cbTcFixY,'Position',[x y wChk hh]); x=x+wChk+g;
+    set(ebTcYLim,'Position',[x y wEdit hh]); x=x+wEdit+g;
+    set(btnTcYFromCax,'Position',[x y wBtn hh]);
+    y=3; x=4;
+    set(cbTcFixX,'Position',[x y wChk hh]); x=x+wChk+g;
+    set(ebTcXLim,'Position',[x y wEdit hh]); x=x+wEdit+g;
+    set(btnTcXAll,'Position',[x y wBtn hh]);
 
     set(slZ, 'Visible', 'off', 'Enable', 'off');
     set(txtZ, 'Visible', 'off');
@@ -783,7 +794,7 @@ function layoutUI()
     catch
     end
 
-    tabH = 42; statusH = 58; titlePad = 30;
+    tabH = 32; statusH = 34; titlePad = 18;
     set(tabBar, 'Position', [12 panelH - tabH - titlePad panelW - 24 tabH]);
     btnW = floor((panelW - 24 - 10) / 2);
     set(btnTabOverlay, 'Position', [0 0 btnW tabH]);
@@ -791,11 +802,23 @@ function layoutUI()
     contentX = 12; contentY = 14 + statusH;
     contentW = panelW - 24;
     contentH = panelH - tabH - titlePad - statusH - 20;
-    set(pOverlay, 'Position', [contentX contentY contentW contentH]);
-    set(pUnderlay, 'Position', [contentX contentY contentW contentH]);
+    % Keep the two-tab control panel in the visible viewport. Scaling child
+    % positions on every resize accumulated rounding errors and made edits
+    % appear increasingly slow or drift out of alignment.
+    canvasH=contentH; viewW=contentW;
+    set(controlViewport,'Position',[contentX contentY viewW contentH]);
+    set(controlScroll,'Visible','off','Enable','off');
+    set(pOverlay,'Position',[0 0 viewW contentH]);
+    set(pUnderlay,'Position',[0 0 viewW contentH]);
     set(info1, 'Position', [contentX 8 contentW statusH]);
-    layoutOverlay(contentW, contentH);
-    layoutUnder(contentW, contentH);
+    layoutOverlay(viewW,canvasH); layoutUnder(viewW,canvasH);
+
+end
+
+function scrollControls(~,~)
+    vp=get(controlViewport,'Position'); p=get(pOverlay,'Position');
+    p(2)=(vp(4)-p(4))*get(controlScroll,'Value');
+    set(pOverlay,'Position',p); set(pUnderlay,'Position',p);
 end
 
 function layoutOverlay(w, h)
@@ -805,7 +828,7 @@ function layoutOverlay(w, h)
     else
         rowHLoc = rowH; gapLoc = gap; groupGapLoc = groupGap; sliderHLoc = sliderH; wideBtnHLoc = wideBtnH; smallBtnHLoc = smallBtnH;
     end
-    xLabel = pad; wLabel = 240; wVal = 120; xVal = w - pad - wVal;
+    xLabel = pad; wLabel = min(220,round(w*0.42)); wVal = 95; xVal = w - pad - wVal;
     xCtrl = xLabel + wLabel + 16; wCtrl = max(90, xVal - xCtrl - 12);
     y = h - rowHLoc;
 
@@ -873,7 +896,7 @@ function layoutUnder(w, h)
     else
         rowHLoc = rowH; gapLoc = gap; groupGapLoc = groupGap; sliderHLoc = sliderH; wideBtnHLoc = wideBtnH;
     end
-    xLabel = pad; wLabel = 250; wVal = 120; xVal = w - pad - wVal;
+    xLabel = pad; wLabel = min(220,round(w*0.42)); wVal = 95; xVal = w - pad - wVal;
     xCtrl = xLabel + wLabel + 16; wCtrl = max(90, xVal - xCtrl - 12);
     y = h - rowHLoc;
     set(lblUnderMode, 'Position', [xLabel y wLabel rowHLoc]);
@@ -905,13 +928,38 @@ end
 % CALLBACKS
 %% ==========================================================
 function onWindowEdited(~,~)
-    computeSCM();
-    redrawROIsForCurrentSlice();
-    roi.isFrozen = false;
-    try, set(hLiveRect, 'Visible', 'off'); catch, end
-    try, set(hLivePSC, 'Visible', 'off'); catch, end
-    try, set(hRoiCoordTxt, 'Visible', 'off', 'String', ''); catch, end
-    applyTimecourseAxisMode();
+    % Refresh persistent and hover ROIs from the same source used by export.
+    try
+        [v0,v1]=parseRangeSafe(getStr(ebBase),NaN,NaN);
+        if ~isfinite(v0) || ~isfinite(v1) || v1<v0, return; end
+        if isVolMode, lastAllowed=nT; firstAllowed=1; else, lastAllowed=tsec(end); firstAllowed=0; end
+        if v0<firstAllowed || v1>lastAllowed, return; end
+        computeSCM();
+        redrawROIsForCurrentSlice();
+        if strcmp(get(hLiveRect,'Visible'),'on')
+            % The displayed rectangle is authoritative, including ROIs added
+            % by coordinates and pinned ROIs whose size has since changed.
+            bounds=get(hLiveRect,'Position');
+            x1=round(bounds(1)); y1=round(bounds(2));
+            x2=x1+round(bounds(3))-1; y2=y1+round(bounds(4))-1;
+            tc=computeRoiPSC_idx(state.z,x1,x2,y1,y2,state.hoverIdx);
+            set(hLivePSC,'XData',state.tminHover,'YData',tc,'Visible','on');
+        end
+        roi.lastHoverStamp=0;
+        applyTimecourseAxisMode(); drawnow;
+    catch ME
+        errordlg(ME.message,'SCM window');
+    end
+end
+
+function windowKeyPress(src,evt)
+    try
+        key=lower(char(evt.Key));
+        if any(strcmp(key,{'return','enter'}))
+            onWindowEdited(src,evt);
+        end
+    catch
+    end
 end
 
 function roiXYNoop(~,~), end
@@ -1094,10 +1142,16 @@ function computeSCM(~,~)
     end
     if b1i < b0i, tmp=b0i; b0i=b1i; b1i=tmp; end
     if s1i < s0i, tmp=s0i; s0i=s1i; s1i=tmp; end
-    PSCz = getPSCForSlice(state.z);
-    baseMap = mean(PSCz(:,:,b0i:b1i), 3);
-    sigMap = mean(PSCz(:,:,s0i:s1i), 3);
-    map = sigMap - baseMap;
+    [b0i,b1i]=selectedBaselineFrames();
+    baseMap = cachedBaseline(state.z,b0i,b1i);
+    sigKey=[state.z s0i s1i];
+    if ~isequal(state.signalKey,sigKey)
+        state.signalMean=windowMean(state.z,s0i:s1i);
+        state.signalKey=sigKey;
+    end
+    sigMap = state.signalMean;
+    map = 100*(sigMap-baseMap)./(100+baseMap);
+    map(~isfinite(baseMap) | 100+baseMap<=sqrt(eps('single')))=NaN;
     if sig > 0, map = smooth2D_gauss(map, sig); end
     mask2D = SCM_localMaskToMapSize_20260504(mask2D, map);
     map(~mask2D) = 0;
@@ -1129,17 +1183,6 @@ function updateView(~,~)
     end
     newSignMode = get(popSignMode, 'Value');
     state.signMode = newSignMode;
-    % DECONF_STD_SCM_SIGNED_CMAP_UPDATE
-    try
-        if newSignMode == 3
-            set(popMap, 'Value', findPopupIndexByName(popMap, 'signed_blackbdy_winter'));
-        elseif newSignMode == 2
-            set(popMap, 'Value', findPopupIndexByName(popMap, 'winter_brain_fsl'));
-        elseif newSignMode == 1
-            set(popMap, 'Value', findPopupIndexByName(popMap, 'blackbdy_iso'));
-        end
-    catch
-    end
     if newSignMode ~= state.prevSignMode
         if newSignMode == 3
             set(popMap, 'Value', findPopupIndexByName(popMap, 'signed_blackbdy_winter'));
@@ -1844,6 +1887,7 @@ function setTitleAtlas(T)
 end
 
 function resetRoisAndRefreshAfterDataChange()
+    state.baseKey=[]; state.signalKey=[];
     refreshDimsAfterPSCChange();
     ROI_byZ = cell(1, nZ);
     for zzi = 1:nZ
@@ -2014,7 +2058,7 @@ function exportROIsCB(~,~)
             fprintf(fid, '# SLICE: %d\n', r.z);
             fprintf(fid, '# BaselineWindow: %s\n', getStr(ebBase));
             fprintf(fid, '# PSC_REBASED: 1\n');
-            fprintf(fid, '# PSC_REBASE_METHOD: subtract_mean_selected_baseline_from_input_PSC\n');
+            fprintf(fid, '# PSC_REBASE_METHOD: exact_percent_rebase_per_voxel_100_times_P_minus_B_over_100_plus_B\n');
             fprintf(fid, '# PSC_BASELINE_TARGET: mean_selected_baseline_equals_0_percent\n');
 
             fprintf(fid, '# SignalWindow: %s\n', getStr(ebSig));
@@ -2293,7 +2337,7 @@ drawnow;
 
         for zSel = 1:nZ
             PSCz = getPSCForSlice(zSel);
-            baseMap = mean(PSCz(:,:,b0i:b1i), 3);
+            baseMap = deConfUSIon_signal('mean',PSCz(:,:,b0i:b1i),3);
             maskLocal = getMaskForSlice(zSel);
 
             bgRGB = renderUnderlayRGB(getBg2DForSlice(zSel));
@@ -2308,8 +2352,9 @@ drawnow;
                 idxSig = find(tsec >= s0 & tsec < s1);
                 if isempty(idxSig), continue; end
 
-                sigMap = mean(PSCz(:,:,idxSig), 3);
-                map = sigMap - baseMap;
+                sigMap = deConfUSIon_signal('mean',PSCz(:,:,idxSig),3);
+                map = 100*(sigMap-baseMap)./(100+baseMap);
+    map(~isfinite(baseMap) | 100+baseMap<=sqrt(eps('single')))=NaN;
                 if sigma > 0, map = smooth2D_gauss(map, sigma); end
                 map(~maskLocal) = 0;
 
@@ -4078,6 +4123,7 @@ function cfg = showScmVideoSetupDialogLocal(titleStr, bStart, bEnd, interpDefaul
 end
 
 function showHelp(~,~)
+    deConfUSIon_ui('help','SCM_gui'); return;
     bgFig = [0.06 0.06 0.07]; bgText = [0.12 0.12 0.14]; colTxt = [0.94 0.94 0.96];
     hf = figure('Name','SCM Help','Color',bgFig,'MenuBar','none','ToolBar','none','NumberTitle','off', ...
         'Resize','on','Position',[200 100 980 780],'WindowStyle','modal');
@@ -4106,81 +4152,61 @@ end
 % ROI / TIME COURSE HELPERS
 %% ==========================================================
 function tc = computeRoiPSC_atSlice(zSel, x1, x2, y1, y2)
-    try
-        if ndims(PSC) == 3
-            blk = PSC(y1:y2, x1:x2, :);
-        else
-            zSel = clamp(round(zSel),1,nZ);
-            blk = PSC(y1:y2, x1:x2, zSel, :);
-        end
-
-        tc = squeeze(mean(mean(blk, 1), 2));
-        tc = tc(:).';
-
-        % ROI traces must use the SAME selected baseline as the SCM map.
-        % PSC is already percent signal change, so we subtract the
-        % selected-baseline mean rather than calculating %SC again.
-        tc = rebaselineRoiPSC_toSelectedWindow(tc);
-
-    catch
-        tc = [];
-    end
+    tc=computeRoiPSC_idx(zSel,x1,x2,y1,y2,1:nT);
 end
 
 function tc = computeRoiPSC_idx(zSel, x1, x2, y1, y2, idx)
     try
-        % Hover / partial traces are derived from the same corrected
-        % full ROI trace. This prevents display/export inconsistencies.
-        tcAll = computeRoiPSC_atSlice(zSel, x1, x2, y1, y2);
-
-        if isempty(tcAll)
-            tc = [];
-            return;
+        idx=round(double(idx(:).')); idx=idx(isfinite(idx) & idx>=1 & idx<=nT);
+        if ndims(PSC) == 3
+            blk = PSC(y1:y2, x1:x2, idx);
+        else
+            zSel = clamp(round(zSel),1,nZ);
+            blk = PSC(y1:y2, x1:x2, zSel, idx);
         end
 
-        idx = round(double(idx(:).'));
-        idx = idx(isfinite(idx) & idx >= 1 & idx <= numel(tcAll));
-        tc = tcAll(idx);
+        [b0,b1]=selectedBaselineFrames();
+        B=cachedBaseline(zSel,b0,b1); B=reshape(B(y1:y2,x1:x2),[],1);
+        denominator=100+B; denominator(~isfinite(denominator) | denominator<=sqrt(eps('single')))=NaN;
+        blk=100*bsxfun(@rdivide,bsxfun(@minus,reshape(blk,[],numel(idx)),B),denominator);
+        % Average all finite voxels with equal weight. Successive axis means
+        % give columns with fewer valid voxels disproportionate weight.
+        tc=deConfUSIon_signal('mean',blk,1);
+        tc=double(tc(:).');
+
     catch
         tc = [];
     end
 end
 
-function tc = rebaselineRoiPSC_toSelectedWindow(tc)
-    if isempty(tc)
-        return;
+function B=cachedBaseline(z,b0,b1)
+    key=[z b0 b1];
+    if ~isequal(state.baseKey,key)
+        state.baseMean=windowMean(z,b0:b1); state.baseKey=key;
     end
+    B=state.baseMean;
+end
 
-    [b0,b1] = parseRangeSafe(getStr(ebBase), 30, 240);
-
-    if ~isVolMode
-        b0i = clamp(round(b0/TR)+1, 1, nT);
-        b1i = clamp(round(b1/TR)+1, 1, nT);
-    else
-        b0i = clamp(round(b0), 1, nT);
-        b1i = clamp(round(b1), 1, nT);
+function M=windowMean(z,idx)
+    % Read only the selected slice/window, in bounded time chunks.
+    total=zeros(nY,nX,'double'); count=zeros(nY,nX,'double');
+    chunk=max(1,floor(16*1024^2/(12*nY*nX)));
+    for a=1:chunk:numel(idx)
+        q=idx(a:min(numel(idx),a+chunk-1));
+        if ndims(PSC)==3, X=PSC(:,:,q); else, X=reshape(PSC(:,:,z,q),nY,nX,[]); end
+        valid=isfinite(X); X(~valid)=0;
+        total=total+sum(double(X),3); count=count+sum(valid,3);
     end
+    M=single(total./count); M(count==0)=NaN;
+end
 
-    if b1i < b0i
-        tmp = b0i;
-        b0i = b1i;
-        b1i = tmp;
+function [b0i,b1i]=selectedBaselineFrames()
+    [b0,b1]=parseRangeSafe(getStr(ebBase),baseStart0,baseEnd0);
+    if isVolMode, b0i=round(b0); b1i=round(b1);
+    else, b0i=round(b0/TR)+1; b1i=round(b1/TR)+1; end
+    if b0i<1 || b1i>nT || b1i<b0i
+        error('deConfUSIon:SCMBaseline','Baseline must lie inside the acquisition and start before it ends.');
     end
-
-    bvals = double(tc(b0i:b1i));
-    bvals = bvals(isfinite(bvals));
-
-    if isempty(bvals)
-        tc(:) = NaN;
-        return;
-    end
-
-    b = mean(bvals);
-
-    % Keep SCM_gui semantics:
-    % map = signal mean - selected baseline mean.
-    % Therefore ROI PSC is shifted by exactly the same baseline.
-    tc = double(tc) - b;
 end
 
 function redrawROIsForCurrentSlice()
@@ -4198,7 +4224,7 @@ function redrawROIsForCurrentSlice()
             'VerticalAlignment','bottom','BackgroundColor',[0 0 0],'Margin',1); %#ok<AGROW>
         tc = computeRoiPSC_atSlice(state.z, r.x1, r.x2, r.y1, r.y2);
         if numel(tc) == nT
-            roiPlotPSC(end+1) = plot(axTC,tmin,tc,':','Color',r.color,'LineWidth',2.4); %#ok<AGROW>
+            roiPlotPSC(end+1) = plot(axTC,tmin,tc,':','Color',r.color,'LineWidth',2.4,'Tag','SCM_SavedROI'); %#ok<AGROW>
         end
     end
     applyTimecourseAxisMode();
@@ -5518,8 +5544,7 @@ function Y = warpFunctionalSeriesToAtlas(X, T)
     if ndims(X) == 4 && isequal(size(A), [4 4])
         if isempty(T.outSize) || numel(T.outSize) < 3, error('3D atlas warp requires output size.'); end
         outSize3 = round(T.outSize(1:3)); if any(outSize3 < 1), error('Invalid 3D output size.'); end
-        tform3 = affine3d(A); Rout3 = imref3d(outSize3); nTT = size(X,4); Y = zeros([outSize3 nTT], 'single');
-        for tt = 1:nTT, Y(:,:,:,tt) = imwarp(single(X(:,:,:,tt)), tform3, 'linear', 'OutputView', Rout3); end
+        Y=AtlasRegistration('warp',X,T);
         return;
     end
     if isequal(size(A), [3 3])
@@ -6802,7 +6827,7 @@ function safeMkdirIfNeeded(pth)
 end
 
 function titleStr = makeFullTitle(lbl)
-    s = char(lbl); s = regexprep(s, '\|?\s*File:.*$', ''); titleStr = shortenMiddle(s, 110);
+    s = char(lbl); s = regexprep(s, '\|?\s*File:.*$', ''); titleStr = deConfUSIon_utils('shortenMiddle',s, 110);
 end
 
 function s = getAnimalID(lbl)
@@ -6919,8 +6944,16 @@ function rgb = toRGB(im01)
 end
 
 function out = smooth2D_gauss(in, sigma)
-    try, out = imgaussfilt(in, sigma); return; catch, end
     if sigma <= 0, out = in; return; end
+    valid=isfinite(in);
+    if ~all(valid(:))
+        values=in; values(~valid)=0;
+        weights=smooth2D_gauss(cast(valid,'like',in),sigma);
+        out=smooth2D_gauss(values,sigma)./weights;
+        out(~valid | weights<=0)=NaN;
+        return;
+    end
+    try, out = imgaussfilt(in, sigma); return; catch, end
     r = max(1,ceil(3*sigma)); x = -r:r; g = exp(-(x.^2)/(2*sigma^2)); g = g/sum(g);
     out = conv2(conv2(in,g,'same'),g','same');
 end

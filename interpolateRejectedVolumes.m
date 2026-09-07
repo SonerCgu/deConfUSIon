@@ -17,25 +17,6 @@ function Iout = interpolateRejectedVolumes(I, outliers)
 % Refactor: Naman Jain
 % ------------------------------------------------------------
 
-[nz,nx,nVols] = size(I);
-Iout = I;
-
-good = find(~outliers);
-bad  = find(outliers); %#ok<NASGU>
-
-% Safety: too few valid volumes
-if numel(good) < 2
-    warning('Too few valid volumes for interpolation. Data left unchanged.');
-    return;
-end
-
-tAll = 1:nVols;
-
-for z = 1:nz
-    for x = 1:nx
-        sig = squeeze(I(z,x,good));
-        Iout(z,x,:) = interp1(good, sig, tAll, 'linear', 'extrap');
-    end
-end
+Iout = deConfUSIon_signal('interpolate',I,outliers);
 
 end

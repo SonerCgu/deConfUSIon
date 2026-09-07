@@ -14,7 +14,7 @@ spatialSize = dims(1:end-1);
 t = ((0:T-1)' * TR);
 
 Yraw = reshape(single(I),[V T]);
-Y = double(Yraw);
+Y = Yraw; % retain single precision; regression blocks are promoted locally
 
 % Recommended baseline/injection defaults
 bsec = localGet(opts,'baselineSec',[0 60]);

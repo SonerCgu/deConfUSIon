@@ -1,4 +1,4 @@
-function QC = frameRateQC(I, TR, tag, savePNG)
+function QC = frameRateQC(I, TR, tag, savePNG, opts)
 % frameRateQC
 % Single-window diagnostic frame-rate / rejected-volume QC.
 % Shows ONE combined QC figure per run:
@@ -7,23 +7,18 @@ function QC = frameRateQC(I, TR, tag, savePNG)
 
 if nargin < 3 || isempty(tag), tag = 'ORIGINAL'; end
 if nargin < 4, savePNG = false; end %#ok<NASGU>
+if nargin < 5 || isempty(opts), opts=struct(); end
 if nargin < 2 || isempty(TR) || ~isfinite(TR) || TR <= 0, TR = 1; end
 
-D = double(I);
-nd = ndims(D);
-nVols = size(D, nd);
-D = reshape(D, [], nVols);
-
-g = nan(nVols,1);
-for ii = 1:nVols
-    v = D(:,ii);
-    v = v(isfinite(v));
-    if isempty(v)
-        g(ii) = NaN;
-    else
-        g(ii) = mean(v);
-    end
+nVols = size(I,ndims(I));
+D = reshape(I,[],nVols);
+sums=zeros(1,nVols); counts=zeros(1,nVols);
+chunk=max(1,floor(32*1024^2/(8*nVols)));
+for a=1:chunk:size(D,1)
+    b=min(size(D,1),a+chunk-1); v=double(D(a:b,:)); ok=isfinite(v); v(~ok)=0;
+    sums=sums+sum(v,1); counts=counts+sum(ok,1);
 end
+g=(sums./max(1,counts))'; g(counts==0)=NaN;
 
 good = isfinite(g);
 if ~any(good)
@@ -47,9 +42,15 @@ if ~isfinite(sigma) || sigma <= 0, sigma = std(gNorm); end
 if ~isfinite(sigma) || sigma <= 0, sigma = 0.02; end
 
 k = 3;
+if isfield(opts,'sigmaThreshold') && isfinite(opts.sigmaThreshold) && opts.sigmaThreshold>0, k=double(opts.sigmaThreshold); end
 thresholdHigh = 1 + k*sigma;
 thresholdLow  = 1 - k*sigma;
-outliers = (gNorm > thresholdHigh) | (gNorm < thresholdLow);
+direction='both'; if isfield(opts,'direction'), direction=lower(char(opts.direction)); end
+switch direction
+    case {'high only','high','upper'}, outliers=(gNorm > thresholdHigh);
+    case {'low only','low','lower'}, outliers=(gNorm < thresholdLow);
+    otherwise, outliers=(gNorm > thresholdHigh) | (gNorm < thresholdLow);
+end
 outliers = outliers(:);
 rejPct = 100 * mean(outliers);
 

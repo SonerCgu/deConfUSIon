@@ -17,6 +17,9 @@ Reports/
 *.avi
 *.pptx
 *.xlsx
+!atlas_tools/rgb2acr.xlsx
+validation/
+maintenance/__pycache__/
 
 # MATLAB temporary / autosave files
 *.asv

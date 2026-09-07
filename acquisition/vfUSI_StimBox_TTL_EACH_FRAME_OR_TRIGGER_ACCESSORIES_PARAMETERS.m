@@ -2686,6 +2686,13 @@ end
 % Help
 % =========================================================================
 function localShowHelpWindow()
+    try
+        if exist('deConfUSIon_ui','file') == 2
+            deConfUSIon_ui('help','Trigger Controller');
+            return;
+        end
+    catch
+    end
     hf = figure( ...
         'Name', 'Trigger Controller Help', ...
         'NumberTitle', 'off', ...

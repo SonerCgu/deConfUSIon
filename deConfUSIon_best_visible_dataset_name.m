@@ -22,7 +22,7 @@ end
 nameOut = '';
 for i = 1:numel(candidates)
     s = localClean(candidates{i});
-    if ~deConfUSIon_is_bad_display_name(s)
+    if ~deConfUSIon_utils('deConfUSIon_is_bad_display_name',s)
         nameOut = s;
         break;
     end
@@ -35,6 +35,10 @@ if isempty(nameOut)
     end
 end
 nameOut = localClean(nameOut);
+% Repair stale legacy raw labels using provenance, not just the old label.
+if ~isempty(regexpi(nameOut,'(^|_)raw($|_)|_FUS_\d+_FUS_','once'))
+    nameOut=deConfUSIon_display_name_from_sources(nameOut,dataStruct,matFile);
+end
 if isempty(nameOut), nameOut = 'dataset'; end
 end
 function s = localClean(s)

@@ -112,18 +112,19 @@ theme.violet        = [0.52 0.34 0.94];
 theme.teal          = [0.05 0.64 0.58];
 theme.green         = [0.20 0.72 0.48];
 theme.amber         = [0.95 0.62 0.16];
+theme.yellow        = [0.95 0.78 0.20];
 theme.red           = [0.82 0.28 0.34];
 theme.sectionAccent = [ ...
     theme.cyan; ...      % 1 Dataset
     theme.violet; ...    % 2 QC
-    theme.blue; ...      % 3 Recommended processing
-    theme.teal; ...      % 4 Advanced processing
-    theme.cyan; ...      % 5 Visualization
-    theme.green; ...     % 6 Coregistration
+    theme.green; ...     % 3 Recommended processing
+    theme.blue; ...      % 4 Advanced processing
+    theme.teal; ...      % 5 Visualization
+    [0.16 0.78 0.46]; ... % 6 Coregistration
     theme.amber; ...     % 7 Advanced analysis
-    theme.violet; ...    % 8 SVD
-    theme.blue; ...      % 9 Velocity
-    theme.amber];        % 10 Community
+    theme.red; ...        % 8 SVD
+    theme.yellow; ...     % 9 Velocity
+    [0.78 0.42 0.70]];   % 10 Community
 studio.theme = theme;
 
 
@@ -147,6 +148,8 @@ catch
 end
 
 studio.figure = fig;
+setappdata(0,'deConfUSIonMainFigure',fig);
+set(fig,'Name',sprintf('deConfUSIon | MATLAB %d',feature('getpid')));
 guidata(fig, studio);
 
 % =========================================================
@@ -188,6 +191,12 @@ uipanel('Parent',fig, ...
 %  All three columns share the same top and bottom span.
 % =========================================================
 guiMargin = 0.025;
+uicontrol(fig,'Style','pushbutton','Units','normalized','Position',[.400 .946 .200 .028], ...
+    'Tag','SaveQueueStatus','String','SAVE QUEUE  |  idle', ...
+    'FontName','Arial','FontSize',9,'FontWeight','bold', ...
+    'BackgroundColor',theme.card,'ForegroundColor',theme.muted, ...
+    'HorizontalAlignment','right','Callback',@(~,~)DataIO('show'), ...
+    'TooltipString','Background save queue status. Outputs are finalized here without blocking the GUI.');
 guiGap    = 0.012;
 col1X = guiMargin;
 col1W = 0.305;
@@ -334,8 +343,8 @@ titles = { ...
 buttons = { ...
     {'Load fUSI Data'}, ...
     {'Full QC','Specific QC'}, ...
-    {'Frame Rejection','Imregdemons','Scrubbing','Motor'}, ...
-    {'Temporal Smoothing/Subsampling','Filtering','PCA / ICA','Despike','Drift Compensation'}, ...
+    {'Motion correction','Imregdemons','Chop data','Motor'}, ...
+    {'Temporal Interpolation','Filtering','PCA / ICA','Drift Compensation'}, ...
     {'Time-Course Viewer','SCM GUI','Video GUI','Mask Editor'}, ...
     {'Registration to Atlas','Segmentation'}, ...
     {'Functional connectivity','Group analysis'}, ...
@@ -396,7 +405,7 @@ statusPanel = uipanel(fig, ...
 
 statusText = uicontrol(statusPanel,'Style','text', ...
     'Units','normalized', ...
-    'Position',[0.18 0 0.64 1], ...
+    'Position',[0 0 1 1], ...
     'BackgroundColor',theme.card, ...
     'ForegroundColor',theme.text, ...
     'FontName','Helvetica', ...
@@ -448,10 +457,15 @@ footerText = uicontrol(fig,'Style','text', ...
     'FontSize',10, ...
     'FontWeight','normal', ...
     'HorizontalAlignment','right', ...
-    'String', buildFooterLabel());
+    'String', deConfUSIon_utils('buildFooterLabel'));
 
 studio.footerText = footerText;
 guidata(fig, studio);
+
+% Apply the shared palette after all controls exist so the launcher and its
+% child GUIs use one readable font, contrast system, and Help behavior.
+setappdata(fig,'deConfUSIonOwned',true);
+try, deConfUSIon_ui('style',fig); catch, end
 
 %% =========================================================
 %  SECTION HEADER / ICONS / MODERN ROUNDED UI
@@ -492,7 +506,7 @@ function drawSectionHeader(parent, titleStr, sectionIndex, accent)
     end
 
     if ~isempty(iconFile) && exist(iconFile,'file') == 2
-        addPanelPng(parent, iconFile, [0.020 0.745 0.078 0.175], theme.surface);
+        addPanelPng(parent, iconFile, [0.020 0.745 0.078 0.175], theme.surface, accent);
     end
 end
 
@@ -590,6 +604,7 @@ function hBtn = createModernButton(parent,label,pos,callback,isEnabled,styleKey)
     set(hShadow,'ButtonDownFcn',cb,'HitTest','on');
     set(hHi,'ButtonDownFcn',cb,'HitTest','on');
     set(hTxt,'ButtonDownFcn',cb,'HitTest','on');
+    set([hBtn hRect hShadow hHi hTxt],'BusyAction','cancel');
 end
 
 function modernButtonClick(hBtn)
@@ -598,11 +613,22 @@ function modernButtonClick(hBtn)
     if isempty(ud) || ~isstruct(ud) || ~isfield(ud,'enabled') || ~ud.enabled
         return;
     end
-    try
-        feval(ud.callback,hBtn,[]);
-    catch ME
-        rethrow(ME);
-    end
+    if isequal(getappdata(fig,'StudioActionBusy'),true), return; end
+    setappdata(fig,'StudioActionBusy',true);
+    dd=findobj(fig,'Tag','datasetDropdown');
+    if ~isempty(dd), set(dd,'Enable','off','BusyAction','cancel'); end
+    guard=onCleanup(@finishStudioAction); %#ok<NASGU>
+    feval(ud.callback,hBtn,[]);
+end
+
+function finishStudioAction()
+    if ~isgraphics(fig), return; end
+    % Consume pending clicks while the guard is still set, not after unlock.
+    drawnow;
+    if ~isgraphics(fig), return; end
+    setappdata(fig,'StudioActionBusy',false);
+    dd=findobj(fig,'Tag','datasetDropdown');
+    if ~isempty(dd), set(dd,'Enable','on'); end
 end
 
 function setModernButtonEnabled(hBtn,tf)
@@ -632,6 +658,22 @@ function [fillC,edgeC,textC] = modernButtonColors(styleKey,isEnabled)
         case 'footerred'
             fillC = [0.66 0.22 0.25]; edgeC = [0.90 0.38 0.40]; textC = [1 1 1];
         otherwise
+            if strncmpi(styleKey,'section',7)
+                sectionNumber = str2double(styleKey(8:end));
+                if isfinite(sectionNumber) && sectionNumber >= 1 && ...
+                        sectionNumber <= size(theme.sectionAccent,1)
+                    accent = theme.sectionAccent(sectionNumber,:);
+                    fillC = 0.34*accent + 0.66*theme.button;
+                    edgeC = min(1,0.72*accent + 0.28*[0.38 0.45 0.54]);
+                    textC = [0.96 0.985 1.00];
+                    if ~isEnabled
+                        fillC = 0.55*fillC + 0.45*theme.bg;
+                        edgeC = 0.55*edgeC + 0.45*[0.18 0.24 0.30];
+                        textC = [0.54 0.63 0.70];
+                    end
+                    return;
+                end
+            end
             if isEnabled
                 fillC = [0.105 0.165 0.225];
                 edgeC = [0.34 0.43 0.53];
@@ -670,7 +712,7 @@ function iconFile = localThemeIconPath(iconName)
     end
 end
 
-function addPanelPng(parent, pngFile, pos, bgColor)
+function addPanelPng(parent, pngFile, pos, bgColor, tint)
     try
         [img,map,alpha] = imread(pngFile);
         if ~isempty(map)
@@ -692,6 +734,10 @@ function addPanelPng(parent, pngFile, pos, bgColor)
             'HitTest','off', ...
             'HandleVisibility','off');
 
+        if nargin>=5
+            % Tint the glyph while retaining the original anti-aliased alpha.
+            img=repmat(reshape(uint8(255*tint),1,1,3),size(img,1),size(img,2));
+        end
         hImg = image('Parent',ax,'CData',img,'HitTest','off');
         set(ax,'YDir','reverse');
         xlim(ax,[0.5 size(img,2)+0.5]);
@@ -780,6 +826,10 @@ function drawButtons(parent, btns, sectionIndex)
                 callback = @runFullQCCallback;
             case 'specific qc'
                 callback = @runSpecificQCCallback;
+            case 'motion correction'
+                callback = @motionCorrectionCallback;
+            case 'chop data'
+                callback = @chopDataCallback;
             case 'frame rejection'
                 callback = @frameRateCallback;
             case 'subsampling'
@@ -790,6 +840,8 @@ function drawButtons(parent, btns, sectionIndex)
                 callback = @scrubbingCallback;
             case 'motor'
                 callback = @stepMotorCallback;
+            case 'temporal interpolation'
+                callback = @temporalSmoothingCallback;
             case 'temporal smoothing/subsampling'
                 callback = @temporalSmoothingCallback;
             case 'temporal smoothing'
@@ -824,7 +876,11 @@ function drawButtons(parent, btns, sectionIndex)
                 callback = @svdClutterCallback;
         end
 
-        btn = createModernButton(parent,label,positions(k,:),callback,false,'regular');
+        % Tie each launcher button to the accent of its containing box. The
+        % colors are deliberately darkened so the main Studio remains calm
+        % while the section identity is still obvious at a glance.
+        btnStyle = sprintf('section%d',sectionIndex);
+        btn = createModernButton(parent,label,positions(k,:),callback,false,btnStyle);
         studio.allButtons{end+1} = btn;
         guidata(fig, studio);
     end
@@ -837,12 +893,67 @@ function dummyNotImplemented(~,~)
     addLog('This module is not implemented yet.');
 end
 
+function motionCorrectionCallback(~,~)
+    studio=guidata(fig);
+    if ~studio.isLoaded, errordlg('Load data first.'); return; end
+    cfg=Motion('choose',fig);
+    if isempty(cfg), return; end
+    setappdata(fig,'motionCorrectionConfig',cfg);
+    cleanupCfg=onCleanup(@()clearMotionConfig()); %#ok<NASGU>
+    switch cfg.method
+        case 'Frame rejection', frameRateCallback([],[]);
+        case 'Despiking', despikeCallback([],[]);
+        case 'Scrubbing', scrubbingCallback([],[]);
+    end
+end
+
+function clearMotionConfig()
+    try, if isappdata(fig,'motionCorrectionConfig'), rmappdata(fig,'motionCorrectionConfig'); end, catch, end
+end
+
+function chopDataCallback(~,~)
+    studio=guidata(fig);
+    if ~studio.isLoaded, errordlg('Load data first.'); return; end
+    cfg=Motion('chopdialog',fig); if isempty(cfg), return; end
+    try
+        data=getActiveData(); [newData,~]=Motion('chop',data,cfg(1),cfg(2));
+        suffix=sprintf('_cut_%gs_start_%gs_end_%s',cfg(1),cfg(2),datestr(now,'yyyymmdd_HHMMSS'));
+        suffix=strrep(suffix,'.','p');
+        fullName=[getCurrentNamingStem(studio) suffix];
+        keyName=makeSafeKey(fullName,studio.datasets);
+        newData.displayNameFull=fullName; newData.preprocDisplayName=fullName;
+        newData.HUMOR_fullDisplayName=fullName; newData.datasetSortTime=now;
+        newData.sourceDatasetKey=studio.activeDataset; newData.isLazy=false;
+        savePath=deConfUSIon_safe_preproc_save_path(fullfile(studio.exportPath,'Preprocessing'),fullName,keyName,'cut');
+        newData.savedFile=savePath; newData.lazyFile=savePath;
+        payload=struct('newData',newData,'displayNameFull',fullName,'preprocDisplayName',fullName,'datasetSortTime',newData.datasetSortTime);
+        DataIO('enqueue',savePath,payload);
+        studio.datasets.(keyName)=newData; studio.activeDataset=keyName;
+        studio.pipeline.preprocDone=true; guidata(fig,studio); refreshDatasetDropdown();
+        addLog(['Cut dataset ready; background save queued: ' fullName]);
+    catch ME, errordlg(ME.message,'Chop data'); addLog(['Chop data failed: ' ME.message]); end
+end
+
 %% =========================================================
 %  LOAD DATA CALLBACK
 % =========================================================
 function loadDataCallback(~,~)
 
-    studio = guidata(fig);
+    if isappdata(fig,'LoadInProgress')
+        busy = false;
+        try, busy = logical(getappdata(fig,'LoadInProgress')); catch, end
+        if busy
+            try, addLog('Load already in progress; please wait for the current import to finish.'); catch, end
+            return;
+        end
+    end
+    setappdata(fig,'LoadInProgress',true);
+    previousStudio=guidata(fig);
+    setappdata(fig,'LoadTransaction',struct('previousStudio',previousStudio,'committed',false));
+    % finishLoad is a sibling callback, not nested in this callback. MATLAB
+    % destroys nested local variables before invoking some onCleanup paths.
+    loadGuard=onCleanup(@finishLoad); %#ok<NASGU>
+    studio = previousStudio;
 
     startPath = studio_default_load_start_path(studio);
 
@@ -887,14 +998,20 @@ studio.anatomicalReference = [];
 studio.anatomicalReferenceIsDisplayReady = false;
 studio.anatomicalReferenceFile = '';
 studio.registrationPath = '';
-    studio.pipeline = struct( ...
+studio.pipeline = struct( ...
         'loadDone', false, ...
         'qcDone', false, ...
         'preprocDone', false, ...
         'pscDone', false, ...
         'visualDone', false);
 
-    guidata(fig, studio);
+    % Publish the cleared in-progress state before reading the replacement
+    % file. Otherwise the later refresh can retrieve the old guidata object
+    % and re-add the previous animal's preprocessing entries to the new
+    % dataset dropdown. finishLoad restores previousStudio on cancellation
+    % or failure.
+    guidata(fig,studio);
+    refreshDatasetDropdown();
 
     try
     fullInputFile = fullfile(path,file);
@@ -902,28 +1019,21 @@ studio.registrationPath = '';
 
     [probeType, defaultTR] = detectProbeTypeFromMeta(data, meta);
     defaultTR = studio_probe_default_tr_seconds(probeType, data);
-    defaultTR = 0.320;
+    % Keep the probe-specific default as a fallback; the load-options dialog
+    % starts in Custom TR mode so the user can confirm or replace it.
     chosenTR = defaultTR;
     [fileTRCandidate, fileTRSource] = studio_get_file_tr_candidate(data, meta);
     try
         if ~isfield(meta,'rawMetadata') || isempty(meta.rawMetadata)
             meta.rawMetadata = struct();
         end
-        meta.rawMetadata.TRPreselectedSource = 'default 320 ms';
+        meta.rawMetadata.TRPreselectedSource = 'probe-specific default';
         if ~isempty(fileTRCandidate) && isfinite(fileTRCandidate) && fileTRCandidate > 0
             meta.rawMetadata.fileTRCandidateSec = fileTRCandidate;
             meta.rawMetadata.fileTRCandidateSource = fileTRSource;
         end
     catch
     end
-    wasCancelled = false;
-
-    if wasCancelled
-        addLog('Load cancelled during TR selection.');
-        setProgramStatus(true);
-        return;
-    end
-
     data.TR = chosenTR;
     data.nVols = size(data.I, ndims(data.I));
     data.TotalTimeSec = data.nVols * data.TR;
@@ -940,7 +1050,7 @@ studio.registrationPath = '';
 
         [rawRoot, analysedRoot] = studio_auto_roots_from_input(path);
 
-        studio_mkdir(analysedRoot);
+        deConfUSIon_utils('studio_mkdir',analysedRoot);
 
         datasetName = regexprep(file, '\.nii\.gz$', '', 'ignorecase');
         datasetName = regexprep(datasetName, '\.nii$', '', 'ignorecase');
@@ -971,15 +1081,20 @@ studio.registrationPath = '';
         if ~exist('TR','var') || isempty(TR) || ~isnumeric(TR) || ~isfinite(TR) || TR <= 0
             TR = studio_get_last_tr_default();
         end
-        [chosenTR, datasetFolder, outputWasCancelled, probeType, defaultTR] = studio_load_options_dark_dialog(chosenTR, datasetFolder, analysedRoot, datasetName, probeType, defaultTR, data, meta);
+        [chosenTR, datasetFolder, outputWasCancelled, probeType, defaultTR] = studio_load_options_dark_dialog(chosenTR, datasetFolder, analysedRoot, datasetName, probeType, defaultTR, data, meta, fullInputFile);
         if outputWasCancelled
-            addLog('Load cancelled during TR/output-folder selection.');
-            setProgramStatus(true);
+            addLog('Load cancelled in setup. Previous dataset preserved.');
             return;
         end
 
-        % Apply selected TR from dark load-options dialog
+        % A user override changes the analysis grid, never acquired samples.
+        if isfield(data,'tsec'), data.sourceTsec=data.tsec; end
+        if isempty(fileTRCandidate) || abs(chosenTR-fileTRCandidate)>max(1e-9,fileTRCandidate*1e-6)
+            data.tsec=(0:data.nVols-1)*chosenTR;
+            data.timingUserOverride=true;
+        end
         data.TR = chosenTR;
+        data.sampleSpanSec=(data.nVols-1)*chosenTR;
         data.nVols = size(data.I, ndims(data.I));
         data.TotalTimeSec = data.nVols * data.TR;
         data.TotalTimeMin = data.TotalTimeSec / 60;
@@ -993,7 +1108,7 @@ studio.registrationPath = '';
         meta.rawMetadata.defaultTRUserPromptSec = defaultTR;
         meta.rawMetadata.selectedTRUserSec = chosenTR;
 
-        studio_mkdir(datasetFolder);
+        deConfUSIon_utils('studio_mkdir',datasetFolder);
 
         parTmp = struct();
         parTmp.activeDataset = 'raw';
@@ -1020,7 +1135,7 @@ end
 
         studio = guidata(fig);
 
-       data.displayNameFull = deConfUSIon_make_loaded_display_name(datasetName, path, file);
+       data.displayNameFull = deConfUSIon_utils('deConfUSIon_make_loaded_display_name',datasetName, path, file);
        data.datasetSortTime = now;
         data.sourceFileName = file;
         data.sourcePath = path;
@@ -1028,6 +1143,16 @@ end
         studio.datasets.raw = data;
         studio.activeDataset = 'raw';
         studio.meta = meta;
+        % Keep physical in-plane spacing available to every viewer/editor.
+        % This is especially important for matrix probes, where pixel spacing
+        % differs between the DV and LR axes.
+        if isfield(data,'voxelSize') && ~isempty(data.voxelSize)
+            studio.voxelSize = data.voxelSize;
+        elseif isstruct(meta) && isfield(meta,'voxelSize') && ~isempty(meta.voxelSize)
+            studio.voxelSize = meta.voxelSize;
+        else
+            studio.voxelSize = [];
+        end
         studio.isLoaded = true;
         studio.loadedFile = file;
         studio.loadedPath = path;
@@ -1074,6 +1199,8 @@ end
         studio = deConfUSIon_add_preproc_lazy_datasets(studio);
 
         guidata(fig, studio);
+        transaction=getappdata(fig,'LoadTransaction'); transaction.committed=true;
+        setappdata(fig,'LoadTransaction',transaction);
 
         unlockAllButtons();
         refreshDatasetDropdown();
@@ -1113,6 +1240,26 @@ addLog('---------------------------------------');
         errordlg(ME.message,'Load Failure');
     end
 end
+
+    function finishLoad()
+        if ~isgraphics(fig), return; end
+        transaction=getappdata(fig,'LoadTransaction');
+        if isappdata(fig,'LoadInProgress'), rmappdata(fig,'LoadInProgress'); end
+        if isappdata(fig,'LoadTransaction'), rmappdata(fig,'LoadTransaction'); end
+        if isstruct(transaction) && ~transaction.committed
+            % A cancelled or failed replacement load must leave the previous
+            % dataset usable. Restore the complete state before refreshing
+            % controls; otherwise the half-cleared state can look frozen and
+            % the dropdown can remain empty.
+            studio=transaction.previousStudio; guidata(fig,studio);
+            try, refreshDatasetDropdown(); catch, end
+        end
+        try, unlockAllButtons(); catch, end
+        current=guidata(fig);
+        try, setProgramStatus(isfield(current,'isLoaded') && current.isLoaded); catch, end
+        try, drawnow limitrate; catch, drawnow; end
+    end
+
 %% =========================================================
 %  FULL QC
 % =========================================================
@@ -1315,16 +1462,17 @@ end
     cb = zeros(1,n);
 
     y0 = 0.89;
-    dy = 0.085;
+    dy = 0.073;
 
     for ii = 1:n
         y = y0 - (ii-1)*dy;
 
-        uipanel('Parent',mainPanel, ...
+        chip=uipanel('Parent',mainPanel, ...
             'Units','normalized', ...
             'Position',[0.03 y-0.005 0.025 0.045], ...
             'BackgroundColor',modules{ii,3}, ...
             'BorderType','line');
+        setappdata(chip,'PreserveColors',true);
 
         cb(ii) = uicontrol('Parent',mainPanel, ...
             'Style','checkbox', ...
@@ -1398,6 +1546,8 @@ end
         'ForegroundColor','w', ...
         'Callback',@onCancel);
 
+    qcButtons=findall(dlg,'Style','pushbutton');
+    for qcButton=reshape(qcButtons,1,[]), setappdata(qcButton,'PreserveColors',true); end
     set(dlg,'Visible','on');
     try, deConfUSIon_popup_autofit_apply(dlg); catch, end
 try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
@@ -1688,10 +1838,8 @@ function imregdemonsCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-        try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-        addLog(['Saved MAT -> ' savePath]);
+        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        addLog(['Background save queued -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2239,6 +2387,8 @@ function frameRateCallback(~,~)
     closeLingeringQCFigures();
 
     data = getActiveData();
+    frameCfg=[];
+    try, if isappdata(fig,'motionCorrectionConfig'), frameCfg=getappdata(fig,'motionCorrectionConfig'); end, catch, end
 
     addLog('Running Frame-rate QC (ORIGINAL)...');
     setProgramStatus(false);
@@ -2248,7 +2398,10 @@ function frameRateCallback(~,~)
     QC_after  = struct();
 
     try
-        QC_before = frameRateQC(data.I, data.TR, 'ORIGINAL', false);
+        qcOpts=struct();
+        if isstruct(frameCfg) && isfield(frameCfg,'frameSigma'), qcOpts.sigmaThreshold=frameCfg.frameSigma; end
+        if isstruct(frameCfg) && isfield(frameCfg,'frameDirection'), qcOpts.direction=frameCfg.frameDirection; end
+        QC_before = frameRateQC(data.I, data.TR, 'ORIGINAL', false, qcOpts);
         addLog(sprintf('Original rejected: %.2f %%', QC_before.rejPct));
 
         qcFolder = fullfile(studio.exportPath,'QC','FrameRate');
@@ -2286,7 +2439,7 @@ function frameRateCallback(~,~)
         Iclean = interpolateRejectedVolumes(data.I, QC_before.outliers);
 
         addLog('Running Frame-rate QC (INTERPOLATED)...');
-        QC_after = frameRateQC(Iclean, data.TR, 'INTERPOLATED', false);
+        QC_after = frameRateQC(Iclean, data.TR, 'INTERPOLATED', false, qcOpts);
         addLog(sprintf('After interpolation rejected: %.2f %%', QC_after.rejPct));
 
         try
@@ -2343,10 +2496,8 @@ function frameRateCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-                addLog(['Saved MAT -> ' savePath]);
+                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Background save queued -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2379,6 +2530,8 @@ function scrubbingCallback(~,~)
     end
 
     data = getActiveData();
+    motionCfg=[];
+    try, if isappdata(fig,'motionCorrectionConfig'), motionCfg=getappdata(fig,'motionCorrectionConfig'); end, catch, end
 
     addLog('Running scrubbing...');
     setProgramStatus(false);
@@ -2388,7 +2541,7 @@ function scrubbingCallback(~,~)
     tag = ['scrub_' ts];
 
     try
-        [outI, stats] = scrubbing(data.I, data.TR, studio.exportPath, tag);
+        [outI, stats] = scrubbing(data.I, data.TR, studio.exportPath, tag, motionCfg);
 if isempty(outI) || ...
         (isstruct(stats) && isfield(stats,'cancelled') && stats.cancelled)
     addLog('Scrubbing cancelled.');
@@ -2442,10 +2595,8 @@ fullName = [baseStem '_scrub_' methKey '_' interpKey '_' ts];
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-                addLog(['Saved MAT -> ' savePath]);
+                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Background save queued -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2620,10 +2771,8 @@ function stepMotorCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-                addLog(['Saved MAT -> ' savePath]);
+                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Background save queued -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2654,8 +2803,9 @@ function despikeCallback(~,~)
 
     data = getActiveData();
 
-    answer = inputdlg('Z-threshold (default = 5):', ...
-                      'Despike', 1, {'5'});
+    zDefault='5';
+    try, if isappdata(fig,'motionCorrectionConfig'), mc=getappdata(fig,'motionCorrectionConfig'); if isfield(mc,'despikeZ'), zDefault=num2str(mc.despikeZ); end, end, catch, end
+    answer = inputdlg('Z-threshold (default = 5):', 'Despike', 1, {zDefault});
 
     if isempty(answer)
         addLog('Despiking cancelled.');
@@ -2723,10 +2873,8 @@ fullName = sprintf('%s_despike_z%s_%s', baseStem, numTag(zthr), ts);
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-                addLog(['Saved MAT -> ' savePath]);
+                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Background save queued -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2865,9 +3013,7 @@ function svdClutterCallback(~,~)
         displayNameFull = fullName; %#ok<NASGU>
         preprocDisplayName = fullName; %#ok<NASGU>
         datasetSortTime = newData.datasetSortTime; %#ok<NASGU>
-        try, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-        try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end
-        try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end
+        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
 
         guidata(fig,studio);
         refreshDatasetDropdown();
@@ -2875,7 +3021,7 @@ function svdClutterCallback(~,~)
         addLog(sprintf('SVD applied: %.1f%% (%d/%d components), scope=%s, center=%s.', ...
             svdStats.cutoffPercent,svdStats.nRejected,svdStats.nFrames, ...
             svdStats.scope,svdStats.centerMode));
-        addLog(['Saved MAT -> ' savePath]);
+        addLog(['Background save queued -> ' savePath]);
         if isfield(svdStats,'qcFile') && ~isempty(svdStats.qcFile)
             addLog(['SVD QC saved -> ' svdStats.qcFile]);
         end
@@ -3037,7 +3183,7 @@ function driftCompensationCallback(~,~)
             end
         end
 
-        [outI, stats] = driftcompensation(data.I, data.TR, studio.exportPath, opts);
+        [outI, stats] = DriftCompensation('run', data.I, data.TR, studio.exportPath, opts);
 
         addLog(sprintf('Drift range %.4g -> %.4g (%.1f%% reduction).', ...
             stats.driftRangeBefore, stats.driftRangeAfter, stats.driftReductionPercent));
@@ -3116,10 +3262,10 @@ function driftCompensationCallback(~,~)
         preprocDisplayName = fullName;
         try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
         studio.datasets.(keyName) = newData;
-        try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
+        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
         try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch ME2, addLog(['[drift] name commit skipped: ' ME2.message]); end
         try, deConfUSIon_write_full_display_metadata(savePath,newData); catch ME2, addLog(['[drift] metadata skipped: ' ME2.message]); end
-        addLog(['Saved MAT -> ' savePath]);
+        addLog(['Background save queued -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -3142,7 +3288,7 @@ function temporalSmoothingCallback(~,~)
     studio = guidata(fig);
 
     if ~isfield(studio,'isLoaded') || ~studio.isLoaded
-        errordlg('Load data first.','Temporal Smoothing/Subsampling');
+        errordlg('Load data first.','Temporal Interpolation');
         return;
     end
 
@@ -3150,14 +3296,14 @@ function temporalSmoothingCallback(~,~)
 
     if ~isstruct(data) || ~isfield(data,'I') || isempty(data.I)
         errordlg('Active dataset has no data.I to process.', ...
-            'Temporal Smoothing/Subsampling');
+            'Temporal Interpolation');
         return;
     end
 
     if ~isfield(data,'TR') || isempty(data.TR) || ...
             ~isscalar(data.TR) || ~isfinite(data.TR) || data.TR <= 0
         errordlg('Active dataset has invalid TR.', ...
-            'Temporal Smoothing/Subsampling');
+            'Temporal Interpolation');
         return;
     end
 
@@ -3329,10 +3475,8 @@ function temporalSmoothingCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-        try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-        addLog(['Saved MAT -> ' savePath]);
+        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        addLog(['Background save queued -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -3341,7 +3485,7 @@ function temporalSmoothingCallback(~,~)
 
     catch ME
         addLog(['TEMPORAL / SUBSAMPLING ERROR: ' ME.message]);
-        errordlg(ME.message,'Temporal Smoothing/Subsampling failed');
+        errordlg(ME.message,'Temporal Interpolation failed');
     end
 
     setProgramStatus(true);
@@ -3377,7 +3521,7 @@ function cfg = showTemporalSmoothSubsampleDialog(data)
 
     % ---------------- figure ----------------
     dlg = figure( ...
-        'Name','Temporal Smoothing / Subsampling', ...
+        'Name','Temporal Interpolation', ...
         'Color',bg, ...
         'MenuBar','none', ...
         'ToolBar','none', ...
@@ -3400,7 +3544,7 @@ try, deConfUSIon_popup_polish_now(gcf); catch, end
     uicontrol('Parent',dlg,'Style','text', ...
         'Units','normalized', ...
         'Position',[0.045 0.915 0.91 0.06], ...
-        'String','Temporal Smoothing / Subsampling', ...
+        'String','Temporal Interpolation', ...
         'BackgroundColor',bg, ...
         'ForegroundColor',fg, ...
         'FontName','Helvetica', ...
@@ -3925,7 +4069,7 @@ end
                 end
                 scopeTag = '';
                 if isfield(stats,'sliceScope')
-                    scopeTag = deConfUSIon_pcaica_scope_tag(stats.sliceScope);
+                    scopeTag = deConfUSIon_utils('deConfUSIon_pcaica_scope_tag',stats.sliceScope);
                 end
                 if isempty(scopeTag)
                     fullName = sprintf('%s_pca_%s_%s', baseStem, pcTag, ts);
@@ -3956,10 +4100,8 @@ end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                try, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-                addLog(['Saved MAT -> ' savePath]);
+                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Background save queued -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
                 if isfield(stats,'percentExplainedRemoved'), addLog(sprintf('PCA removed %.2f%% variance proxy.', stats.percentExplainedRemoved)); end
@@ -3997,7 +4139,7 @@ end
                 end
                 scopeTag = '';
                 if isfield(stats,'sliceScope')
-                    scopeTag = deConfUSIon_pcaica_scope_tag(stats.sliceScope);
+                    scopeTag = deConfUSIon_utils('deConfUSIon_pcaica_scope_tag',stats.sliceScope);
                 end
                 if isempty(scopeTag)
                     fullName = sprintf('%s_ica_%s_%s', baseStem, icTag, ts);
@@ -4028,10 +4170,8 @@ end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                try, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath,'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-                addLog(['Saved MAT -> ' savePath]);
+                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Background save queued -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
                 if isfield(stats,'percentEnergyRemoved'), addLog(sprintf('ICA removed %.2f%% component-energy proxy.', stats.percentEnergyRemoved)); end
@@ -4313,10 +4453,8 @@ function filteringCallback(~,~)
             newData.datasetSortTime = datasetSortTime;
             studio.datasets.(keyName) = newData;
         end
-        try, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3','-nocompression'); catch, save(savePath, 'newData','displayNameFull','preprocDisplayName','datasetSortTime','-v7.3'); end % DECONF_OPTA_V2
-                try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch, end % HUMOR_V27_COMMIT_FULL_NAME_AFTER_SAVE
-                try, deConfUSIon_write_full_display_metadata(savePath,newData); catch, end % HUMOR_V26_WRITE_FULL_METADATA
-        addLog(['Saved MAT -> ' savePath]);
+        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        addLog(['Background save queued -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();

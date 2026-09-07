@@ -266,7 +266,9 @@ if opts.useTaper && (opts.trimStart > 0 || opts.trimEnd > 0)
     end
 end
 
-chunkSize = opts.chunkSize;
+% Each voxel has several double work arrays during filtfilt. Bound the
+% working set by time-series length rather than a fixed 50,000-voxel block.
+chunkSize = min(opts.chunkSize,max(1,floor(128*1024^2/(8*nt*12))));
 nChunks   = ceil(nVox / chunkSize);
 nFallbackChunks = 0;
 nFailedChunks   = 0;
@@ -275,6 +277,7 @@ sumBefore = zeros(1, nt); cntBefore = zeros(1, nt);
 sumAfter  = zeros(1, nt); cntAfter  = zeros(1, nt);
 
 for c = 1:nChunks
+    drawnow limitrate;
     s = (c-1)*chunkSize + 1;
     e = min(c*chunkSize, nVox);
 
