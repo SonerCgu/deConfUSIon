@@ -168,7 +168,7 @@ hFig = figure( ...
     'Position',[120 60 1860 980], ...
     'CloseRequestFcn',@closeMe);
 % HUMoR_FORCE_FULLSCREEN_PATCH32
-try, deConfUSIon_force_fullscreen_fig(hFig); catch, end
+try, deConfUSIon_utils('deConfUSIon_force_fullscreen_fig',hFig); catch, end
 
 
 set(hFig, ...
@@ -1376,6 +1376,7 @@ drawnow;
     end
 
     function onHelp(~,~)
+        deConfUSIon_ui('help','GroupAnalysis'); return;
         msg = sprintf([ ...
             'GROUP ANALYSIS MODULAR MAIN\n\n' ...
             'This reduced GroupAnalysis.m only manages the GUI and state.\n\n' ...
@@ -6511,7 +6512,6 @@ if ~ok || isempty(um), opts = []; return; end
 % Read GUI settings AFTER underlay choice, then force only the export-specific values.
 opts = localGA_readDisplayOptsV6(S);
 opts.underlayMode = uModes{um};
-opts.baseWin = [20 40];
 
 answers = inputdlg({ ...
     'Injection start (sec). Default = 60 s because motor baseline is 1 min per slice:', ...
@@ -6542,10 +6542,20 @@ for i=1:numel(bfs)
     Xs{i} = localGA_normalizePSCV6(localGA_getPSCFieldV6(Gs{i}));
     TRs(i) = localGA_getTRV6(Gs{i});
 end
-nY = size(Xs{1},1); nX = size(Xs{1},2); nZ = size(Xs{1},3); nT = size(Xs{1},4);
-for i=2:numel(Xs)
-    nZ = min(nZ,size(Xs{i},3)); nT = min(nT,size(Xs{i},4));
+nY=size(Xs{1},1); nX=size(Xs{1},2); nZ=size(Xs{1},3);
+times=cell(size(Xs)); lo=-inf; hi=inf;
+for i=1:numel(Xs)
+    if ~isequal([size(Xs{i},1) size(Xs{i},2) size(Xs{i},3)],[nY nX nZ])
+        error('deConfUSIon:GroupGeometry','Group export requires matching atlas grids and slices; register subjects first.');
+    end
+    times{i}=(0:size(Xs{i},4)-1)*TRs(i);
+    if isfield(Gs{i},'tsec') && numel(Gs{i}.tsec)==size(Xs{i},4), times{i}=double(Gs{i}.tsec(:)'); end
+    if any(~isfinite(times{i})) || any(diff(times{i})<=0), error('deConfUSIon:GroupTime','Invalid subject timestamps.'); end
+    lo=max(lo,times{i}(1)); hi=min(hi,times{i}(end));
 end
+TR=max(cellfun(@(t)median(diff(t)),times));
+tCommon=lo:TR:hi; nT=numel(tCommon);
+if nT<2, error('deConfUSIon:GroupTime','Subjects have no usable shared time interval.'); end
 if isempty(slicesWanted), slicesWanted = 1:nZ; end
 slicesWanted = unique(max(1,min(nZ,round(slicesWanted))),'stable');
 nZout = numel(slicesWanted);
@@ -6553,7 +6563,13 @@ SUM = zeros(nY,nX,nZout,nT,'double'); CNT = zeros(nY,nX,nZout,nT,'double');
 Usum = zeros(nY,nX,nZout,'double'); Ucnt = zeros(nY,nX,nZout,'double');
 subjects = struct('row',{},'animal',{},'condition',{},'group',{},'bundleFile',{});
 for i=1:numel(Xs)
-    Xi = localGA_fitPSCToTargetV6(Xs{i},nY,nX,nZ,nT);
+    Xi=nan(nY*nX*nZ,nT,'single'); source=reshape(Xs{i},[],numel(times{i}));
+    chunk=max(1,floor(32*1024^2/(8*max(nT,numel(times{i})))));
+    for a=1:chunk:size(source,1)
+        b=min(size(source,1),a+chunk-1);
+        Xi(a:b,:)=single(interp1(times{i},double(source(a:b,:))',tCommon,'linear',NaN)');
+    end
+    Xi=reshape(Xi,[nY nX nZ nT]);
     Xi = Xi(:,:,slicesWanted,1:nT);
     ok = isfinite(Xi); Xi(~ok) = 0; SUM = SUM + Xi; CNT = CNT + double(ok);
     Ui = localGA_getUnderlayStackV6(Gs{i},opts.underlayMode,nY,nX,nZ);
@@ -6563,10 +6579,10 @@ for i=1:numel(Xs)
 end
 Xg = SUM ./ max(1,CNT); Xg(CNT==0) = 0;
 Ug = Usum ./ max(1,Ucnt); Ug(Ucnt==0) = 0;
-TR = median(TRs(isfinite(TRs) & TRs>0)); if ~isfinite(TR), TR = 1; end
+% TR and tCommon are defined from actual shared subject timestamps.
 baseWin = [0 60]; try, if isfield(opts,'baseWin'), baseWin = opts.baseWin; end, catch, end
 sigWin = [60 88]; try, sigWin = [opts.injSec opts.injSec + opts.winLen]; catch, end
-maps = localGA_computeWindowMapsV6(Xg,TR,baseWin,sigWin,opts);
+maps = localGA_computeWindowMapsV6(Xg,TR,baseWin-tCommon(1),sigWin-tCommon(1),opts);
 G = struct();
 G.kind = 'SCM_GROUP_EXPORT';
 G.version = 'GA_MOTOR_EXPORT_INTEGRATED_V6';
@@ -6583,7 +6599,8 @@ G.scmMapAtlas = single(maps);
 G.mapAtlas = single(maps);
 G.groupMap2D = single(maps);
 G.overlay2D = single(maps);
-G.TR = TR; G.tsec = (0:nT-1)*TR; G.tMin = G.tsec/60;
+G.TR = TR; G.tsec = tCommon; G.tMin = G.tsec/60;
+G.validSubjectCount=uint16(CNT); G.alignment='physical timestamps; coarsest median sampling interval';
 G.nSlices = nZout; G.nFrames = nT; G.selectedSlices = slicesWanted;
 G.baseWindowSec = baseWin; G.signalWindowSec = sigWin;
 G.display = opts; G.render = opts; G.subjects = subjects;
@@ -6609,7 +6626,8 @@ function maps = localGA_computeWindowMapsV6(X,TR,baseWin,sigWin,opts)
 b = localGA_secToIdxV6(baseWin,TR,nT); s = localGA_secToIdxV6(sigWin,TR,nT);
 for z=1:nZ
     P = squeeze(X(:,:,z,:));
-    M = mean(P(:,:,s(1):s(2)),3) - mean(P(:,:,b(1):b(2)),3);
+    P=deConfUSIon_signal('rebase',P,b(1):b(2));
+    M=deConfUSIon_signal('mean',P(:,:,s(1):s(2)),3);
     if opts.sigma > 0, M = localGA_smooth2V6(M,opts.sigma); end
     M(~isfinite(M)) = 0; maps(:,:,z) = M;
 end
@@ -7324,7 +7342,7 @@ error('Bundle has no PSC time series field.');
 end
 
 function X=localGA_normalizePSCV6(X)
-X=double(X); X(~isfinite(X))=0;
+X=single(X);
 if ndims(X)==2, error('PSC is only 2D static map, not a time series.'); end
 if ndims(X)==3, X=reshape(X,[size(X,1) size(X,2) 1 size(X,3)]); return; end
 if ndims(X)==4, return; end
@@ -7407,7 +7425,10 @@ opts.modMax = 20;
 opts.sigma = 0;
 opts.polarity = 'Positive only';
 opts.underlayMode = 'selected';
-opts.baseWin = [20 40];
+opts.baseWin = [0 60];
+if isfield(S,'mapGlobalBaseSec'), opts.baseWin=double(S.mapGlobalBaseSec); end
+if isfield(S,'hMapBase0') && ishghandle(S.hMapBase0), opts.baseWin(1)=str2double(get(S.hMapBase0,'String')); end
+if isfield(S,'hMapBase1') && ishghandle(S.hMapBase1), opts.baseWin(2)=str2double(get(S.hMapBase1,'String')); end
 
 % Positive caxis from GroupAnalysis GUI.
 try, if isfield(S,'mapCaxis') && numel(S.mapCaxis)>=2, opts.caxis=double(S.mapCaxis(1:2)); end, catch, end
@@ -7750,7 +7771,9 @@ base = sprintf('FC_Group_%s_vs_%s_%s',sanitizeFilename(R.groupA),sanitizeFilenam
 try, writeFCMatrixCSV(fullfile(outDir,[base '_mean_' sanitizeFilename(R.groupA) '_PearsonR.csv']),R.meanRA,R.names); catch, end
 try, writeFCMatrixCSV(fullfile(outDir,[base '_mean_' sanitizeFilename(R.groupB) '_PearsonR.csv']),R.meanRB,R.names); catch, end
 try, writeFCMatrixCSV(fullfile(outDir,[base '_diff_PearsonR.csv']),R.diffR,R.names); catch, end
-try, writeFCMatrixCSV(fullfile(outDir,[base '_p_values.csv']),R.pMat,R.names); catch, end
+writeFCMatrixCSV(fullfile(outDir,[base '_p_values.csv']),R.pMat,R.names);
+if isfield(R,'qMat'), writeFCMatrixCSV(fullfile(outDir,[base '_q_FDR.csv']),R.qMat,R.names); end
+if isfield(R,'nMat'), writeFCMatrixCSV(fullfile(outDir,[base '_valid_subject_counts.csv']),R.nMat,R.names); end
 try, writeFCMatrixCSV(fullfile(outDir,[base '_mean_' sanitizeFilename(R.groupA) '_FisherZ.csv']),R.meanZA,R.names); catch, end
 try, writeFCMatrixCSV(fullfile(outDir,[base '_mean_' sanitizeFilename(R.groupB) '_FisherZ.csv']),R.meanZB,R.names); catch, end
 try
@@ -7815,7 +7838,7 @@ Z = G.Zstack(:,:,idx);
 Rstack = G.Rstack(:,:,idx);
 meanZ = mean3nan_SINGLE_20260616(Z);
 meanR = tanh(meanZ);
-pMat = pOneSampleApprox_SINGLE_20260616(Z);
+[pMat,nMat,qMat] = deConfUSIon_signal('fcstats',Z);
 
 R = struct();
 R.mode = 'Functional Connectivity Single Group';
@@ -7835,7 +7858,8 @@ R.meanZB = nan(size(meanZ));
 R.meanRB = nan(size(meanR));
 R.diffZ = nan(size(meanZ));
 R.diffR = nan(size(meanR));
-R.pMat = pMat;
+R.pMat = pMat; R.nMat=nMat; R.qMat=qMat;
+R.inference='Two-sided one-sample Student t; BH FDR across unique off-diagonal edges; independent subjects';
 R.Zstack = Z;
 R.Rstack = Rstack;
 R.subjectNames = G.subjectNames(idx);
@@ -7869,16 +7893,7 @@ end
 end
 
 function P = pOneSampleApprox_SINGLE_20260616(X)
-[n1,n2,n] = size(X); P = nan(n1,n2);
-for r = 1:n1
-    for c = 1:n2
-        v = squeeze(X(r,c,:)); v = v(isfinite(v));
-        if numel(v) >= 2
-            t = mean(v) ./ (std(v) ./ sqrt(numel(v)) + eps);
-            P(r,c) = erfc(abs(t)./sqrt(2)); % normal approx, toolbox-free
-        end
-    end
-end
+P=deConfUSIon_signal('fcstats',X);
 end
 
 function s = popupString_SINGLE_20260616(S,fieldName,fallback)
@@ -8074,7 +8089,7 @@ Z = G.Zstack(:,:,idx);
 Rstack = G.Rstack(:,:,idx);
 meanZ = mean3nan_SINGLE_20260616(Z);
 meanR = tanh(meanZ);
-pMat = pOneSampleApprox_SINGLE_20260616(Z);
+[pMat,nMat,qMat] = deConfUSIon_signal('fcstats',Z);
 R = struct();
 R.mode = 'Functional Connectivity Single Group Advanced';
 R.groupName = groupSel;
@@ -8093,7 +8108,8 @@ R.meanZB = nan(size(meanZ));
 R.meanRB = nan(size(meanR));
 R.diffZ = nan(size(meanZ));
 R.diffR = nan(size(meanR));
-R.pMat = pMat;
+R.pMat = pMat; R.nMat=nMat; R.qMat=qMat;
+R.inference='Two-sided one-sample Student t; BH FDR across unique off-diagonal edges; independent subjects';
 R.Zstack = Z;
 R.Rstack = Rstack;
 R.subjectNames = G.subjectNames(idx);

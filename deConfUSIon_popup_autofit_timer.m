@@ -13,7 +13,7 @@ switch action
         localStopTimers();
         t = timer('Name','HUMoR_popup_autofit_timer_STABLE_NO_SEG', ...
             'ExecutionMode','fixedSpacing', ...
-            'Period',0.75, ...
+            'Period',1.5, ...
             'BusyMode','drop', ...
             'TimerFcn',@(~,~)localTick());
         start(t);
@@ -37,7 +37,6 @@ catch
     return;
 end
 
-keep = [];
 for k = 1:numel(figs)
     f = figs(k);
     if ~ishghandle(f), continue; end
@@ -47,6 +46,16 @@ for k = 1:numel(figs)
     try, nm = char(get(f,'Name')); catch, end
     try, tg = char(get(f,'Tag')); catch, end
     s = lower([nm ' ' tg]);
+    % Only style application windows, once after their controls are created.
+    owned = isappdata(f,'deConfUSIonOwned') || ~isempty(regexp(s, ...
+        'deconfusion|fusi studio|scm gui|signal.change|functional connectivity|group analysis|pca components|ica components|mask editor|atlas registration|time.course|fusi video','once'));
+    if ~owned || strcmp(tg,'deConfUSIonHelp'), continue; end
+    count=numel(findall(f,'Type','uicontrol'));
+    previous=getappdata(f,'deConfUSIonStyleControlCount');
+    if isempty(previous) || previous~=count
+        deConfUSIon_ui('style',f);
+        setappdata(f,'deConfUSIonStyleControlCount',count);
+    end
 
     isSeg = false;
     if ~isempty(strfind(s,'segmentation')), isSeg = true; end
@@ -59,16 +68,7 @@ for k = 1:numel(figs)
         continue;
     end
 
-    keep = [keep f]; %#ok<AGROW>
-end
-
-if isempty(keep)
-    return;
-end
-
-try
-    deConfUSIon_popup_polish_now(keep);
-catch
+    % Owned windows manage geometry through their own resize callbacks.
 end
 end
 

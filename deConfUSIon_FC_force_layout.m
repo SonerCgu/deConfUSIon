@@ -6,6 +6,7 @@ try
     if nargin < 1 || isempty(fig) || ~ishghandle(fig)
         fig = gcf;
     end
+    try, deConfUSIon_ui('style',fig); catch, end
 
     %% Box 4: Display / Save
     pSave = localFindPanelByTitle(fig,'4. Display / Save');

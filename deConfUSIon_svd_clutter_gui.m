@@ -154,7 +154,7 @@ ax6 = makeAxis(right,[0.675 0.105 0.285 0.315],C);
 set(fig,'WindowButtonMotionFcn',[]);
 drawnow;
 % DECONF_SVDFULLSCREEN_V1: open maximized like the other deConfUSIon GUIs
-try, deConfUSIon_force_fullscreen_fig(fig); catch, end
+try, deConfUSIon_utils('deConfUSIon_force_fullscreen_fig',fig); catch, end
 drawnow;
 onCompute([],[]);
 uiwait(fig);

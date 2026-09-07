@@ -48,7 +48,7 @@ TRDetectionSource = '';
 switch extKey
 
     case '.mat'
-        S = load(dataFile);
+        S = localLoadSelected(dataFile);
 
         % -------------------------------------------------
         % RAW METADATA PASS-THROUGH
@@ -235,10 +235,19 @@ end
                 medDt = median(dt);
                 timeSpan = double(timeVec(end) - timeVec(1));
 
-                % If timestamps are in milliseconds, convert to seconds.
-                if medDt > 20
-                    medDt = medDt / 1000;
-                    timeSpan = timeSpan / 1000;
+                scale = localTimeScale(S);
+                medDt = medDt * scale;
+                timeSpan = timeSpan * scale;
+                meta.rawMetadata.sourceTimestamps = double(timeVec(:));
+                meta.rawMetadata.timestampScaleToSeconds = scale;
+                if numel(timeVec) == size(I,ndims(I)) && all(isfinite(timeVec)) && all(diff(timeVec)>0)
+                    meta.rawMetadata.tsec = (double(timeVec(:))-double(timeVec(1)))*scale;
+                    meta.rawMetadata.regularSampling = max(abs(diff(meta.rawMetadata.tsec)-medDt)) <= max(1e-6,0.01*medDt);
+                    if ~meta.rawMetadata.regularSampling
+                        warning('deConfUSIon:IrregularTime','Timestamps are irregular. TR is their median; resample explicitly before frequency/FC analysis.');
+                    end
+                else
+                    warning('deConfUSIon:InvalidTimeVector','Timestamp count/order is inconsistent with the image series. Original values retained in metadata.');
                 end
 
                 if isempty(TR)
@@ -260,12 +269,7 @@ if isempty(TR) || ~isfinite(TR) || TR <= 0
     TR = fallbackTR_eff;
     TRWasImputed = true;
 
-elseif TR < 0.02 || TR > 20
-    warning('loadFUSIData:SuspiciousTR', ...
-        'Suspicious TR = %.3f s found in file. Using default TR = %.3f s for %s instead.', ...
-        TR, fallbackTR_eff, probeTypeAuto);
-    TR = fallbackTR_eff;
-    TRWasImputed = true;
+
 end
 
 meta.rawMetadata.TRWasImputed = TRWasImputed;
@@ -303,42 +307,41 @@ end
             end
         end
 
-    case '.nii'
-        V = niftiread(dataFile);
-        I = convertNiftiToI(V);
-
-        TR = fallbackTR;
-        TotalTimeSec = size(I, ndims(I)) * TR;
-
-    case '.nii.gz'
-        tmpDir = tempname;
-        mkdir(tmpDir);
-
-        try
-            gunzip(dataFile, tmpDir);
-            d = dir(fullfile(tmpDir,'*.nii'));
-            if isempty(d)
-                error('Could not unpack .nii.gz file.');
-            end
-
-            niiFile = fullfile(tmpDir, d(1).name);
-            V = niftiread(niiFile);
-            I = convertNiftiToI(V);
-        catch ME
-            try
-                rmdir(tmpDir,'s');
-            catch
-            end
-            rethrow(ME);
+    case {'.nii','.nii.gz'}
+        ni = niftiinfo(dataFile);
+        dimsN = double(ni.ImageSize);
+        if numel(dimsN)<4 || dimsN(4)<2
+            error('deConfUSIon:StaticNifti','NIfTI needs an explicit fourth time dimension with at least two samples. Static anatomy must be loaded through registration.');
         end
-
-        try
-            rmdir(tmpDir,'s');
-        catch
+        V = niftiread(ni);
+        I = single(permute(V,[2 1 3 4]));
+        if size(I,3)==1, I=reshape(I,size(I,1),size(I,2),size(I,4)); end
+        meta.rawMetadata.nifti = ni;
+        meta.rawMetadata.axisPermutation = [2 1 3 4];
+        meta.voxelSize = double(ni.PixelDimensions([2 1 3]));
+        meta.rawMetadata.voxelSize = meta.voxelSize;
+        TR = [];
+        unit = lower(char(ni.TimeUnits));
+        if numel(ni.PixelDimensions)>=4
+            trHeader=double(ni.PixelDimensions(4));
+            if strcmp(unit,'second'), TR=trHeader;
+            elseif strcmp(unit,'millisecond'), TR=trHeader/1000;
+            elseif strcmp(unit,'microsecond'), TR=trHeader/1e6; end
         end
-
-        TR = fallbackTR;
-        TotalTimeSec = size(I, ndims(I)) * TR;
+        if isempty(TR) || ~isfinite(TR) || TR<=0
+            TR=fallbackTR;
+            if isempty(TR), TR=1; end
+            TRWasImputed=true;
+            warning('deConfUSIon:NiftiTR','NIfTI has no usable time units. Confirm the provisional TR %.6g seconds at loading.',TR);
+            TRDetectionSource='provisional fallback; confirmation required';
+        else
+            TRDetectionSource='NIfTI header and explicit units';
+        end
+        meta.rawMetadata.TRWasImputed=TRWasImputed;
+        meta.rawMetadata.TRDetectionSource=TRDetectionSource;
+        meta.rawMetadata.TRBeforeUserChoiceSec=TR;
+        if ~TRWasImputed, meta.rawMetadata.TRDetectedFromFileSec=TR; end
+        TotalTimeSec=size(I,ndims(I))*TR;
 
     otherwise
         error('Unsupported file type: %s', extKey);
@@ -349,36 +352,9 @@ end
 % -----------------------------------------------------
 nVols_data = size(I, ndims(I));
 
-if TRWasImputed
-    % If TR was guessed/defaulted, do NOT trim/pad volumes here.
-    % Keep raw volume count and let Studio ask the user for final TR.
-    nVols = nVols_data;
-else
-    nVols_req = round(TotalTimeSec / TR);
-
-    if nVols_req <= 0 || abs(nVols_req - nVols_data) > 1
-        nVols = nVols_data;
-    else
-        nVols = nVols_req;
-
-        if nVols_data > nVols
-            subs = repmat({':'}, 1, ndims(I));
-            subs{end} = 1:nVols;
-            I = I(subs{:});
-
-        elseif nVols_data < nVols
-            subsLast = repmat({':'}, 1, ndims(I));
-            subsLast{end} = nVols_data;
-            lastVol = I(subsLast{:});
-
-            reps = ones(1, ndims(I));
-            reps(end) = nVols - nVols_data;
-
-            I = cat(ndims(I), I, repmat(lastVol, reps));
-        end
-    end
-end
-
+% Import never changes acquired frames to reconcile duration conventions.
+nVols = nVols_data;
+meta.rawMetadata.reportedTotalTimeSec = TotalTimeSec;
 TotalTimeSec = nVols * TR;
 
 data = struct();
@@ -389,6 +365,18 @@ data.TotalTimeSec = double(TotalTimeSec);
 data.TotalTimeMin = double(TotalTimeSec / 60);
 data.totalTime    = data.TotalTimeSec;
 data.totalTimeMin = data.TotalTimeMin;
+data.schemaVersion = 'deConfUSIon_dataset_v2';
+data.sourceFile = dataFile;
+data.sampleSpanSec = max(0,nVols-1)*TR;
+data.tsec = (0:nVols-1)*TR;
+if isfield(meta.rawMetadata,'tsec'), data.tsec=meta.rawMetadata.tsec(:)'; end
+data.timeUnits = 'seconds';
+data.axes = {'Y','X','T'};
+if ndims(I)==4, data.axes={'Y','X','Z','T'}; end
+data.timingConfirmed = ~TRWasImputed;
+data.regularSampling = true;
+if isfield(meta.rawMetadata,'regularSampling'), data.regularSampling=meta.rawMetadata.regularSampling; end
+if isfield(meta,'voxelSize'), data.voxelSize=meta.voxelSize; end
 
 % HUMOR_LOAD_MOTOR_METADATA_PATCH_V2
 try
@@ -757,7 +745,6 @@ if isnumeric(v) && ~isempty(v)
     elseif strcmp(mode,'vector')
         if isvector(v) && numel(v) >= 2
             vv = double(v(:));
-            vv = vv(isfinite(vv));
             if numel(vv) >= 2
                 out = vv;
                 return;
@@ -906,7 +893,6 @@ if matched
     elseif strcmp(mode,'vector')
         if isnumeric(val) && isvector(val) && numel(val) >= 2
             vv = double(val(:));
-            vv = vv(isfinite(vv));
             if numel(vv) >= 2
                 out = vv;
                 return;
@@ -923,4 +909,54 @@ end
 % but DO NOT allow arbitrary numerics to be accepted
 out = searchByNames(val, names, depth+1, mode, false);
 
+end
+function S=localLoadSelected(file)
+% Avoid loading every large alternative movie/processed array in a MAT file.
+info=whos('-file',file); names={info.name}; chosen='';
+preferred={'I','IQR','img','image','volume','newData','data','D'};
+for k=1:numel(preferred)
+    j=find(strcmp(names,preferred{k}),1);
+    if ~isempty(j) && (numel(info(j).size)>=3 || strcmp(info(j).class,'struct'))
+        chosen=names{j}; break;
+    end
+end
+if isempty(chosen)
+    score=-inf(1,numel(info));
+    for k=1:numel(info)
+        if numel(info(k).size)>=3 && any(strcmp(info(k).class,{'single','double','uint16','int16','uint8'}))
+            score(k)=prod(double(info(k).size));
+        end
+    end
+    [v,j]=max(score); if ~isempty(v) && isfinite(v), chosen=names{j}; end
+end
+keep=([info.bytes]<=8*1024^2) | strcmp(names,chosen);
+if isempty(chosen)
+    idx=find(strcmp({info.class},'struct'));
+    if ~isempty(idx), [~,j]=max([info(idx).bytes]); keep(idx(j))=true; end
+end
+selected=names(keep);
+if isempty(selected), error('deConfUSIon:NoImage','No supported imaging variable found.'); end
+S=load(file,selected{:});
+end
+
+function scale=localTimeScale(S)
+scale=1; units=''; candidates={S};
+for f={'metadata','md','par'}
+    if isfield(S,f{1}) && isstruct(S.(f{1})), candidates{end+1}=S.(f{1}); end
+end
+for k=1:numel(candidates)
+    C=candidates{k};
+    for f={'timeUnits','timestampUnits','TimeUnits','timeUnit'}
+        if isfield(C,f{1}) && (ischar(C.(f{1})) || isstring(C.(f{1})))
+            units=lower(strtrim(char(C.(f{1})))); break;
+        end
+    end
+    if ~isempty(units), break; end
+end
+if any(strcmp(units,{'ms','millisecond','milliseconds'})), scale=1e-3;
+elseif any(strcmp(units,{'us','microsecond','microseconds'})), scale=1e-6;
+elseif any(strcmp(units,{'min','minute','minutes'})), scale=60;
+elseif ~isempty(units) && ~any(strcmp(units,{'s','sec','second','seconds'}))
+    error('deConfUSIon:TimeUnits','Unsupported timestamp units: %s',units);
+end
 end

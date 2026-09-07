@@ -39,16 +39,17 @@ TR = defaultTR;
 datasetFolder = autoDatasetFolder;
 wasCancelled = false;
 
-bg     = [0.018 0.055 0.085];
-panel  = [0.030 0.085 0.125];
-panel2 = [0.060 0.135 0.185];
-fg     = [0.94 0.98 1.00];
-muted  = [0.56 0.68 0.76];
-green  = [0.20 0.72 0.48];
-red    = [0.82 0.28 0.34];
-blue   = [0.18 0.55 0.95];
-orange = [0.95 0.62 0.16];
-cyan   = [0.00 0.78 0.78];
+C = deConfUSIon_ui('palette');
+bg     = C.background;
+panel  = C.panel;
+panel2 = C.input;
+fg     = C.text;
+muted  = C.muted;
+green  = C.success;
+red    = C.danger;
+blue   = C.blue;
+orange = C.yellow;
+cyan   = C.cyan;
 
 W = 1080;
 H = 780;
@@ -83,7 +84,7 @@ uicontrol(dlg,'Style','text', 'String',fileLine, 'Units','pixels', 'Position',[7
 
 hUseDefaultTR = uicontrol(dlg,'Style','radiobutton', 'String',sprintf('Use probe default TR: %.0f ms', defaultTR*1000), 'Value',1, 'Units','pixels', 'Position',[70 500 390 30], 'BackgroundColor',panel, 'ForegroundColor',fg, 'FontName','Arial', 'FontSize',13, 'FontWeight','bold', 'Callback',@onDefaultTR);
 hUseCustomTR = uicontrol(dlg,'Style','radiobutton', 'String','Use custom TR', 'Value',0, 'Units','pixels', 'Position',[490 500 180 30], 'BackgroundColor',panel, 'ForegroundColor',fg, 'FontName','Arial', 'FontSize',13, 'Callback',@onCustomTR);
-hCustomTRms = uicontrol(dlg,'Style','edit', 'String',sprintf('%.0f',customTRDefault*1000), 'Units','pixels', 'Position',[675 497 120 34], 'BackgroundColor',[0.24 0.24 0.27], 'ForegroundColor',[0.85 0.85 0.85], 'FontName','Arial', 'FontSize',14, 'HorizontalAlignment','center', 'Enable','off');
+hCustomTRms = uicontrol(dlg,'Style','edit', 'String',sprintf('%.6g',customTRDefault*1000), 'Units','pixels', 'Position',[675 497 120 34], 'BackgroundColor',C.input, 'ForegroundColor',C.muted, 'FontName','Arial', 'FontSize',14, 'HorizontalAlignment','center', 'Enable','off');
 uicontrol(dlg,'Style','text', 'String','ms', 'Units','pixels', 'Position',[805 502 50 24], 'BackgroundColor',panel, 'ForegroundColor',muted, 'FontName','Arial', 'FontSize',13, 'HorizontalAlignment','left');
 
 if hasFileTR
@@ -122,7 +123,7 @@ if isempty(startDir) || exist(startDir,'dir') ~= 7
     startDir = pwd;
 end
 
-hParent = uicontrol(dlg,'Style','edit', 'String',startDir, 'Units','pixels', 'Position',[70 202 760 36], 'BackgroundColor',[0.24 0.24 0.27], 'ForegroundColor',[0.85 0.85 0.85], 'FontName','Arial', 'FontSize',11, 'HorizontalAlignment','left', 'Enable','off');
+hParent = uicontrol(dlg,'Style','edit', 'String',startDir, 'Units','pixels', 'Position',[70 202 760 36], 'BackgroundColor',C.input, 'ForegroundColor',C.muted, 'FontName','Arial', 'FontSize',11, 'HorizontalAlignment','left', 'Enable','off');
 hBrowse = uicontrol(dlg,'Style','pushbutton', 'String','Browse', 'Units','pixels', 'Position',[850 202 120 36], 'BackgroundColor',blue, 'ForegroundColor',fg, 'FontName','Arial', 'FontSize',12, 'FontWeight','bold', 'Enable','off', 'Callback',@onBrowse);
 hOutHint = uicontrol(dlg,'Style','text', 'String','Automatic mode keeps the current HUMoR/fUSI Studio folder workflow unchanged.', 'Units','pixels', 'Position',[70 160 900 26], 'BackgroundColor',panel, 'ForegroundColor',orange, 'FontName','Arial', 'FontSize',11, 'HorizontalAlignment','left');
 
@@ -130,6 +131,10 @@ uicontrol(dlg,'Style','pushbutton', 'String','Cancel', 'Units','pixels', 'Positi
 uicontrol(dlg,'Style','pushbutton', 'String','Proceed', 'Units','pixels', 'Position',[885 50 155 52], 'BackgroundColor',green, 'ForegroundColor',fg, 'FontName','Arial', 'FontSize',14, 'FontWeight','bold', 'Callback',@onProceed);
 
 drawnow;
+onCustomTR();
+% This initial import dialog is deliberately a normal, centered window.
+setappdata(dlg,'deConfUSIonNoMaximize',true);
+deConfUSIon_ui('present',dlg);
 uiwait(dlg);
 
 if ishandle(dlg)
@@ -155,7 +160,7 @@ try setpref('fusi_studio','lastTR',TR); catch, end
         if ~ishandle(dlg), return; end
         set(hUseDefaultTR,'Value',1);
         set(hUseCustomTR,'Value',0);
-        set(hCustomTRms,'Enable','off','BackgroundColor',[0.24 0.24 0.27],'ForegroundColor',[0.85 0.85 0.85]);
+        set(hCustomTRms,'Enable','off','BackgroundColor',C.input,'ForegroundColor',C.muted);
         set(hTRHint,'String','Probe default TR is selected. Use Custom TR only if needed.','ForegroundColor',orange);
     end
 
@@ -163,7 +168,7 @@ try setpref('fusi_studio','lastTR',TR); catch, end
         if ~ishandle(dlg), return; end
         set(hUseDefaultTR,'Value',0);
         set(hUseCustomTR,'Value',1);
-        set(hCustomTRms,'Enable','on','BackgroundColor',[0.98 0.98 0.98],'ForegroundColor',[0 0 0]);
+        set(hCustomTRms,'Enable','on','BackgroundColor',[0.95 0.97 1.00],'ForegroundColor',[0.04 0.06 0.09]);
         if hasFileTR
             set(hTRHint,'String','Custom TR selected. The box is pre-filled with the file TR candidate.','ForegroundColor',muted);
         else
@@ -175,7 +180,7 @@ try setpref('fusi_studio','lastTR',TR); catch, end
         if ~ishandle(dlg), return; end
         set(hAutoOut,'Value',1);
         set(hCustomOut,'Value',0);
-        set(hParent,'Enable','off','BackgroundColor',[0.24 0.24 0.27],'ForegroundColor',[0.85 0.85 0.85]);
+        set(hParent,'Enable','off','BackgroundColor',C.input,'ForegroundColor',C.muted);
         set(hBrowse,'Enable','off');
         set(hOutHint,'String','Automatic mode keeps the current HUMoR/fUSI Studio folder workflow unchanged.','ForegroundColor',orange);
     end
@@ -184,7 +189,7 @@ try setpref('fusi_studio','lastTR',TR); catch, end
         if ~ishandle(dlg), return; end
         set(hAutoOut,'Value',0);
         set(hCustomOut,'Value',1);
-        set(hParent,'Enable','on','BackgroundColor',[0.98 0.98 0.98],'ForegroundColor',[0 0 0]);
+        set(hParent,'Enable','on','BackgroundColor',[0.95 0.97 1.00],'ForegroundColor',[0.04 0.06 0.09]);
         set(hBrowse,'Enable','on');
         set(hOutHint,'String','Custom mode: the dataset folder will be created inside the selected parent folder.','ForegroundColor',muted);
     end
@@ -215,8 +220,8 @@ try setpref('fusi_studio','lastTR',TR); catch, end
             trVal = trMs / 1000;
         end
 
-        if isempty(trVal) || ~isfinite(trVal) || trVal <= 0.02 || trVal > 20
-            errordlg('TR must be between 20 ms and 20 seconds.','Invalid TR');
+        if isempty(trVal) || ~isfinite(trVal) || trVal <= 0
+            errordlg('TR must be a finite positive number of seconds.','Invalid TR');
             return;
         end
 

@@ -1,4 +1,4 @@
-function [out, stats] = scrubbing(data, TR, saveRoot, tag)
+function [out, stats] = scrubbing(data, TR, saveRoot, tag, cfgIn)
 % ==========================================================
 % SCRUBBING (MEMORY-SAFE)
 %   - Detection: DVARS or Global Signal
@@ -38,7 +38,15 @@ trimStartVol = 0;
 trimEndVol   = 0;
 
 % ---------------- SINGLE SCRUBBING SETUP POPUP ----------------
-cfg = showScrubbingSetupDialog();
+if nargin >= 5 && isstruct(cfgIn)
+    cfg = cfgIn;
+    if ~isfield(cfg,'cancelled'), cfg.cancelled=false; end
+    if isfield(cfg,'scrubMetric'), cfg.method=cfg.scrubMetric; end
+    if isfield(cfg,'scrubInterpolation'), cfg.interpMethod=lower(cfg.scrubInterpolation); end
+    if isfield(cfg,'scrubTrim'), cfg.doTrim=cfg.scrubTrim; end
+else
+    cfg = showScrubbingSetupDialog();
+end
 
 if isempty(cfg) || ~isstruct(cfg) || cfg.cancelled
     out = [];
@@ -585,4 +593,3 @@ end
 
 end
 end
-

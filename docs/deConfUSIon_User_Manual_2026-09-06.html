@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>deConfUSIon fUSI Studio User Manual</title>
+<style>
+body{font-family:Arial,sans-serif;font-size:12pt;line-height:1.55;max-width:980px;margin:0 auto;padding:34px;color:#17202a;background:#f5f7fa}
+main{background:#fff;padding:36px 46px;border:1px solid #d9e2ec;border-radius:12px;box-shadow:0 4px 20px #17202a14}
+h1{color:#12355b;margin-top:0}h2{color:#1b5e86;border-bottom:1px solid #d9e2ec;padding-bottom:4px;margin-top:2em}
+h3{color:#244b63}code,pre{font-family:Consolas,monospace;background:#eef3f7;border-radius:4px}code{padding:2px 4px}pre{padding:12px;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #cbd5df;padding:8px;text-align:left;vertical-align:top}th{background:#e8f1f7}
+.note{border-left:4px solid #e08b3e;background:#fff7ed;padding:10px 14px}.ok{border-left-color:#2b8a78;background:#edf9f5}
+a{color:#075a9e}
+</style></head>
+<body><main>
+<h1>deConfUSIon fUSI Studio User Manual</h1>
+<p><strong>Version 2026-09-06</strong> · MATLAB 2017b–2023b · research software for functional ultrasound imaging (fUSI).</p>
+<div class="note">Always review raw movies, QC, masks, registration overlays, baseline windows, and exported statistics before using results. This toolbox is not medical software.</div>
+<h2>1. Start here</h2>
+<pre>cd('D:\Github\deConfUSIon')
+deConfUSIon</pre>
+<p>Use <strong>Load fUSI Data</strong>, confirm the image dimensions, animal and scan identity, TR, and total duration, then run <strong>Full QC</strong>. The launcher assembles the Studio GUI at runtime; keep <code>run_fusi_studio.m</code>, <code>fusi_studio_GUI.m</code>, and <code>fusi_studio_callback.m</code> together.</p>
+<h2>2. Data and naming</h2>
+<p>Preferred MATLAB image variable: <code>I</code>. Use <code>[Y X T]</code> for a 2D acquisition and <code>[Y X Z T]</code> for step motor or 3D-like data. NIfTI input must be a 4D volume with a valid time dimension.</p>
+<p>Use stable names that retain the animal and scan, for example <code>RGRO_251119_1024_MM_B6_642_FUS_115354.mat</code> and <code>RGRO_260831_1024_MM_B6J_1336_scan4.mat</code>. The loader stores <code>sourceFile</code>, <code>animalId</code> when detected, <code>schemaVersion</code>, <code>tsec</code>, and <code>timeUnits</code> for reproducibility.</p>
+<h2>2a. fUSI, TR, and resolution</h2>
+<p>Functional ultrasound imaging (fUSI) measures blood-volume or blood-flow-related changes with ultrafast ultrasound. A pixel or voxel is a spatial sample and the final dimension is time. Motion, probe pressure, vessels, physiology, anesthesia, and drift can all change the signal, so a bright map is not automatically neuronal activity.</p>
+<p><strong>TR</strong> is the interval between frames in seconds. The nominal sampling frequency is <code>fs = 1/TR</code> and the Nyquist frequency is <code>fN = 1/(2*TR)</code>. The loader prefers physical timestamps when available; irregular timestamps should be resampled before filtering or frequency-domain FC. Spatial resolution is the physical pixel/voxel spacing and must agree across images, masks, underlays, registration, and atlas labels.</p>
+<p>For voxel <code>v</code>, baseline-normalized percent signal change is <code>PSC(v,t) = 100*(I(v,t)-B(v))/B(v)</code>, where <code>B(v)</code> is the finite positive mean of the selected baseline frames. Rebaselining uses <code>PSCnew = 100*(PSCold-Bnew)/(100+Bnew)</code>. These are the equations used by SCM, ROI traces, and exports.</p>
+<h2>3. QC and preprocessing</h2>
+<p>Inspect frame outliers, frame rate, baseline coverage, and the raw movie before preprocessing. Frame interpolation only replaces explicitly rejected frames; it preserves the original 3D or 4D shape. Filtering uses the detected sampling interval, so verify timing when an acquisition is irregular.</p>
+<p>Use scrubbing, motion correction, temporal smoothing, PCA, ICA, and despiking only when justified by the experiment. Save each output with a descriptive processing suffix and confirm that it appears in the active dataset list.</p>
+<p>Frame rejection targets unusable whole frames; scrubbing detects high-change frames and interpolates them; despiking targets sparse voxel-wise outliers; Imregdemons corrects slow spatial deformation; drift compensation estimates a slow trend. Apply the least aggressive correction that resolves the QC finding, then re-run QC.</p>
+<h2>3a. Motion correction and Chop Data</h2>
+<p><strong>Motion Correction</strong> opens one compact chooser for frame rejection, despiking, or scrubbing. Frame rejection targets whole-frame intensity excursions; despiking targets isolated voxel transients; scrubbing targets frame-to-frame changes. Each route keeps the acquisition timing and writes a derived dataset after QC.</p>
+<p><strong>Chop Data</strong> removes seconds from the start and/or end of the active recording. The cut dataset keeps the retained timestamps and original frame indices, resets its displayed time to zero, and is named with the requested start/end durations.</p>
+<h2>4. PSC, SCM, and ROI time courses</h2>
+<p>PSC is calculated as:</p><pre>PSC = 100 * (signal - baseline) / baseline</pre>
+<p>Baseline samples must be finite and positive. In SCM GUI, change the baseline start/end fields and press Enter or leave the field. The map and ROI time course are recomputed from the selected window, and the exported percentage values use exactly the same rebasing formula:</p><pre>PSC_new = 100 * (PSC_old - baseline_old) / (100 + baseline_old)</pre>
+<p>This prevents the common mismatch where export changes but the plotted trace still uses the original baseline.</p>
+<p>Pinned ROIs, including ROIs added using typed coordinates, refresh with the baseline window. ROI traces give each finite voxel equal weight; missing voxels are excluded. Gaussian smoothing preserves invalid-baseline locations without spreading missing values into neighboring valid tissue.</p>
+<h2>5. PCA and ICA</h2>
+<p>The PCA/ICA window displays the active dataset, animal, and scan ID in its header. Computation uses temporal chunking and a compact temporal basis instead of making a full second copy of a large movie. ICA preserves the caller's random-number state. Review components in the viewer before removing them.</p>
+<p>Unused component slots are blank. Apply &amp; Close uses the green action color, while Cancel uses red. Cancel leaves the input movie unchanged.</p>
+<h2>6. Standardized Analysis presets</h2>
+<table><tr><th>Preset</th><th>Label</th><th>Use</th></tr>
+<tr><td>A</td><td>Standard A fast</td><td>Short screening workflow.</td></tr>
+<tr><td>B</td><td>Standard B slow</td><td>Long, detailed workflow.</td></tr>
+<tr><td>C</td><td>2D awake</td><td>2D data acquired in awake animals.</td></tr>
+<tr><td>D</td><td>2D anesthesized</td><td>2D data acquired under anesthesia.</td></tr>
+<tr><td>E</td><td>3D awake</td><td>4D/volume data in awake animals.</td></tr>
+<tr><td>F</td><td>3D anesthesized</td><td>4D/volume data under anesthesia.</td></tr>
+<tr><td>G</td><td>motor anesthesized</td><td>Step motor data under anesthesia.</td></tr></table>
+<p>Presets validate dimensionality before running. PCA auto-removal remains off until components are reviewed.</p>
+<h2>7. Functional connectivity and group analysis</h2>
+<p>Individual FC reports finite-sample t statistics, valid sample counts, and FDR-adjusted q-values. Group motor data are aligned by subject identity and physical <code>tsec</code> before averaging; unequal frame grids are not combined by raw index. Confirm geometry, timing, group labels, and masks before interpreting group maps.</p>
+<h2>8. Memory, temporary saves, and exports</h2>
+<p>The loader selects the primary image variable and avoids loading duplicate large arrays. Chunked QC/PCA/ICA reduce peak working memory. The original image still determines the minimum memory requirement: the representative 3D scan can occupy several gigabytes. Close unused figures and process one dataset at a time when MATLAB reports memory pressure.</p>
+<p>Large derived 3D files use a temporary MAT file and a cooperative save queue. Image chunks are appended while the GUI remains responsive; the final filename is published only after the staged file is complete. A <code>queued</code> or <code>saving</code> date label means the output is still being finalized.</p>
+<p>Exports include source identity, schema version, timing, baseline window, valid counts, and processing metadata. Keep analysis folders separate from raw data and never overwrite raw acquisition files.</p>
+<h2>9. Help and troubleshooting</h2>
+<p>Every Help button opens context-specific guidance from <code>docs/help_topics.json</code>. Popups open maximized on the Studio monitor; if a panel is clipped, maximize the owning window. If a baseline is invalid, choose a window with finite positive signal. If timing is uncertain, inspect <code>tsec</code> and the loader report before filtering.</p>
+<h2>10. Representative validation</h2>
+<p>The repair pass was exercised with a 2D animal 642 file and a 3D scan4 animal 1336 file. Synthetic checks cover frame interpolation, PSC/rebasing, finite-sample FC/FDR, compact temporal bases, and all seven preset definitions. Full acquisition-specific interpretation still requires review by the experimenter.</p>
+<h2>11. Worked example and module guide</h2>
+<p>Read-only example dataset: <code>Z:\fUS\Project_PACAP_AVATAR_SC\RawData\MPI_Data\RGRO_251119_1024_MM_B6_642\RGRO_251119_1024_MM_B6_642_FUS_115354.mat</code>. Load it with <strong>Custom TR</strong> selected, verify the dimensions and timing, run Full QC, and save derived outputs under AnalysedData. The module order is Load → QC → Motion correction or Temporal Interpolation → Filtering/PCA/ICA → SCM/Video/Time Course → Mask/Atlas/Segmentation → FC → Group Analysis. Each Help button describes purpose, equations, implementation, and usage.</p>
+<p>The PDF edition includes the SCM, PCA, ICA, and Motion Correction figures plus a module-by-module inspection table. Dataset labels end with a <code>dd/mm/yy</code> creation date; queued 3D outputs are finalized by the background save queue before publication.</p>
+<p><a href="deConfUSIon_review_2026-09-06.md">See the engineering review and remaining validation notes.</a> The June 2026 PDF is retained for historical reference.</p>
+<p><a href="deConfUSIon_GUI_followup_2026-09-06.md">GUI follow-up fixes and MATLAB validation results</a> document the additional SCM, PCA/ICA, and PSC checks.</p>
+</main></body></html>

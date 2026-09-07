@@ -13,7 +13,8 @@ if nargin < 3, matFile = ''; end
 try, seedName = char(seedName); catch, seedName = 'dataset'; end
 try, matFile  = char(matFile);  catch, matFile = ''; end
 
-pieces = {seedName, matFile};
+[~,fileStem]=fileparts(matFile);
+pieces = {seedName, fileStem};
 
 try
     if isstruct(dataStruct)
@@ -23,7 +24,14 @@ try
         for i = 1:numel(flds)
             f = flds{i};
             if isfield(dataStruct,f) && ~isempty(dataStruct.(f))
-                try, pieces{end+1} = char(dataStruct.(f)); catch, end %#ok<AGROW>
+                try
+                    piece=char(dataStruct.(f));
+                    if any(strcmp(f,{'sourceFileName','sourcePath','savedFile','lazyFile'}))
+                        [~,piece]=fileparts(piece);
+                    end
+                    pieces{end+1}=piece; %#ok<AGROW>
+                catch
+                end
             end
         end
     end
@@ -49,6 +57,15 @@ sliceTag = local_slice(combo, dataStruct);
 
 if isempty(animal)
     animal = local_fallback_identity(seedName);
+    % A repeated acquisition suffix is not another scan. Keep a distinct FUS
+    % timestamp only when the animal/session stem does not already contain it.
+    if strncmpi(scanTag,'FUS_',4)
+        stamp=scanTag(5:end);
+        animal=regexprep(animal,'(?:_FUS_\d+)+$','','ignorecase');
+        if ~isempty(regexp(animal,['(^|_)' regexptranslate('escape',stamp) '$'],'once')), scanTag=''; end
+    elseif ~isempty(scanTag) && endsWith(animal,['_' scanTag],'IgnoreCase',true)
+        animal=animal(1:end-numel(scanTag)-1);
+    end
 end
 
 ops = {};
@@ -97,6 +114,8 @@ if ~isempty(imTok)
     nTok = regexp(imTok,'n\d+','match','once','ignorecase');
     if isempty(nTok), nTok = 'n25'; end
     ops{end+1} = ['imreg_med_' nTok]; %#ok<AGROW>
+elseif ~isempty(regexpi(combo,'imreg|demons','once'))
+    ops{end+1}='imreg';
 end
 
 % Filtering.
@@ -104,6 +123,8 @@ fTok = regexp(combo,'BPF[^_]*to[^_]*Hz_o\d+|LPF[^_]*Hz_o\d+|HPF[^_]*Hz_o\d+','ma
 if ~isempty(fTok)
     fTok = regexprep(fTok,'[^A-Za-z0-9_\-]','');
     ops{end+1} = fTok; %#ok<AGROW>
+elseif ~isempty(regexpi(combo,'(^|_)BPF|(^|_)LPF|(^|_)HPF|filter','once'))
+    ops{end+1}='filter';
 end
 
 % Temporal smoothing.
@@ -122,7 +143,17 @@ if ~isempty(subTok)
 end
 
 if isempty(ops)
-    ops = {'raw'};
+    for operation={'pca','ica','chop','temporal','clutter','svd','drift'}
+        if ~isempty(regexpi(combo,['(^|[_\s-])' operation{1}],'once'))
+            ops{end+1}=operation{1}; %#ok<AGROW>
+        end
+    end
+end
+if isempty(ops)
+    processed=isstruct(dataStruct) && isfield(dataStruct,'preprocessing') && ...
+        ~isempty(dataStruct.preprocessing) && ~any(strcmpi(strtrim(char(dataStruct.preprocessing)),{'raw','none','unprocessed'}));
+    processed=processed || ~isempty(regexpi(matFile,'[\\/]Preprocessing[\\/]|[\\/]P[\\/]','once'));
+    if processed, ops={'processed'}; else, ops={'raw'}; end
 end
 ops = local_dedupe_ops(ops);
 
@@ -228,7 +259,13 @@ function scanTag = local_scan(combo)
 scanTag = '';
 try
     tok = regexp(combo,'scan[_-]?0*(\d+)','tokens','once','ignorecase');
-    if ~isempty(tok), scanTag = sprintf('scan%d',str2double(tok{1})); end
+    if ~isempty(tok)
+        scanTag = sprintf('scan%d',str2double(tok{1}));
+    else
+        % Acquisition files often use FUS_###### as the scan identifier.
+        tok = regexp(combo,'FUS[_-]?0*(\d+)','tokens','once','ignorecase');
+        if ~isempty(tok), scanTag = sprintf('FUS_%s',tok{1}); end
+    end
 catch
     scanTag = '';
 end
@@ -399,7 +436,11 @@ try
     id = regexprep(id,'\.nii$','','ignorecase');
     id = regexprep(id,'\.mat$','','ignorecase');
     id = regexprep(id,'_(?:19|20)\d{6}_\d{6}$','');
-    id = regexprep(id,'_?(raw|frameRej|framerej|scrub|despike|motor|pca|ica|imreg|BPF|LPF|HPF|tsmooth|subsample|submean|submed).*$','','ignorecase');
+    % Acquisition identifiers sometimes contain the whole file stem twice.
+    % The first FUS timestamp already ends the animal/session identity;
+    % local_scan appends that scan identifier exactly once below.
+    id = regexprep(id,'_FUS[_-]?\d+.*$','','ignorecase');
+    id = regexprep(id,'_(raw|processed|frameRej|framerej|scrub|despike|motor|pca|ica|imreg|BPF|LPF|HPF|tsmooth|subsample|submean|submed|filter|temporal|chop|clutter|svd|drift).*$','','ignorecase');
     id = regexprep(id,'[^A-Za-z0-9_\-]','_');
     id = regexprep(id,'_+','_');
     id = regexprep(id,'^_+|_+$','');

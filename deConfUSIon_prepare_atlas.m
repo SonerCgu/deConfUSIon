@@ -27,6 +27,7 @@ try
         atlas.deConfUSIon.selected_region_list_file = listFile;
         atlas.deConfUSIon.rgb2acr_file = rgbFile;
         atlas.deConfUSIon.selected_region_groups = D;
+        atlas.deConfUSIon.coarse_region_groups = deConfUSIon_region_groups(atlas.infoRegions,'coarse');
         if isfield(atlas.infoRegions,'acr')
             try, atlas.deConfUSIon.acr_reordered = atlas.infoRegions.acr(selected_regions); catch, end
         end

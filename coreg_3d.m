@@ -1,4 +1,5 @@
-function Transf = coreg_3d(studio, forcedAnatomyFile)
+function Transf = coreg_3d(studio, forcedAnatomyFile, startAutomatic)
+if nargin < 3, startAutomatic=false; end
 if nargin < 2
     forcedAnatomyFile = '';
 end
@@ -128,7 +129,8 @@ searchFolders = unique(searchFolders,'stable');
 %% ---------------------------------------------------------
 % 4) SELECT ANATOMY SOURCE
 %% ---------------------------------------------------------
-fileWasForced = ~isempty(forcedAnatomyFile) && exist(forcedAnatomyFile,'file') == 2;
+useActive=strcmp(forcedAnatomyFile,'__active_volume__');
+fileWasForced = useActive || (~isempty(forcedAnatomyFile) && exist(forcedAnatomyFile,'file') == 2);
 
 if fileWasForced
     anatomyFile = forcedAnatomyFile;
@@ -159,7 +161,14 @@ end
 %% ---------------------------------------------------------
 anatomic = [];
 
-if endsWithLower(anatomyFile,'.mat')
+if useActive
+    active=studio.datasets.(studio.activeDataset);
+    if ~isfield(active,'I') || ndims(active.I)~=4
+        error('The active dataset must contain a loaded 3D time series.');
+    end
+    anatomic=struct('Data',mean(active.I,4,'omitnan'),'arrayOrder','DV-LR-AP');
+    if isfield(active,'voxelSize'), anatomic.voxelSize=active.voxelSize; end
+elseif endsWithLower(anatomyFile,'.mat')
     S = load(anatomyFile);
     [candNames, candStruct] = detectAnatomyCandidatesFromMat(S);
 
@@ -209,7 +218,7 @@ elseif endsWithLower(anatomyFile,'.nii') || endsWithLower(anatomyFile,'.nii.gz')
     if isempty(vox)
         vox = [1 1 1];
     end
-    anatomic.VoxelSize = vox;
+    anatomic.voxelSize = vox; % NIfTI spacings are displayed for confirmation below.
 
 elseif isImageFile(anatomyFile)
     V = load2DImageAsVolume(anatomyFile);
@@ -244,47 +253,11 @@ end
 % interpolate3D also expects Data as [Z X Y] (dim 1 = slice axis), while
 % deConfUSIon volumes are [Y X Z]. Both are corrected here.
 
-atlasVoxUm = [50 50 50];
-if isfield(atlas,'VoxelSize') && numel(atlas.VoxelSize) >= 3
-    atlasVoxUm = double(atlas.VoxelSize(:)');
+if ndims(anatomic.Data)~=3 || min(size(anatomic.Data))<4
+    error('Select a true 3D anatomical volume for 3D registration. Use coronal mode for 2D images.');
 end
-
-anatVoxIsDefault = true;
-if isfield(anatomic,'VoxelSize') && numel(anatomic.VoxelSize) >= 3
-    anatVoxIsDefault = isequal(double(anatomic.VoxelSize(1:3))', [1;1;1]) || ...
-                       isequal(double(anatomic.VoxelSize(1:3)),  [1 1 1]);
-end
-
-if anatVoxIsDefault
-    inPlaneDef = getpref('deConfUSIon','inPlaneUm',   100);
-    stepDef    = getpref('deConfUSIon','sliceStepUm', 80);
-
-    geoAns = inputdlg( ...
-        { sprintf('In-plane pixel size (um)            [atlas voxel = %g um]', atlasVoxUm(2)), ...
-          sprintf('Slice spacing / motor step (um)     [%d slices detected]', size(anatomic.Data,3)) }, ...
-        'Scan geometry', 1, {num2str(inPlaneDef), num2str(stepDef)});
-
-    if isempty(geoAns)
-        fprintf('Coregistration cancelled (no scan geometry given).\n');
-        return;
-    end
-
-    inPlaneUm = str2double(geoAns{1});
-    stepUm    = str2double(geoAns{2});
-    if ~isfinite(inPlaneUm) || inPlaneUm <= 0, inPlaneUm = 100; end
-    if ~isfinite(stepUm)    || stepUm    <= 0, stepUm    = 300; end
-
-    setpref('deConfUSIon','inPlaneUm',   inPlaneUm);
-    setpref('deConfUSIon','sliceStepUm', stepUm);
-
-    if ndims(anatomic.Data) == 3 && size(anatomic.Data,3) > 1
-        % [Y X Z] -> [Z X Y]
-        anatomic.Data = permute(anatomic.Data, [3 2 1]);
-        fprintf('Permuted anatomy [Y X Z] -> [Z X Y]: %s\n', mat2str(size(anatomic.Data)));
-    end
-
-    anatomic.VoxelSize = [stepUm inPlaneUm inPlaneUm];
-end
+anatomic=AtlasRegistration('geometry',anatomic,atlas);
+if isempty(anatomic), fprintf('Coregistration cancelled during geometry selection.\n'); return; end
 
 fprintf('Anatomy source: %s\n', anatomyFile);
 fprintf('Anatomy size  : %s\n', mat2str(size(anatomic.Data)));
@@ -369,6 +342,12 @@ if exist(prevFile,'file')
         if isfield(tmp,'Transf') && isstruct(tmp.Transf) && isfield(tmp.Transf,'M')
             usePrevious = true;
             Transf = tmp.Transf;
+            if strcmp(anatomic.Geometry.convention,'coronal_stack_v2') && ...
+                    (~isfield(Transf,'scanGeometry') || ~isfield(Transf.scanGeometry,'convention') || ...
+                    ~strcmp(Transf.scanGeometry.convention,'coronal_stack_v2'))
+                warning('deConfUSIon:OldAtlasOrientation','Previous transform used the old axis conversion. Starting a fresh coronal alignment; the old file is unchanged.');
+                usePrevious=false; Transf=[];
+            end
         else
             warning('Transformation.mat found but variable "Transf" is missing or invalid. Starting fresh.');
             usePrevious = false;
@@ -387,9 +366,11 @@ if usePrevious
 else
     R = registration_ccf(atlas, anatomic, [], [], registrationDir, funcCandidates);
 end
+set(R.H.figure1,'Name',sprintf('3D Atlas Registration | %s | MATLAB %d',studio.loadedName,feature('getpid')));
+if startAutomatic, R.onAutoRegister(); end
 
 try
-    if isfield(R,'H') && isstruct(R.H) && isfield(R.H,'figure1') && isgraphics(R.H.figure1)
+    if isprop(R,'H') && isstruct(R.H) && isfield(R.H,'figure1') && isgraphics(R.H.figure1)
         waitfor(R.H.figure1);
     end
 catch

@@ -4,7 +4,7 @@ if nargin < 1 || isempty(hFig) || ~ishghandle(hFig)
     try, hFig = gcf; catch, return; end
 end
 try
-    deConfUSIon_popup_autofit_timer('apply',hFig);
+    deConfUSIon_ui('present',hFig);
 catch
 end
 end

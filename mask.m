@@ -229,7 +229,9 @@ S.showOverlay = true;
 S.overlayAlpha = 0.28;
 
 S.smoothSize = 8;
-S.brushR = 90;
+% A small default keeps a new editor usable on both 2-D and 54-slice matrix
+% probes. The user can enlarge it with the slider when outlining broad areas.
+S.brushR = max(4, min(12, round(min(nY,nX)/12)));
 S.brushShape = 2; % 1 round, 2 square, 3 pen, 4 diamond
 
 S.isPainting = false;
@@ -386,7 +388,7 @@ fig = figure( ...
     'DefaultUipanelFontName',UI.fontName, ...
     'DefaultUipanelFontSize',UI.fsPanel);
 % HUMoR_FORCE_FULLSCREEN_PATCH32
-try, deConfUSIon_force_fullscreen_fig(fig); catch, end
+try, deConfUSIon_utils('deConfUSIon_force_fullscreen_fig',fig); catch, end
 
 
 try
@@ -412,6 +414,19 @@ set(ax,'XLim',[0.5 nX+0.5],'YLim',[0.5 nY+0.5], ...
        'XLimMode','manual','YLimMode','manual');
 axis(ax,'manual');
 set(ax,'YDir','normal');
+% Matrix probes can have different physical spacing along the two in-plane
+% axes.  Keep the native LR/DV orientation but use physical aspect so the
+% image is not visually squeezed or stretched.
+if nZ > 1
+    try
+        probeViewAspect = deConfUSIon_utils('deConfUSIon_view_aspect',studio);
+        if isfinite(probeViewAspect) && probeViewAspect > 0
+            set(ax,'DataAspectRatio',[1 double(probeViewAspect) 1], ...
+                'DataAspectRatioMode','manual');
+        end
+    catch
+    end
+end
 
 imgH = image(ax, zeros(nY,nX,3,'single'));
 set(imgH,'HitTest','on');
@@ -618,8 +633,8 @@ h.slOverlayAlpha = makeSlider(pMode,[0.56 0.18 0.22 0.08],0,1,S.overlayAlpha,@on
 h.txtOverlayAlpha = makeText(pMode,[0.81 0.15 0.15 0.10],sprintf('%.2f',S.overlayAlpha),C.text,11,'normal','right');
 
 % -------------------- Tools --------------------
-h.lblBrush = makeText(pTools,[0.03 0.87 0.26 0.08],'Brush Size & Type',C.text,11,'normal','left');
-h.slBrush = makeSlider(pTools,[0.30 0.90 0.50 0.08],1,200,S.brushR,@onBrushChange);
+h.lblBrush = makeText(pTools,[0.03 0.87 0.26 0.08],'Brush / pen width',C.text,11,'normal','left');
+h.slBrush = makeSlider(pTools,[0.30 0.90 0.50 0.08],1,max(12,round(min(nY,nX)/2)),S.brushR,@onBrushChange);
 h.txtBrush = makeText(pTools,[0.82 0.87 0.15 0.08],sprintf('%.0f',S.brushR),C.text,11,'normal','right');
 
 h.popShape = uicontrol('Style','popupmenu','Parent',pTools,'Units','normalized', ...
@@ -1486,7 +1501,10 @@ end
 
         amCount = 0;
         for amZ = amList
-            amU01 = buildDisplayUnderlay(Ubase(:,:,amZ));
+            % Auto-mask from the current slice's robust raw intensity range,
+            % rather than the display-adjusted image. This makes sensitivity
+            % stable when gamma/contrast/vessel enhancement are changed.
+            amU01 = autoMaskInput(Ubase(:,:,amZ));
 
             if S.editTarget == 1
                 amBrain = [];
@@ -1852,6 +1870,7 @@ out.anatomical_reference = anatomical_reference;
     end
 
     function onHelp(~,~)
+        deConfUSIon_ui('help','mask'); return;
         helpFig = figure( ...
             'Name','Mask Editor Help', ...
             'Color',C.fig, ...
@@ -2348,7 +2367,9 @@ end
         end
 
         if S.brushShape == 3
-            penRad = max(1, round(S.brushR/10));
+            % Pen mode is a continuous freehand stroke. Keep it finer than a
+            % filled brush while still allowing a user-controlled width.
+            penRad = max(1, round(S.brushR/4));
             setPixelsDisk(xc,yc,z,penRad);
             return;
         end
@@ -3377,7 +3398,7 @@ thr = max(0, min(1, double(S.vesselThresh)));
         r = max(1, round(r));
 
         if shape == 3
-            penRad = max(1, round(r/10));
+            penRad = max(1, round(r/4));
             th = linspace(0,2*pi,40);
             px = x + penRad*cos(th);
             py = y + penRad*sin(th);
@@ -3417,6 +3438,27 @@ thr = max(0, min(1, double(S.vesselThresh)));
             otherwise
                 name = 'round';
         end
+    end
+
+    function U01 = autoMaskInput(Uraw)
+        % Robust per-slice normalization tied to the data currently shown.
+        % Percentiles avoid a single hot vessel or noisy voxel dominating the
+        % threshold estimate.
+        U = double(Uraw);
+        U(~isfinite(U)) = 0;
+        vals = U(isfinite(U));
+        if isempty(vals)
+            U01 = zeros(size(U),'single');
+            return;
+        end
+        try
+            lo = prctile(vals,2); hi = prctile(vals,98);
+        catch
+            lo = min(vals); hi = max(vals);
+        end
+        if ~isfinite(lo), lo=min(vals); end
+        if ~isfinite(hi) || hi <= lo, hi=lo+max(eps,0.01*max(1,abs(lo))); end
+        U01 = single(min(max((U-lo)/(hi-lo),0),1));
     end
 
     function K = makeBrushKernel(r, shape)

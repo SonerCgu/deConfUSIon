@@ -57,20 +57,19 @@ b1 = round(baseline.end   / TR_eff) + 1; % inclusive
 b0 = max(1, b0);
 b1 = min(nFrames, b1);
 
-if b0 >= b1 || b1 < 1 || b0 > nFrames
-    warning('Baseline window invalid — using first 10%% of data.');
-    b0 = 1;
-    b1 = max(1, round(0.1 * nFrames));
+if ~isfinite(b0) || ~isfinite(b1) || b0 > b1 || b1 < 1 || b0 > nFrames
+    error('deConfUSIon:BadBaseline','Baseline does not overlap the acquisition. Choose a valid window.');
 end
 
 % Compute baseline mean, preserving Z if present
 if d == 3
-    ab = mean(I1(:,:,b0:b1), 3);          % [Y X]
+    ab = deConfUSIon_signal('mean',I1(:,:,b0:b1),3);
 else
-    ab = mean(I1(:,:,:,b0:b1), 4);        % [Y X Z]
+    ab = deConfUSIon_signal('mean',I1(:,:,:,b0:b1),4);
 end
 
-ab(~isfinite(ab) | ab == 0) = eps('single');
+validBaseline = isfinite(ab) & ab > 0;
+ab(~validBaseline) = NaN;
 
 %% 3) PSC
 if d == 3
@@ -133,12 +132,12 @@ if isfield(par,'gaussSize') && ~isempty(par.gaussSize) && par.gaussSize > 0
 
     if d == 3
         for k = 1:nFrames
-            PSC(:,:,k) = filter2(hG, PSC(:,:,k));
+            PSC(:,:,k) = smoothFiniteFrame(PSC(:,:,k),hG);
         end
     else
         for z = 1:nZ
             for k = 1:nFrames
-                PSC(:,:,z,k) = filter2(hG, PSC(:,:,z,k));
+                PSC(:,:,z,k) = smoothFiniteFrame(PSC(:,:,z,k),hG);
             end
         end
     end
@@ -170,6 +169,8 @@ proc.TR_eff         = TR_eff;          % effective TR after interpolation
 proc.Tmax           = Tmax_eff;
 proc.Tmax_orig      = Tmax_orig;
 proc.baselineFrames = [b0 b1];
+proc.baselineValidMask = validBaseline;
+proc.baselineWindowSec = ([b0 b1]-1)*TR_eff;
 proc.isMatrixProbe  = (d == 4);
 proc.nZ             = nZ;
 
@@ -203,7 +204,7 @@ if d == 3
     Vq = zeros(nY*nX, nFrames, 'single');
 
     % chunked interp to avoid huge temp doubles
-    chunk = 50000;
+    chunk = max(1,floor(32*1024^2/(24*(nT+nFrames))));
     for s = 1:chunk:size(V,1)
         e = min(size(V,1), s+chunk-1);
         Vq(s:e,:) = single(interp1(t, double(V(s:e,:)).', tq, 'linear', 'extrap')).';
@@ -221,7 +222,7 @@ else
     V = reshape(I, [nY*nX*nZ, nT]);            % [Vox T]
     Vq = zeros(nY*nX*nZ, nFrames, 'single');
 
-    chunk = 30000;
+    chunk = max(1,floor(32*1024^2/(24*(nT+nFrames))));
     for s = 1:chunk:size(V,1)
         e = min(size(V,1), s+chunk-1);
         Vq(s:e,:) = single(interp1(t, double(V(s:e,:)).', tq, 'linear', 'extrap')).';
@@ -238,7 +239,7 @@ function PSC = lpf_time_chunks_3d(PSC, B, A)
 [nY,nX,nT] = size(PSC);
 V = reshape(PSC, [nY*nX, nT]);           % [vox T]
 
-chunk = 80000;
+chunk = max(1,floor(32*1024^2/(32*nT)));
 nPad = 3*(max(numel(B),numel(A))-1);
 for s = 1:chunk:size(V,1)
     e = min(size(V,1), s+chunk-1);
@@ -259,7 +260,7 @@ function PSC = lpf_time_chunks_4d(PSC, B, A)
 [nY,nX,nZ,nT] = size(PSC);
 V = reshape(PSC, [nY*nX*nZ, nT]);        % [vox T]
 
-chunk = 50000;
+chunk = max(1,floor(32*1024^2/(32*nT)));
 nPad = 3*(max(numel(B),numel(A))-1);
 for s = 1:chunk:size(V,1)
     e = min(size(V,1), s+chunk-1);
@@ -275,4 +276,14 @@ end
 PSC = reshape(V, [nY,nX,nZ,nT]);
 end
 
-
+function out = smoothFiniteFrame(in,kernel)
+% Keep invalid baselines invalid without spreading NaNs into valid tissue.
+valid=isfinite(in);
+if all(valid(:)), out=filter2(kernel,in); return; end
+values=in; values(~valid)=0;
+weights=filter2(kernel,double(valid));
+% Preserve the existing zero-padding behavior at the image boundary.
+fullWeights=filter2(kernel,ones(size(in)));
+out=filter2(kernel,values).*fullWeights./weights;
+out(~valid | weights<=0)=NaN;
+end

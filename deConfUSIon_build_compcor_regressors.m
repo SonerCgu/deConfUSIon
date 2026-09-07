@@ -62,6 +62,7 @@ switch mode
     case {'random','randomcompcor'}
         n = max(20,round(frac*numel(cand)));
         if ~isempty(refIdx), n = numel(refIdx); end
+        savedRng=rng; rngCleanup=onCleanup(@()rng(savedRng)); %#ok<NASGU>
         rng(round(double(localGet(opts,'randomSeed',1))));
         ord = randperm(numel(cand),min(n,numel(cand)));
         noiseIdx = cand(ord);

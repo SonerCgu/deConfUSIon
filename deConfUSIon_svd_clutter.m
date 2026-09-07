@@ -214,7 +214,7 @@ function Y = localApplyBlock(X, B, opts)
 [nV,T] = size(X);
 k = localRejectCount(T,opts);
 Vrej = B.V(:,1:k);
-Y = zeros(nV,T,'double');
+Y = zeros(nV,T,'like',X);
 if ~isreal(X), Y = complex(Y); end
 
 for a = 1:opts.chunkVoxels:nV

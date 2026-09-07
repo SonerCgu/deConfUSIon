@@ -27,6 +27,7 @@ if ~isempty(mode)
     cfg = struct();
     cfg.mode = normalizeCoregMode(mode);
     cfg.sourceFile = '';
+    cfg.startAutomatic = false;
 else
     [cfg, ok] = showUnifiedCoregLauncher(studio);
     if ~ok
@@ -46,7 +47,7 @@ switch cfg.mode
             error(['coreg_3d.m not found.' char(10) ...
                    'Save your complex 3D coreg code as coreg_3d.m.']);
         end
-        RegOut = coreg_3d(studio, cfg.sourceFile);
+        RegOut = coreg_3d(studio, cfg.sourceFile, cfg.startAutomatic);
 
     otherwise
         error('Unknown registration mode.');
@@ -63,6 +64,13 @@ ok = false;
 cfg = struct();
 cfg.mode = '2d';
 cfg.sourceFile = '';
+cfg.startAutomatic = false;
+defaultMode=1;
+try
+    active=studio.datasets.(studio.activeDataset);
+    if isfield(active,'I') && ndims(active.I)==4 && size(active.I,3)>1, defaultMode=3; end
+catch
+end
 
 [fileList, labelList] = collectCoregSourceCandidates(studio);
 if isempty(fileList)
@@ -135,8 +143,8 @@ modePanel = uipanel('Parent',dlg, ...
 hMode = uicontrol('Parent',modePanel,'Style','popupmenu', ...
     'Units','normalized', ...
     'Position',[0.03 0.24 0.32 0.46], ...
-    'String',{'Simple 2D coronal registration','Complex 3D atlas registration'}, ...
-    'Value',1, ...
+    'String',{'2D coronal registration','3D atlas: manual alignment','3D atlas: AUTOMATIC registration'}, ...
+    'Value',defaultMode, ...
     'BackgroundColor',panel2, ...
     'ForegroundColor',fg, ...
     'FontName','Arial', ...
@@ -261,7 +269,7 @@ uiwait(dlg);
                 '2D coronal mode: recommended for Mask Editor brainImage, underlay/overlay masks, step-motor slices, and simple atlas visualization.');
         else
             set(hModeHelp,'String', ...
-                '3D mode: use only when the selected source is a true 3D anatomical volume. For step-motor data, prefer slice-wise 2D.');
+                '3D volume: confirm scan geometry, then run ITK-SNAP / Greedy or MATLAB and review the coronal, sagittal and axial overlays.');
         end
     end
 
@@ -314,7 +322,11 @@ uiwait(dlg);
         else
             cfg.mode = '3d';
         end
+        cfg.startAutomatic = modeVal==3;
         cfg.sourceFile = fileList{idx};
+        if strcmp(cfg.mode,'2d') && strcmp(cfg.sourceFile,'__active_volume__')
+            errordlg('The active matrix-probe volume needs 3D mode. Select a 2D anatomy file for coronal mode.','Registration mode'); return;
+        end
         ok = true;
         try, uiresume(dlg); catch, end
         try, delete(dlg); catch, end
@@ -348,6 +360,14 @@ function [fileList, labelList] = collectCoregSourceCandidates(studio)
 
 fileList = {};
 labelList = {};
+try
+    active=studio.datasets.(studio.activeDataset);
+    if isfield(active,'I') && ndims(active.I)==4 && size(active.I,3)>1
+        fileList={'__active_volume__'};
+        labelList={sprintf('ACTIVE 3D DATASET: mean anatomy | %d slices',size(active.I,3))};
+    end
+catch
+end
 
 rawFolder = '';
 if isfield(studio,'loadedPath') && ~isempty(studio.loadedPath) && exist(studio.loadedPath,'dir')
@@ -572,7 +592,7 @@ end
 
 function idx = chooseDefaultCandidateIndex(labels)
 idx = 1;
-priorityTerms = {'brainimage','brainonly','underlay','overlay','mask','anatomical','histology','vascular'};
+priorityTerms = {'active 3d dataset','brainimage','brainonly','underlay','overlay','mask','anatomical','histology','vascular'};
 for p = 1:numel(priorityTerms)
     for i = 1:numel(labels)
         if ~isempty(strfind(lower(labels{i}), priorityTerms{p})) %#ok<STREMP>
@@ -588,7 +608,9 @@ function [fileListOut, labelListOut] = sortCoregCandidates(fileList, labelList)
 prio = zeros(numel(labelList),1);
 for i = 1:numel(labelList)
     s = lower(labelList{i});
-    if ~isempty(strfind(s,'brainimage')) || ~isempty(strfind(s,'brainonly')) %#ok<STREMP>
+    if ~isempty(strfind(s,'active 3d dataset')) %#ok<STREMP>
+        prio(i) = 0;
+    elseif ~isempty(strfind(s,'brainimage')) || ~isempty(strfind(s,'brainonly')) %#ok<STREMP>
         prio(i) = 1;
     elseif ~isempty(strfind(s,'underlay')) %#ok<STREMP>
         prio(i) = 2;

@@ -2524,6 +2524,7 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end; try, deConfUSIon_FC_
     end
 
     function onHelp(~,~)
+        deConfUSIon_ui('help','FunctionalConnectivity'); return;
         fc_help_dialog(C);
     end
 
