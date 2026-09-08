@@ -57,6 +57,9 @@ end
 
 method = cfg.method;
 interpMethod = cfg.interpMethod;
+showProgress=true; if isfield(cfg,'showProgress'), showProgress=cfg.showProgress; end
+progress=deConfUSIon_ui('progress','Motion correction - scrubbing',showProgress);
+progressGuard=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
 
 % Defaults:
 %   - DVARS
@@ -99,18 +102,22 @@ end
 % ---------------- FLATTEN (SINGLE!) ----------------
 flatAll = reshape(data4D, [], T);     % single [V x T]
 maskVec = mask(:);
-flatMasked = flatAll(maskVec, :);    % single [Vm x T]
+maskIndices=find(maskVec);
 
 % ---------------- METRIC ----------------
-switch method
-    case 'DVARS'
-        % DVARS(t) = sqrt(mean((Vt - Vt-1)^2))
-        d = diff(single(flatMasked), 1, 2);                % [Vm x (T-1)]
-        metric = sqrt(mean(double(d).^2, 1));              % double [1 x (T-1)]
-        metric = [0 metric];                               % [1 x T]
-    case 'Global Signal'
-        metric = mean(double(flatMasked), 1);              % double [1 x T]
+chunkV=max(1,floor(32*1024^2/(8*T*3)));
+globalSum=zeros(1,T); differenceSum=zeros(1,max(0,T-1));
+for a=1:chunkV:numel(maskIndices)
+    b=min(numel(maskIndices),a+chunkV-1); block=flatAll(maskIndices(a:b),:);
+    globalSum=globalSum+sum(double(block),1);
+    if strcmp(method,'DVARS'), delta=diff(block,1,2); differenceSum=differenceSum+sum(double(delta).^2,1); end
+    deConfUSIon_ui('progressupdate',progress,.05+.3*b/numel(maskIndices),'Computing scrubbing metrics');
 end
+globalSig=globalSum/numel(maskIndices);
+if strcmp(method,'DVARS'), metric=[0 sqrt(differenceSum/numel(maskIndices))];
+elseif strcmp(method,'Global Signal'), metric=globalSig;
+else, error('deConfUSIon:ScrubMetric','Unknown scrubbing metric: %s',method); end
+clear block delta;
 
 % ---------------- THRESHOLD ----------------
 medVal = median(metric);
@@ -128,7 +135,7 @@ if ~isempty(badIdx) && numel(goodIdx) >= 2
 
     V = size(flatAll,1);
     % Chunk size: keep temporary arrays reasonable
-    chunkV = 2000;   % safe default; adjust if you have lots of RAM
+    chunkV = min(2000,max(1,floor(32*1024^2/(8*T*3))));
 
     tGood = goodIdx(:);          % column vector
     tBad  = badIdx(:);           % column vector
@@ -144,10 +151,13 @@ if ~isempty(badIdx) && numel(goodIdx) >= 2
 
         % Write back into flatAll (single)
         flatAll(v0:v1, tBad) = single(Ybad.');     % transpose back -> [chunk x B]
+        deConfUSIon_ui('progressupdate',progress,.35+.6*v1/V,'Interpolating flagged frames');
     end
 end
 
 out = reshape(flatAll, Y, X, Z, T);
+if numel(sz)==3, out=reshape(out,Y,X,T); end
+deConfUSIon_ui('progressupdate',progress,.95,'Saving scrubbing QC');
 
 % ---------------- STATS ----------------
 stats.originalVolumes = origT;
@@ -173,7 +183,6 @@ if ~exist(qcDir,'dir'), mkdir(qcDir); end
 
 qcFile = fullfile(qcDir, sprintf('QC_scrubbing_%s_%s_%s.png', method, interpMethod, tag));
 
-globalSig = mean(double(flatMasked), 1);
 
 fig = figure('Visible','off','Color','w');
 

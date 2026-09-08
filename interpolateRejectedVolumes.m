@@ -17,6 +17,8 @@ function Iout = interpolateRejectedVolumes(I, outliers)
 % Refactor: Naman Jain
 % ------------------------------------------------------------
 
-Iout = deConfUSIon_signal('interpolate',I,outliers);
+progress=deConfUSIon_ui('progress','Motion correction - frame interpolation');
+guard=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
+Iout = deConfUSIon_signal('interpolate',I,outliers,@(fraction)deConfUSIon_ui('progressupdate',progress,fraction,'Interpolating rejected frames'));
 
 end

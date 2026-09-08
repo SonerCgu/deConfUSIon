@@ -20,11 +20,35 @@ Filtering bounds its temporary working set by recording length, avoiding fixed b
 
 ## UI and drift
 
+The SCM/Video setup defaults are now 20–40 s for detected motor data, 30–60 s for matrix-probe volumes, and 30–240 s for other single-slice data. Baseline entry fields use 18-point Arial; the other parameter entries use 14-point Arial. Explicit standardized workflow baselines still take precedence.
+
+Imregdemons, filtering, frame QC/interpolation, scrubbing and despiking show compact dark progress windows with a percentage, elapsed time, approximate remaining time and Cancel. Imregdemons updates after each registered frame/volume (or motor slice/frame), so cancellation waits for the current registration call to finish. QC image export and filesystem work can make the estimate less accurate near completion. Scrubbing metrics now accumulate in bounded voxel blocks rather than making full-size double movie/difference copies. Single-slice scrubbing and despiking outputs retain their original `[Y X T]` layout.
+
+## Consistent acquisition timing
+
+The supplied `RGRO_13082026_MM_B6J_1024_1287_PACAPvscsf01nM_4_FUS_104646` acquisition has 2000 frames. Its existing imregdemons branches used 0.448 s per raw frame (896 s total), while two older PCA branches used 0.320 s (640 s total). This is inconsistent timing metadata, not temporal shortening caused by PCA.
+
+On selection, Studio reconciles legacy derivative timing with the currently confirmed raw-acquisition TR. The 40-frame PCA+imregdemons result therefore changes from TR 16 s to 22.4 s when raw TR is 0.448 s. Acquired samples and existing MAT files are not rewritten. Corrected timing is retained in memory and inherited by newly saved derived outputs. Corrections are logged and carry provenance. Explicit chopping/trimming remains shorter; ambiguous legacy cuts are not inferred from a duration ratio.
+
+SCM's automatic x-axis limit and **X all** use the common acquisition duration, while plotted samples retain their proper temporal spacing. This avoids changing the displayed extent merely because block averaging has an earlier last sample. Explicit manual x limits remain available. PSC caches now require matching dataset identity, baseline, frame count and TR in both SCM and Video, preventing a processed child from reusing its parent's cached PSC.
+
+`tests/test_timing_progress.m` validates timing fields read from all four reported derivative MAT files, unchanged signal samples, idempotent correction, legitimate cuts, identical SCM x-axis extents for 40/80-frame representations, all six SCM/Video probe-default dialogs, font sizes, progress cleanup/cancellation, and the 2D/motor/3D processing paths.
+
 Section glyphs use the section accent color. Specific QC retains its colored module markers and buttons; all twelve rows fit within the panel. New log messages scroll to the latest entry, while manual scrolling remains available.
 
 `DriftCompensation('run',...)`, numeric-first calls and `Drift('core',...)` now route PACAP aliases consistently. The PACAP estimator and common statistics remain the existing numerical implementations.
 
 ## Registration and exports
+
+### Split-motor timing and SCM/Video launch follow-up
+
+SCM hover follow-up: mouse movement now queues only the latest ROI for a 25 Hz timer, with the final position rendered even after the mouse stops. The timer stops when idle and is deleted with the SCM window. Rectangle and trace update together; unchanged axes/window graphics are skipped, and pinned time-course limits are cached rather than repeatedly concatenating all saved traces during hover. Existing hover sampling and full-resolution pinned/export calculations are unchanged. `tests/test_scm_hover.m` exercises burst coalescing, final position, 1/4/54-slice data, numerical trace agreement, baseline/slice changes, freezing, automatic limits and timer cleanup through an instrumented temporary copy of the real GUI.
+
+The September 7 timing reconciliation incorrectly compared a reconstructed motor recording with one 44-frame raw dwell. For the reported animal 1115 this compressed 2,244 frames at 0.385 s (or 89 median-block frames at 9.625 s) into approximately 17 seconds. PCA did not delete frames. Reconciliation now uses `motorInfo.reconstructedFramesPerSlice` and its acquisition TR, and repairs derivatives carrying the erroneous dwell-based `acquisitionTiming` in memory when selected. Source MAT files are not rewritten. Legitimate block averaging retains its sampling interval and partial-block coverage.
+
+SCM/Video setup uses the repaired TR, checks baseline limits before accepting settings, and offers an available window for genuinely short recordings. PSC rejects invalid windows before temporal interpolation. Removed the redundant double-precision retry on every PSC error; Video now also populates the bounded PSC cache. Uncaught graphical-button callback errors display a purple `!!! ACTION CRASHED !!!` status, retain the error report, and release the action guard so the user can retry. A terminated MATLAB process cannot update its own GUI.
+
+`test_timing_progress('motor')` covers both reconstruction sizes, repeated timing reconciliation, valid PSC, and removing multiple PCA components without changing time. The `launch` case exercises Studio SCM/Video callbacks and graphical-button error cleanup.
 
 See [Automatic 3D registration](Automatic_3D_Registration.md) for the Greedy/MATLAB workflow and optional ITK-SNAP review. Native geometry conversion is shared by registration, SCM and Video before applying new 3D transforms. Legacy transforms without geometry metadata retain their direct-grid behavior.
 

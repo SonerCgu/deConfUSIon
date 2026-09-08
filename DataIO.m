@@ -1,5 +1,6 @@
 function varargout=DataIO(action,varargin)
-% Atomic, cooperative background MAT saves. Bounded writes between GUI
+% Atomic, cooperative MAT saves (timer I/O uses MATLAB's foreground thread).
+% Bounded writes between GUI
 % events avoid a full blocking image save. HDF5 links finalize without copies.
 if strcmp(action,'write')
     destination=varargin{1}; payload=varargin{2}; temporary=varargin{3};
@@ -16,6 +17,12 @@ if isempty(jobs), jobs=struct('path',{},'temporary',{},'state',{},'error',{},'cu
 switch action
     case 'enqueue'
         destination=varargin{1}; payload=varargin{2};
+        % Viewer caches are reproducible and can dwarf the actual metadata.
+        % Never synchronously write a second complete PSC movie as metadata.
+        if isfield(payload,'newData') && isfield(payload.newData,'deconfPscKey')
+            caches=intersect(fieldnames(payload.newData),{'PSC','bg','I1','deconfPscKey','deconfPscDatasetKey'});
+            payload.newData=rmfield(payload.newData,caches);
+        end
         if exist(destination,'file') || any(strcmp({jobs.path},destination))
             error('deConfUSIon:SaveExists','Choose a new output path: %s',destination);
         end
@@ -34,9 +41,15 @@ switch action
         polling=true;
         pollGuard=onCleanup(@()DataIO('unlockpoll')); %#ok<NASGU>
         % Do not compete for memory/network I/O during an active analysis.
-        studios=findall(0,'Type','figure');
+        studios=allchild(0); % Direct figure children, not the entire graphics tree.
         for h=reshape(studios,1,[])
             if isempty(varargin) && isequal(getappdata(h,'StudioActionBusy'),true), return; end
+            if isempty(varargin)
+                busyUntil=getappdata(h,'deConfUSIonInteractionUntil');
+                if isnumeric(busyUntil) && isscalar(busyUntil) && busyUntil>now
+                    return; % Resume automatically after the viewer becomes idle.
+                end
+            end
         end
         k=find(strcmp({jobs.state},'saving'),1);
         if isempty(k), k=find(strcmp({jobs.state},'queued'),1); end

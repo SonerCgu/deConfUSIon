@@ -7,11 +7,86 @@ switch lower(action)
     case 'fcstats', [varargout{1:nargout}] = fcStats(varargin{:});
     case 'basis', [varargout{1:nargout}] = temporalBasis(varargin{:});
     case 'mean', [varargout{1:nargout}] = finiteMean(varargin{:});
+    case 'timing', [varargout{1:nargout}] = reconcileTiming(varargin{:});
     otherwise, error('deConfUSIon:SignalAction','Unknown action: %s',action);
 end
 end
 
-function O = interpolateFrames(I, rejected)
+function [D,notice]=reconcileTiming(D,reference)
+% Reconcile legacy derivatives with the currently confirmed acquisition TR.
+% This changes metadata only; it never stretches or resamples the signal.
+notice=''; n=size(D.I,ndims(D.I));
+if nargin<2 || isempty(reference), reference=D; end
+nr=size(reference.I,ndims(reference.I));
+if ~isfield(reference,'TR') || ~isscalar(reference.TR) || ~isfinite(reference.TR) || reference.TR<=0, return; end
+source=struct('TR',double(reference.TR),'frameCount',nr,'durationSec',nr*double(reference.TR));
+% A split raw file is only one motor dwell, not the reconstructed recording.
+% Reconstructed frame count is retained through PCA and block averaging.
+motorReconstruction=false;
+if isfield(D,'motorInfo') && isstruct(D.motorInfo) && ...
+        isfield(D.motorInfo,'reconstructedFramesPerSlice')
+    reconstructed=double(D.motorInfo.reconstructedFramesPerSlice);
+    if isscalar(reconstructed) && isfinite(reconstructed) && reconstructed>0
+        motorReconstruction=true;
+        source.frameCount=reconstructed;
+        if isfield(D.motorInfo,'TR') && isscalar(D.motorInfo.TR) && ...
+                isfinite(D.motorInfo.TR) && D.motorInfo.TR>0
+            source.TR=double(D.motorInfo.TR);
+        end
+        source.durationSec=source.frameCount*source.TR;
+    end
+end
+if isfield(reference,'sourceFileName'), source.sourceFileName=reference.sourceFileName; end
+cut=isfield(D,'chop') || (isfield(D,'scrubbingStats') && isfield(D.scrubbingStats,'trimmed') && D.scrubbingStats.trimmed);
+factor=1;
+if isfield(D,'acquisitionTiming') && isfield(D.acquisitionTiming,'TR') && ...
+        isscalar(D.acquisitionTiming.TR) && isfinite(D.acquisitionTiming.TR) && D.acquisitionTiming.TR>0
+    factor=source.TR/D.acquisitionTiming.TR;
+    if motorReconstruction && isfield(D.acquisitionTiming,'durationSec') && ...
+            isfield(D.acquisitionTiming,'frameCount') && ...
+            D.acquisitionTiming.frameCount~=source.frameCount && ...
+            isscalar(D.acquisitionTiming.durationSec) && D.acquisitionTiming.durationSec>0
+        % Repair derivatives previously compressed to the duration of one dwell.
+        factor=source.durationSec/D.acquisitionTiming.durationSec;
+    end
+elseif ~cut && isfield(D,'TR') && isscalar(D.TR) && isfinite(D.TR) && D.TR>0
+    oldDuration=n*double(D.TR);
+    if isfield(D,'originalTotalTimeSec') && isscalar(D.originalTotalTimeSec) && isfinite(D.originalTotalTimeSec) && D.originalTotalTimeSec>0
+        oldDuration=double(D.originalTotalTimeSec);
+    end
+    % A final partial block or endpoint-preserving interpolation can produce
+    % a small coverage difference; that is not evidence of a wrong base TR.
+    if abs(source.durationSec/oldDuration-1)>.01, factor=source.durationSec/oldDuration; end
+end
+if ~isfield(D,'TR') || ~isscalar(D.TR) || ~isfinite(D.TR) || D.TR<=0, D.TR=source.TR; end
+oldTR=D.TR; D.TR=double(D.TR)*factor;
+if abs(factor-1)>1e-8
+    notice=sprintf('Timing repaired against the loaded acquisition: TR %.6g -> %.6g s (signal samples unchanged).',oldTR,D.TR);
+    D.timingCorrection=struct('previousTR',oldTR,'correctedTR',D.TR,'factor',factor,'created',datestr(now,30));
+    for field={'PSC','bg','I1','deconfPscKey','baselineFrames','baselineWindowSec'}
+        if isfield(D,field{1}), D=rmfield(D,field{1}); end
+    end
+    if isfield(D,'imregdemons')
+        for field={'TR','blockDur','totalTime'}
+            if isfield(D.imregdemons,field{1}), D.imregdemons.(field{1})=D.imregdemons.(field{1})*factor; end
+        end
+    end
+end
+if isfield(D,'tsec') && numel(D.tsec)==n
+    D.tsec=double(D.tsec(:)')*factor;
+else
+    D.tsec=(0:n-1)*D.TR;
+end
+D.nVols=n; D.sampleSpanSec=max(0,n-1)*D.TR;
+D.TotalTimeSec=n*D.TR; D.TotalTimeMin=D.TotalTimeSec/60;
+D.totalTime=D.TotalTimeSec; D.totalTimeMin=D.TotalTimeMin;
+D.acquisitionTiming=source;
+if cut, D.displayDurationSec=D.TotalTimeSec;
+else, D.originalTotalTimeSec=source.durationSec; D.displayDurationSec=source.durationSec; end
+end
+
+function O = interpolateFrames(I, rejected,progressFcn)
+if nargin<3, progressFcn=[]; end
 T = size(I,ndims(I));
 if numel(rejected) ~= T || any(~isfinite(double(rejected(:))))
     error('deConfUSIon:RejectionLength','Rejection mask must have one finite value per time point (%d).',T);
@@ -29,6 +104,7 @@ chunk = max(1,floor(32*1024^2/(8*T)));
 for a=1:chunk:size(V,1)
     b=min(size(V,1),a+chunk-1);
     O(a:b,bad) = cast(interp1(good,double(V(a:b,good))',tq,'linear')','like',I);
+    if ~isempty(progressFcn), progressFcn(b/size(V,1)); end
 end
 O=reshape(O,sz);
 end

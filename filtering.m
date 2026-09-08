@@ -22,6 +22,8 @@ end
 if nargin < 4 || isempty(opts)
     opts = struct();
 end
+progress=deConfUSIon_ui('progress','Filtering',getOpt(opts,'showProgress',true));
+progressGuard=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
 
 if isempty(I) || ~isnumeric(I)
     error('Input I must be a non-empty numeric array.');
@@ -277,7 +279,7 @@ sumBefore = zeros(1, nt); cntBefore = zeros(1, nt);
 sumAfter  = zeros(1, nt); cntAfter  = zeros(1, nt);
 
 for c = 1:nChunks
-    drawnow limitrate;
+    deConfUSIon_ui('progressupdate',progress,.05+.9*(c-1)/nChunks,sprintf('Filtering voxel block %d of %d',c,nChunks));
     s = (c-1)*chunkSize + 1;
     e = min(c*chunkSize, nVox);
 
@@ -321,6 +323,7 @@ for c = 1:nChunks
 end
 
 I_filt = reshape(outFlat, dims);
+deConfUSIon_ui('progressupdate',progress,.95,'Preparing filtering QC reports');
 
 gs_before = sumBefore ./ max(cntBefore,1); gs_before(cntBefore==0) = NaN;
 gs_after  = sumAfter  ./ max(cntAfter,1);  gs_after(cntAfter==0)  = NaN;
@@ -422,6 +425,7 @@ stats.inputClass = origClass;
 stats.timeDim = timeDim;
 stats.skipped = false;
 stats.processingTime = toc(tStart);
+deConfUSIon_ui('progressupdate',progress,1,'Filtering complete');
 stats.optsResolved = opts;
 
 end

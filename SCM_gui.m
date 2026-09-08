@@ -57,6 +57,10 @@ end
 %% ---------------- TIME / BASELINE MODE ----------------
 tsec = (0:nT-1) * TR;
 tmin = tsec / 60;
+displayEndMin=max(tmin);
+if isfield(par,'displayDurationSec') && isfiniteScalar(par.displayDurationSec) && par.displayDurationSec>=tsec(end)
+    displayEndMin=par.displayDurationSec/60;
+end
 
 modeStr = 'sec';
 if isstruct(baseline) && isfield(baseline,'mode') && ~isempty(baseline.mode)
@@ -242,11 +246,11 @@ state.hoverMaxPts   = 1200;
 state.hoverStride   = max(1, ceil(nT / state.hoverMaxPts));
 state.hoverIdx      = 1:state.hoverStride:nT;
 state.tminHover     = tmin(state.hoverIdx);
-state.hoverMinDtSec = 0.06;
+state.timeWindowKey = [];
 state.tcFixY = false;
 state.tcFixX = false;
 state.tcYLim = [0 100];
-state.tcXLim = [0 max(tmin)];
+state.tcXLim = [0 displayEndMin];
 state.isAtlasWarped = false;
 state.atlasTransformFile = '';
 state.lastAtlasTransformFile = '';
@@ -276,8 +280,11 @@ roi.colors = lines(12);
 roi.isFrozen = false;
 roi.nextId = 1;
 roi.lastAddStamp = 0;
-roi.lastHoverStamp = 0;
 roi.lastHoverXY = [-inf -inf];
+roi.pendingHover = [];
+roi.hoverScheduled = false;
+roi.savedTcBounds = zeros(0,6);
+roi.hoverStats = [];
 roi.sessionSetId = 0;
 roi.lastExportLabel = 'Target';
 roi.exportBusy = false;
@@ -428,6 +435,7 @@ txtTitle = uicontrol(fig, 'Style', 'text', 'String', makeFullTitle(fileLabel), .
 
 %% ---------------- TIMECOURSE AXIS ----------------
 axTC = axes('Parent', fig, 'Units', 'pixels', ...
+    'Tag','SCMTimeCourseAxes', ...
     'Color', [0.05 0.05 0.05], 'XColor', 'w', 'YColor', 'w', ...
     'LineWidth', 1.2, 'Box', 'on', 'Layer', 'top');
 hold(axTC, 'on');
@@ -670,6 +678,12 @@ btnClose = uicontrol(fig, 'Style', 'pushbutton', 'String', 'CLOSE', ...
     'ForegroundColor', 'w', 'FontSize', 15, 'FontWeight', 'bold');
 
 %% ---------------- CALLBACKS / INIT ----------------
+% Coalesce motion into the latest ROI. Do not queue a full trace redraw for
+% every mouse event; the timer also renders the last position after stopping.
+hoverTimer = timer('ExecutionMode','fixedSpacing','Period',0.04, ...
+    'StartDelay',0.01,'BusyMode','drop','TimerFcn',@renderPendingHover, ...
+    'Name','SCM live ROI');
+set(fig,'DeleteFcn',@disposeHoverTimer);
 set(fig, 'WindowButtonMotionFcn', @mouseMove);
 set(fig, 'WindowButtonDownFcn', @mouseClick);
 set(fig, 'WindowScrollWheelFcn', @mouseScroll);
@@ -945,7 +959,7 @@ function onWindowEdited(~,~)
             tc=computeRoiPSC_idx(state.z,x1,x2,y1,y2,state.hoverIdx);
             set(hLivePSC,'XData',state.tminHover,'YData',tc,'Visible','on');
         end
-        roi.lastHoverStamp=0;
+        roi.lastHoverXY=[-inf -inf];
         applyTimecourseAxisMode(); drawnow;
     catch ME
         errordlg(ME.message,'SCM window');
@@ -1009,32 +1023,62 @@ function roiXYKey(~, evt)
 end
 
 function mouseMove(~,~)
-    if roi.isFrozen || ~isPointerOverImageAxis(), return; end
+    if roi.isFrozen, roi.pendingHover=[]; return; end
+    if ~isPointerOverImageAxis()
+        roi.pendingHover=[];
+        return;
+    end
     cp = get(ax, 'CurrentPoint');
     x = round(cp(1,1)); ypix = round(cp(1,2));
     if x < 1 || x > nX || ypix < 1 || ypix > nY
+        roi.pendingHover=[];
         set(hLiveRect, 'Visible', 'off');
         set(hLivePSC, 'Visible', 'off');
         set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
         applyTimecourseAxisMode();
         return;
     end
-    if x == roi.lastHoverXY(1) && ypix == roi.lastHoverXY(2), return; end
-    roi.lastHoverXY = [x ypix];
+    queueHover(x,ypix);
+end
+
+function queueHover(x,ypix)
+    setappdata(fig,'deConfUSIonInteractionUntil',now+0.75/86400);
+    roi.pendingHover=[state.z x ypix roi.size];
+    if ~roi.hoverScheduled
+        roi.hoverScheduled=true;
+        start(hoverTimer);
+    end
+end
+
+function renderPendingHover(~,~)
+    if ~isgraphics(fig), disposeHoverTimer(); return; end
+    if roi.isFrozen || isempty(roi.pendingHover)
+        roi.hoverScheduled=false;
+        stop(hoverTimer); return;
+    end
+    target=roi.pendingHover; roi.pendingHover=[];
+    if target(1)~=state.z || target(4)~=roi.size, return; end
+    x=target(2); ypix=target(3);
+    if isequal(roi.lastHoverXY,target) && strcmp(get(hLiveRect,'Visible'),'on'), return; end
     [x1,x2,y1,y2] = roiBounds(x, ypix);
     col = roi.colors(mod(numel(ROI_byZ{state.z}), size(roi.colors,1))+1, :);
     set(hLiveRect, 'Position', [x1 y1 x2-x1+1 y2-y1+1], 'EdgeColor', col, 'Visible', 'on');
     set(hRoiCoordTxt, 'String', sprintf('ROI z=%d | x:%d-%d  y:%d-%d', state.z, x1, x2, y1, y2), 'Visible', 'on');
-    tNow = now;
-    if roi.lastHoverStamp ~= 0 && (tNow - roi.lastHoverStamp)*86400 < state.hoverMinDtSec, return; end
-    roi.lastHoverStamp = tNow;
-    tc = computeRoiPSC_idx(state.z, x1, x2, y1, y2, state.hoverIdx);
+    tc = computeHoverPSC(x1,x2,y1,y2);
     if isempty(tc) || numel(tc) ~= numel(state.tminHover)
         set(hLivePSC, 'Visible', 'off');
         return;
     end
     set(hLivePSC, 'XData', state.tminHover, 'YData', tc, 'Visible', 'on');
+    roi.lastHoverXY=target;
     applyTimecourseAxisMode();
+    drawnow limitrate nocallbacks;
+end
+
+function disposeHoverTimer(~,~)
+    if ~isempty(hoverTimer) && isvalid(hoverTimer)
+        stop(hoverTimer); delete(hoverTimer);
+    end
 end
 
 function mouseClick(~,~)
@@ -1994,11 +2038,19 @@ function refreshDimsAfterPSCChange()
     end
     tsec = (0:nT-1) * TR;
     tmin = tsec / 60;
+    displayEndMin=max(tmin);
+    if isfield(par,'displayDurationSec') && isfiniteScalar(par.displayDurationSec) && par.displayDurationSec>=tsec(end)
+        displayEndMin=par.displayDurationSec/60;
+    end
     state.hoverStride = max(1, ceil(nT / state.hoverMaxPts));
     state.hoverIdx = 1:state.hoverStride:nT;
     state.tminHover = tmin(state.hoverIdx);
     state.z = max(1, min(state.z, nZ));
     state.lastSignedMap = zeros(nY, nX);
+    state.timeWindowKey=[];
+    roi.lastHoverXY=[-inf -inf];
+    roi.pendingHover=[];
+    roi.hoverStats=[];
 end
 
 %% ==========================================================
@@ -4155,6 +4207,62 @@ function tc = computeRoiPSC_atSlice(zSel, x1, x2, y1, y2)
     tc=computeRoiPSC_idx(zSel,x1,x2,y1,y2,1:nT);
 end
 
+function tc=computeHoverPSC(x1,x2,y1,y2)
+    bounds=[x1 x2 y1 y2]; idx=state.hoverIdx;
+    area=(x2-x1+1)*(y2-y1+1);
+    if area<=1024
+        roi.hoverStats=[];
+        tc=computeRoiPSC_idx(state.z,x1,x2,y1,y2,idx); return;
+    end
+    [b0,b1]=selectedBaselineFrames(); key=[state.z b0 b1];
+    B=cachedBaseline(state.z,b0,b1); previous=roi.hoverStats;
+    reuse=~isempty(previous) && isequal(previous.key,key) && ...
+        isequal(previous.idx,idx) && previous.updates<100;
+    if reuse
+        old=previous.bounds;
+        overlap=[max(x1,old(1)) min(x2,old(2)) max(y1,old(3)) min(y2,old(4))];
+        overlapArea=max(0,overlap(2)-overlap(1)+1)*max(0,overlap(4)-overlap(3)+1);
+        reuse=overlapArea>.5*max(area,(old(2)-old(1)+1)*(old(4)-old(3)+1));
+    end
+    if reuse
+        sums=previous.sums; counts=previous.counts;
+        removed=rectangleDifference(old,overlap); added=rectangleDifference(bounds,overlap);
+        for k=1:size(removed,1)
+            [s,c]=hoverWindowSums(removed(k,:),idx,B); sums=sums-s; counts=counts-c;
+        end
+        for k=1:size(added,1)
+            [s,c]=hoverWindowSums(added(k,:),idx,B); sums=sums+s; counts=counts+c;
+        end
+        updates=previous.updates+1;
+    else
+        [sums,counts]=hoverWindowSums(bounds,idx,B); updates=0;
+    end
+    roi.hoverStats=struct('key',key,'idx',idx,'bounds',bounds,'sums',sums,'counts',counts,'updates',updates);
+    tc=sums./max(1,counts); tc(counts==0)=NaN;
+end
+
+function parts=rectangleDifference(box,overlap)
+    % Four non-overlapping strips; the shared interior needs no data read.
+    parts=[box(1) overlap(1)-1 box(3) box(4); overlap(2)+1 box(2) box(3) box(4); ...
+        overlap(1) overlap(2) box(3) overlap(3)-1; overlap(1) overlap(2) overlap(4)+1 box(4)];
+    parts=parts(parts(:,1)<=parts(:,2) & parts(:,3)<=parts(:,4),:);
+end
+
+function [sums,counts]=hoverWindowSums(box,idx,B)
+    sums=zeros(1,numel(idx)); counts=sums;
+    yy=box(3):box(4);
+    chunk=max(1,floor(8*1024^2/(16*numel(yy)*numel(idx))));
+    for x=box(1):chunk:box(2)
+        xx=x:min(box(2),x+chunk-1);
+        if ndims(PSC)==3, X=PSC(yy,xx,idx); else, X=PSC(yy,xx,state.z,idx); end
+        base=reshape(B(yy,xx),[],1); denominator=100+base;
+        denominator(~isfinite(denominator) | denominator<=sqrt(eps('single')))=NaN;
+        X=100*bsxfun(@rdivide,bsxfun(@minus,reshape(X,[],numel(idx)),base),denominator);
+        valid=isfinite(X); X(~valid)=0;
+        sums=sums+sum(double(X),1); counts=counts+sum(valid,1);
+    end
+end
+
 function tc = computeRoiPSC_idx(zSel, x1, x2, y1, y2, idx)
     try
         idx=round(double(idx(:).')); idx=idx(isfinite(idx) & idx>=1 & idx<=nT);
@@ -4213,6 +4321,7 @@ function redrawROIsForCurrentSlice()
     deleteIfValid(roiHandles); roiHandles = gobjects(0);
     deleteIfValid(roiPlotPSC); roiPlotPSC = gobjects(0);
     deleteIfValid(roiTextHandles); roiTextHandles = gobjects(0);
+    roi.savedTcBounds=zeros(0,6);
     ROI = ROI_byZ{state.z};
     if isempty(ROI), applyTimecourseAxisMode(); return; end
     for k = 1:numel(ROI)
@@ -4224,6 +4333,7 @@ function redrawROIsForCurrentSlice()
             'VerticalAlignment','bottom','BackgroundColor',[0 0 0],'Margin',1); %#ok<AGROW>
         tc = computeRoiPSC_atSlice(state.z, r.x1, r.x2, r.y1, r.y2);
         if numel(tc) == nT
+            roi.savedTcBounds(end+1,:)=traceBounds(tmin,tc);
             roiPlotPSC(end+1) = plot(axTC,tmin,tc,':','Color',r.color,'LineWidth',2.4,'Tag','SCM_SavedROI'); %#ok<AGROW>
         end
     end
@@ -4255,41 +4365,37 @@ function tcYFromCax(~,~)
 end
 
 function tcXAll(~,~)
-    set(ebTcXLim, 'String', sprintf('%g %g', tmin(1), tmin(end)));
+    set(ebTcXLim, 'String', sprintf('%g %g', tmin(1), displayEndMin));
     set(cbTcFixX, 'Value', 1);
     tcAxisModeChanged();
 end
 
 function applyTimecourseAxisMode()
     if ~isgraphics(axTC), return; end
-    [xAuto, yAuto] = getAutoTcLimits();
+    xAuto=state.tcXLim; yAuto=state.tcYLim;
+    if ~state.tcFixX || ~state.tcFixY, [xAuto, yAuto] = getAutoTcLimits(); end
     if state.tcFixX, xUse = state.tcXLim; else, xUse = xAuto; end
     if state.tcFixY, yUse = state.tcYLim; else, yUse = yAuto; end
-    set(axTC, 'XLim', xUse, 'YLim', yUse);
-    applyTimecourseXTicks(xUse);
+    if ~isequal(get(axTC,'XLim'),xUse)
+        set(axTC,'XLim',xUse); applyTimecourseXTicks(xUse);
+    end
+    if ~isequal(get(axTC,'YLim'),yUse), set(axTC,'YLim',yUse); end
     drawTimeWindows();
 end
 
 function [xLimAuto, yLimAuto] = getAutoTcLimits()
-    xAll = []; yAll = [];
+    bounds=roi.savedTcBounds;
     if isgraphics(hLivePSC) && strcmp(get(hLivePSC,'Visible'),'on')
-        xAll = [xAll get(hLivePSC,'XData')]; %#ok<AGROW>
-        yAll = [yAll get(hLivePSC,'YData')]; %#ok<AGROW>
+        bounds(end+1,:)=traceBounds(get(hLivePSC,'XData'),get(hLivePSC,'YData'));
     end
-    for kk = 1:numel(roiPlotPSC)
-        if isgraphics(roiPlotPSC(kk)) && strcmp(get(roiPlotPSC(kk),'Visible'),'on')
-            xAll = [xAll get(roiPlotPSC(kk),'XData')]; %#ok<AGROW>
-            yAll = [yAll get(roiPlotPSC(kk),'YData')]; %#ok<AGROW>
-        end
-    end
-    xAll = xAll(isfinite(xAll)); yAll = yAll(isfinite(yAll));
-    if numel(xAll) >= 2
-        xLimAuto = [min(xAll) max(xAll)]; if xLimAuto(2) <= xLimAuto(1), xLimAuto(2) = xLimAuto(1) + eps; end
+    if sum(bounds(:,3)) >= 2
+        xLimAuto = [min(bounds(:,1)) max(bounds(:,2))]; if xLimAuto(2) <= xLimAuto(1), xLimAuto(2) = xLimAuto(1) + eps; end
     else
         xLimAuto = [tmin(1) tmin(end)];
     end
-    if numel(yAll) >= 2
-        y0 = min(yAll); y1 = max(yAll);
+    xLimAuto(2)=max(xLimAuto(2),displayEndMin);
+    if sum(bounds(:,6)) >= 2
+        y0 = min(bounds(:,4)); y1 = max(bounds(:,5));
         if y1 > y0
             padY = max(0.15*(y1-y0), 0.5); yLimAuto = [y0-padY y1+padY];
         else
@@ -4298,6 +4404,13 @@ function [xLimAuto, yLimAuto] = getAutoTcLimits()
     else
         yLimAuto = [-5 5];
     end
+end
+
+function bounds=traceBounds(x,y)
+    x=x(isfinite(x)); y=y(isfinite(y));
+    bounds=[inf -inf numel(x) inf -inf numel(y)];
+    if ~isempty(x), bounds(1:2)=[min(x) max(x)]; end
+    if ~isempty(y), bounds(4:5)=[min(y) max(y)]; end
 end
 
 function applyTimecourseXTicks(xLimNow)
@@ -4326,6 +4439,10 @@ function drawTimeWindows()
     if b1s < b0s, tmp=b0s; b0s=b1s; b1s=tmp; end
     if s1s < s0s, tmp=s0s; s0s=s1s; s1s=tmp; end
     yl = get(axTC,'YLim'); if any(~isfinite(yl)) || yl(2) <= yl(1), yl = [-5 5]; set(axTC,'YLim',yl); end
+    key=[b0s b1s s0s s1s yl];
+    if isequal(state.timeWindowKey,key), return; end
+    firstDraw=isempty(state.timeWindowKey);
+    state.timeWindowKey=key;
     yr = yl(2)-yl(1); if ~isfinite(yr) || yr <= 0, yr = 1; end
     xb = [b0s b1s b1s b0s]/60; xs = [s0s s1s s1s s0s]/60;
     yb = [yl(1) yl(1) yl(2) yl(2)]; ys = yb;
@@ -4334,7 +4451,9 @@ function drawTimeWindows()
     yTxt = yl(2) - 0.06*yr;
     set(hBaseTxt,'Position',[mean(xb) yTxt 0],'String','Bas.','Visible','on','HorizontalAlignment','center','VerticalAlignment','middle','BackgroundColor',[0 0 0],'Margin',1,'Clipping','on');
     set(hSigTxt,'Position',[mean(xs) yTxt 0],'String','Sig.','Visible','on','HorizontalAlignment','center','VerticalAlignment','middle','BackgroundColor',[0 0 0],'Margin',1,'Clipping','on');
-    try, uistack(hBasePatch,'bottom'); uistack(hSigPatch,'bottom'); catch, end
+    if firstDraw
+        try, uistack(hBasePatch,'bottom'); uistack(hSigPatch,'bottom'); catch, end
+    end
 end
 
 %% ==========================================================

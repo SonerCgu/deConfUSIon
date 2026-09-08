@@ -99,6 +99,10 @@ if nr < 1
     error('Not enough frames (%d) for nsub = %d', nt, nsub);
 end
 
+showProgress=true; if isfield(opts,'showProgress'), showProgress=opts.showProgress; end
+progress=deConfUSIon_ui('progress','Imregdemons',showProgress);
+progressGuard=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
+
 fprintf('[Imregdemons] Block averaging (%s, nsub = %d)\n', opts.blockMethod, nsub);
 fprintf('[Imregdemons] Using %d / %d frames\n', nr*nsub, nt);
 
@@ -115,6 +119,7 @@ if nd == 3
     for i = 1:nr
         idx = (i-1)*nsub + (1:nsub);
         Ir(:,:,i) = blockReduce(Iin(:,:,idx), 3);
+        deConfUSIon_ui('progressupdate',progress,.1*i/nr,'Averaging time blocks');
     end
 else
     % 4D input [Y X Z T]
@@ -122,6 +127,7 @@ else
     for i = 1:nr
         idx = (i-1)*nsub + (1:nsub);
         Ir(:,:,:,i) = blockReduce(Iin(:,:,:,idx), 4);
+        deConfUSIon_ui('progressupdate',progress,.1*i/nr,'Averaging time blocks');
     end
 end
 
@@ -138,6 +144,7 @@ if nd == 3
     Iref = blockReduce(Ir(:,:,1:nRef), 3);
     for i = 1:nr
         Ic(:,:,i) = runDemonsSafe(Ir(:,:,i), Iref, opts.regSmooth);
+        deConfUSIon_ui('progressupdate',progress,.1+.85*i/nr,sprintf('Registering frame %d of %d',i,nr));
     end
 
 else
@@ -157,6 +164,7 @@ else
             for i = 1:nr
                 moving2D = Ir(:,:,iz,i);
                 Ic(:,:,iz,i) = runDemonsSafe(moving2D, ref2D, opts.regSmooth);
+                deConfUSIon_ui('progressupdate',progress,.1+.85*((iz-1)*nr+i)/(nz*nr),sprintf('Registering motor slice %d/%d, frame %d/%d',iz,nz,i,nr));
             end
         end
 
@@ -165,12 +173,14 @@ else
         Iref = blockReduce(Ir(:,:,:,1:nRef), 4);
         for i = 1:nr
             Ic(:,:,:,i) = runDemonsSafe(Ir(:,:,:,i), Iref, opts.regSmooth);
+            deConfUSIon_ui('progressupdate',progress,.1+.85*i/nr,sprintf('Registering volume %d of %d',i,nr));
         end
     end
 end
 
 %% ------------------ QC: DISPLAY +/or EXPORT ------------------
 QC = struct('figIntensity',[],'figRejected',[]);
+deConfUSIon_ui('progressupdate',progress,.95,'Preparing QC reports');
 
 if opts.saveQC || opts.showQC
 
@@ -305,6 +315,7 @@ out.TR          = TRin * nsub;
 out.blockDur    = TRin * nsub;
 out.nVols       = nr;
 out.totalTime   = nt * TRin;
+deConfUSIon_ui('progressupdate',progress,1,'Imregdemons complete');
 out.QC          = QC;
 out.isStepMotor = isStepMotor;
 out.nSlices     = nz;
