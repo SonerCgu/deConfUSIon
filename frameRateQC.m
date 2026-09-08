@@ -11,12 +11,16 @@ if nargin < 5 || isempty(opts), opts=struct(); end
 if nargin < 2 || isempty(TR) || ~isfinite(TR) || TR <= 0, TR = 1; end
 
 nVols = size(I,ndims(I));
+showProgress=true; if isfield(opts,'showProgress'), showProgress=opts.showProgress; end
+progress=deConfUSIon_ui('progress','Motion correction - frame QC',showProgress);
+progressGuard=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
 D = reshape(I,[],nVols);
 sums=zeros(1,nVols); counts=zeros(1,nVols);
 chunk=max(1,floor(32*1024^2/(8*nVols)));
 for a=1:chunk:size(D,1)
     b=min(size(D,1),a+chunk-1); v=double(D(a:b,:)); ok=isfinite(v); v(~ok)=0;
     sums=sums+sum(v,1); counts=counts+sum(ok,1);
+    deConfUSIon_ui('progressupdate',progress,.9*b/size(D,1),'Computing frame rejection metrics');
 end
 g=(sums./max(1,counts))'; g(counts==0)=NaN;
 

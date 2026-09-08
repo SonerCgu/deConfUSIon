@@ -21,9 +21,6 @@ function proc = computePSC(I, TR, par, baseline)
 % - Effective TR is adjusted so total time stays constant
 % ------------------------------------------------------------
 
-% ---- cast early to save RAM ----
-I = single(I);
-
 d = ndims(I);
 assert(d==3 || d==4, 'computePSC: I must be [Y X T] or [Y X Z T].');
 assert(isscalar(TR) && isfinite(TR) && TR>0, 'computePSC: TR must be positive scalar.');
@@ -36,8 +33,17 @@ else
 end
 
 Tmax_orig = (nVols - 1) * TR;
+% Validate before allocating/interpolating a potentially multi-GB recording.
+if ~isscalar(baseline.start) || ~isscalar(baseline.end) || ...
+        ~isfinite(baseline.start) || ~isfinite(baseline.end) || ...
+        baseline.start<0 || baseline.end<=baseline.start || ...
+        baseline.start>Tmax_orig || baseline.end<0
+    error('deConfUSIon:BadBaseline', ...
+        'Baseline must overlap 0-%.6g seconds (%d frames, TR %.6g s). Choose a valid window.',Tmax_orig,nVols,TR);
+end
 
 %% 1) Temporal interpolation (integer factor N)
+I = single(I);
 N = 1;
 if isfield(par,'interpol') && ~isempty(par.interpol)
     N = max(1, round(par.interpol));

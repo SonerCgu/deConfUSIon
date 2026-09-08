@@ -48,6 +48,7 @@ end
 function kind = localClassifyPopup(nm,tg)
 s = lower([char(nm) ' ' char(tg)]);
 kind = '';
+if strcmp(tg,'deConfUSIonProgress'), return; end
 
 % SCRUBBING_SETUP_SKIP_PATCH_V1
 % Skip global popup polishing for the Scrubbing Setup dialog.

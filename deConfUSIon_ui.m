@@ -9,8 +9,63 @@ switch lower(action)
     case 'present', presentFigure(varargin{:});
     case 'liveedit', installLiveEdit(varargin{:});
     case 'datedlabel', varargout{1}=datedLabel(varargin{:});
+    case 'progress', varargout{1}=openProgress(varargin{:});
+    case 'progressupdate', updateProgress(varargin{:});
+    case 'progressclose', closeProgress(varargin{:});
     otherwise, error('deConfUSIon:UIAction','Unknown UI action: %s',action);
 end
+end
+
+function h=openProgress(titleText,enabled)
+if nargin<2, enabled=true; end
+h=[]; if ~enabled, return; end
+h=waitbar(0,'','Name',[titleText ' progress'], ...
+    'CreateCancelBtn',@(b,~)setappdata(ancestor(b,'figure'),'CancelProcessing',true));
+set(h,'Tag','deConfUSIonProgress','CloseRequestFcn',@(f,~)setappdata(f,'CancelProcessing',true));
+set(h,'Units','pixels'); position=get(h,'Position'); position(3:4)=[540 190]; set(h,'Position',position);
+C=palette();
+uicontrol(h,'Style','text','Tag','ProcessingStatus','Units','normalized','Position',[.05 .70 .9 .22], ...
+    'String','Preparing...','BackgroundColor',C.background,'ForegroundColor',C.text,'FontName','Arial','FontSize',13,'FontWeight','bold','HorizontalAlignment','left');
+uicontrol(h,'Style','text','Tag','ProcessingETA','Units','normalized','Position',[.05 .51 .9 .16], ...
+    'String','Estimating remaining time...','BackgroundColor',C.background,'ForegroundColor',C.text,'FontName','Arial','FontSize',12,'HorizontalAlignment','left');
+set(findall(h,'Type','axes'),'Units','normalized','Position',[.05 .34 .9 .10]);
+set(findall(h,'Style','pushbutton'),'Units','normalized','Position',[.72 .06 .23 .19]);
+setappdata(h,'deConfUSIonNoMaximize',true);
+setappdata(h,'ProgressStarted',tic); setappdata(h,'ProgressUpdated',tic);
+setappdata(h,'CancelProcessing',false); presentFigure(h);
+end
+
+function updateProgress(h,fraction,stage)
+if isempty(h), return; end
+if ~isgraphics(h) || isequal(getappdata(h,'CancelProcessing'),true)
+    error('deConfUSIon:ProcessingCancelled','Processing cancelled; the input dataset is unchanged.');
+end
+fraction=min(1,max(0,fraction));
+if fraction<1 && toc(getappdata(h,'ProgressUpdated'))<.15, return; end
+elapsed=toc(getappdata(h,'ProgressStarted'));
+estimate='Estimating remaining time...';
+if fraction>=.02 && elapsed>=1
+    remaining=elapsed*(1-fraction)/max(eps,fraction);
+    estimate=sprintf('Elapsed %s | about %s remaining',durationText(elapsed),durationText(remaining));
+end
+waitbar(fraction,h,'');
+set(findall(h,'Tag','ProcessingStatus'),'String',sprintf('%s  (%d%%)',stage,round(100*fraction)));
+set(findall(h,'Tag','ProcessingETA'),'String',estimate);
+setappdata(h,'ProgressUpdated',tic); drawnow;
+if ~isgraphics(h) || isequal(getappdata(h,'CancelProcessing'),true)
+    error('deConfUSIon:ProcessingCancelled','Processing cancelled; the input dataset is unchanged.');
+end
+end
+
+function s=durationText(seconds)
+seconds=max(0,round(seconds));
+if seconds<60, s=sprintf('%d s',seconds);
+elseif seconds<3600, s=sprintf('%d min %02d s',floor(seconds/60),mod(seconds,60));
+else, s=sprintf('%d h %02d min',floor(seconds/3600),floor(mod(seconds,3600)/60)); end
+end
+
+function closeProgress(h)
+if ~isempty(h) && isgraphics(h), delete(h); end
 end
 
 function installLiveEdit(h)
@@ -101,6 +156,8 @@ for k=1:numel(ctrl)
     p=getpixelposition(h); fs=get(h,'FontSize');
     if p(4)>=25, fs=max(10,min(13,fs)); else, fs=max(9,min(11,fs)); end
     if strcmp(get(h,'Tag'),'deConfUSIonDatasetHeader'), fs=14; end
+    preferred=getappdata(h,'PreferredFontSize');
+    if isnumeric(preferred) && isscalar(preferred) && isfinite(preferred), fs=preferred; end
     set(h,'FontSize',fs,'ForegroundColor',C.text);
     switch st
         case {'edit','listbox','popupmenu'}
@@ -271,6 +328,11 @@ math='The calculation is applied voxel-wise or region-wise to the selected time 
 workflow=['1) Confirm the active dataset.  2) Choose the displayed parameters.  3) Run the operation.  4) Review the result before saving or exporting.'];
 checks='Check the preview, units, baseline/event windows, and output name. Never interpret an output until its orientation and valid-sample count are plausible.';
 switch lower(topicKey)
+    case 'groupanalysis'
+        definition='ROI time courses are aligned on a common time grid. At each time, the mean uses available subjects. SEM = s/sqrt(n), where s is the sample SD and n is the number of finite subject values at that time. SEM requires n >= 2 and is not a confidence interval.';
+        math='Plateau = (1/m)*sum(y_i) over a fixed, prespecified interval. It describes mean response, not proof that the curve is flat. Robust peak = max_w TrimMean(y in w): sort the finite samples in each full-duration window and discard floor(m*p/200) from EACH tail, with p the total trim percentage. Default p=10 means 5% per tail. Both metrics require at least 80% of the expected samples and at least two finite values. Peak remains an upward-response metric.';
+        workflow='Start with display 0-20 min, plateau 6-9 min and peak search 6-9 min with a 1-min peak window. Change to 10-15 min if your protocol predicts a later response, using the same prespecified rule across groups. Verify baseline separately. Display smoothing affects the drawn curve and band only; metrics use unsmoothed subject traces.';
+        checks='Choose windows before comparing groups. Maximizing a peak can bias it upward and wider searches increase this bias. Prefer a fixed plateau mean for a prespecified sustained response. Missing/short recordings may yield NaN metrics. Each input row is a replicate: do not count repeated scans as independent animals. Exports retain the existing metric table and include metric settings in the result structure.';
     case 'psc'
         definition='Percent signal change (PSC) expresses each sample relative to a positive baseline B.';
         math='PSC(t)=100*(S(t)-B)/B. For a new baseline p, SCM rebaselining uses PSCnew=100*(PSC-p)/(100+p).';

@@ -234,11 +234,11 @@ S.tc_baseMin0        = 0;
 S.tc_baseMin1        = 10;
 S.tc_injMin0         = 5;
 S.tc_injMin1         = 15;
-S.tc_plateauMin0     = 30;
-S.tc_plateauMin1     = 40;
-S.tc_peakSearchMin0  = 15;
-S.tc_peakSearchMin1  = 25;
-S.tc_peakWinMin      = 3;
+S.tc_plateauMin0     = 6;
+S.tc_plateauMin1     = 9;
+S.tc_peakSearchMin0  = 6;
+S.tc_peakSearchMin1  = 9;
+S.tc_peakWinMin      = 1;
 S.tc_trimPct         = 10;
 S.tc_metric          = 'Robust Peak';
 S.tc_showSEM         = true;
@@ -299,6 +299,8 @@ S.manualColorB  = 2;
 
 S.plotTop = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
 S.plotBot = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
+
+S.plotX = struct('auto',false,'xmin',0,'xmax',20);
 
 S.previewStyle    = 'Dark';
 S.previewShowGrid = false;
@@ -1178,7 +1180,7 @@ try
     S.hPrevXMin = uicontrol(S.hPrevTop,'Style','edit','String','0','Units','normalized', ...
         'Position',[0.125 0.080 0.055 0.250],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
         'FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_XMIN');
-    S.hPrevXMax = uicontrol(S.hPrevTop,'Style','edit','String','45','Units','normalized', ...
+    S.hPrevXMax = uicontrol(S.hPrevTop,'Style','edit','String','20','Units','normalized', ...
         'Position',[0.190 0.080 0.055 0.250],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
         'FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_XMAX');
 
@@ -4343,6 +4345,7 @@ for g = 1:numel(gNames)
     sd = ga_nanstd(X(idx,:),0,1);
     nn = sum(isfinite(X(idx,:)),1);
     se = sd ./ sqrt(max(1,nn));
+    se(nn<2) = NaN;
     G(g).name = gNames{g};
     G(g).mean = mu;
     G(g).sem = se;
@@ -4353,19 +4356,19 @@ m0 = NaN; m1 = NaN;
 try, if isfield(S,'tc_plateauMin0'), m0 = double(S.tc_plateauMin0); end, catch, end
 try, if isfield(S,'tc_plateauMin1'), m1 = double(S.tc_plateauMin1); end, catch, end
 if ~isfinite(m0) || ~isfinite(m1) || m1 <= m0
-    ttMax = max(tCommon);
-    if ttMax >= 40
-        m0 = 30; m1 = 40;
+    m0 = 6; m1 = 9;
+end
+metricVals = nan(size(X,1),1);
+usePeak = strcmpi(gaPrevField(S,'tc_metric','Robust Peak'),'Robust Peak');
+for ii=1:size(X,1)
+    if usePeak
+        metricVals(ii)=GroupAnalysis_Common('robustPeak',X(ii,:),tCommon, ...
+            gaPrevField(S,'tc_peakSearchMin0',6),gaPrevField(S,'tc_peakSearchMin1',9), ...
+            gaPrevField(S,'tc_peakWinMin',1),gaPrevField(S,'tc_trimPct',10));
     else
-        m0 = 0.65*ttMax; m1 = ttMax;
+        metricVals(ii)=GroupAnalysis_Common('plateauMean',X(ii,:),tCommon,m0,m1);
     end
 end
-
-w = tCommon >= m0 & tCommon <= m1;
-if ~any(w)
-    w = true(size(tCommon));
-end
-metricVals = ga_nanmean(X(:,w),2);
 
 stats = struct('p',NaN,'alpha',0.05,'type','Welch fallback');
 if numel(gNames) >= 2
@@ -4381,7 +4384,11 @@ R.group = G;
 R.groupNames = gNames;
 R.groupDisplayNames = ga_display_group_names(gNames);
 R.metricVals = metricVals;
-R.metricName = sprintf('Mean PSC %.1f-%.1f min',m0,m1);
+if usePeak
+    R.metricName = sprintf('Robust peak (%.1f-%.1f min)',gaPrevField(S,'tc_peakSearchMin0',6),gaPrevField(S,'tc_peakSearchMin1',9));
+else
+    R.metricName = sprintf('Plateau mean (%.1f-%.1f min)',m0,m1);
+end
 R.stats = stats;
 R.subjTable = subj(rows,:);
 R.subjectNames = subjName;
@@ -4427,8 +4434,7 @@ for g = 1:numel(R.group)
     if gaPrevField(S,'tc_showSEM',true) && ~isempty(e) && numel(e) == numel(y)
         up = y + e;
         dn = y - e;
-        patch(ax,[t fliplr(t)],[up fliplr(dn)],cc, ...
-            'FaceAlpha',shadeA,'EdgeColor','none','HandleVisibility','off');
+        GroupAnalysis_Common('drawSEM',ax,t,y,e,cc,shadeA);
         allY = [allY up(:)' dn(:)']; %#ok<AGROW>
     end
 
@@ -4965,7 +4971,8 @@ for g = 1:numel(R.group)
     end
     col = gaPrevGroupColor(R,R.group(g).name,g);
     if gaPrevField(S,'tc_showSEM',true) && numel(e)==numel(y)
-        patch(ax,[t fliplr(t)],[y+e fliplr(y-e)],col,'FaceAlpha',gaPrevField(S,'displaySemAlpha',0.25),'EdgeColor','none','HandleVisibility','off');
+        GroupAnalysis_Common('drawSEM',ax,t,y,e,col,gaPrevField(S,'displaySemAlpha',0.25));
+        allY = [allY y+e y-e];
     end
     plot(ax,t,y,'Color',col,'LineWidth',2.4,'DisplayName',gaPrevDisplayName(R,g));
     allY = [allY y(:)'];
@@ -5041,7 +5048,7 @@ try, if isstruct(S) && isfield(S,name) && ~isempty(S.(name)), val = S.(name); en
 end
 
 function y2 = gaPrevSmooth(y,dtSec,winSec)
-y = double(y(:)'); y2 = y;
+y = double(y(:)'); y2 = y; missing = ~isfinite(y);
 if ~isfinite(dtSec) || dtSec<=0 || ~isfinite(winSec) || winSec<=0, return; end
 w = max(1,round(winSec/dtSec));
 if w <= 1, return; end
@@ -5053,6 +5060,7 @@ k = ones(1,w)./w;
 padL = repmat(y(1),1,floor(w/2));
 padR = repmat(y(end),1,w-1-floor(w/2));
 y2 = conv([padL y padR],k,'valid');
+y2(missing) = NaN; % Display smoothing must not manufacture support across missing data.
 end
 
 function col = gaPrevGroupColor(R,name,idx)

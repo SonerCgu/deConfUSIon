@@ -618,7 +618,22 @@ function modernButtonClick(hBtn)
     dd=findobj(fig,'Tag','datasetDropdown');
     if ~isempty(dd), set(dd,'Enable','off','BusyAction','cancel'); end
     guard=onCleanup(@finishStudioAction); %#ok<NASGU>
-    feval(ud.callback,hBtn,[]);
+    try
+        feval(ud.callback,hBtn,[]);
+    catch ME
+        if isgraphics(fig)
+            setappdata(fig,'StudioLastCallbackError',ME);
+            state=guidata(fig); color=[0.36 0.12 0.38];
+            if isstruct(state) && isfield(state,'statusPanel') && isgraphics(state.statusPanel)
+                set(state.statusPanel,'BackgroundColor',color,'HighlightColor',color,'ShadowColor',color);
+                set(state.statusText,'String','!!! ACTION CRASHED !!!','BackgroundColor',color, ...
+                    'ForegroundColor',[1 1 1],'TooltipString',ME.message);
+            end
+            addLog(['ACTION ERROR: ' ME.message]);
+            errordlg(sprintf('%s\n\nThe action stopped. Your session is still open; correct the settings and retry.',ME.message),'Action failed');
+        end
+        warning('deConfUSIon:CallbackFailed','%s',getReport(ME,'extended','hyperlinks','off'));
+    end
 end
 
 function finishStudioAction()
@@ -1100,6 +1115,8 @@ studio.pipeline = struct( ...
         data.TotalTimeMin = data.TotalTimeSec / 60;
         data.totalTime = data.TotalTimeSec;
         data.totalTimeMin = data.TotalTimeMin;
+
+        [data,~]=deConfUSIon_signal('timing',data);
 
         if ~isfield(meta,'rawMetadata') || isempty(meta.rawMetadata)
             meta.rawMetadata = struct();

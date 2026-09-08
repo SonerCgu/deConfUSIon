@@ -99,6 +99,9 @@ origBgDefaultFull = bgDefaultFull;
 
 % atlas state (SCM-style)
 state = struct();
+playbackUnderlayCache=[];
+playbackUnderlaySlice=0;
+displayGeometryKey=[];
 state.isAtlasWarped      = false;
 state.atlasTransformFile = '';
 state.lastAtlasTransformFile = '';
@@ -631,8 +634,8 @@ render();
 % =========================================================
 % TIMER
 % =========================================================
-playTimer = timer('ExecutionMode','fixedSpacing', ...
-    'Period',1/max(fps,0.1), 'TimerFcn',@timerTick);
+playTimer = timer('ExecutionMode','fixedRate', ...
+    'Period',1/max(fps,0.1), 'BusyMode','drop','TimerFcn',@timerTick);
 
     function timerTick(~,~)
         if ~ishandle(fig) || ~playing
@@ -647,13 +650,14 @@ playTimer = timer('ExecutionMode','fixedSpacing', ...
                 set(playBtn,'Value',0,'String','Play');
             end
             stop(playTimer);
+            render();
             return;
         end
 
         set(slVol,'Value',volume);
         frame = (volume - 1) * par.interpol + 1;
         frame = max(1, min(nFrames, round(frame)));
-        render();
+        render(true);
     end
 
 % =========================================================
@@ -1064,13 +1068,21 @@ end
     alphaMap = min(max(alphaMap,0),1);
 end
     
-    function render()
+    function render(fastPlayback)
+        if nargin<1, fastPlayback=false; end
+        setappdata(fig,'deConfUSIonInteractionUntil',now+0.75/86400);
         sliceIdx = max(1, min(nZ, sliceIdx));
         set(txtSliceTop,'String',sliceString(sliceIdx,nZ));
 
-     bgFullActive = getUnderlayFull();
-bg2 = getBg2DForSlice(bgFullActive, sliceIdx);
-bgRGB = renderUnderlayRGB(bg2);
+        % Manual controls always rebuild this cache, including a changed
+        % source, display settings, mask, atlas transform or slice.
+        if ~fastPlayback || isempty(playbackUnderlayCache) || playbackUnderlaySlice~=sliceIdx
+            bgFullActive = getUnderlayFull();
+            bg2 = getBg2DForSlice(bgFullActive, sliceIdx);
+            playbackUnderlayCache = renderUnderlayRGB(bg2);
+            playbackUnderlaySlice=sliceIdx;
+        end
+        bgRGB=playbackUnderlayCache;
 
         if frame < 1 || frame > nFrames
     syncImageAxesToCurrentFrame(bgRGB);
@@ -1164,7 +1176,7 @@ baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
             outRGB = outRGB .* (1 - alphaUse .* M3) + maskRGB .* (alphaUse .* M3);
         end
 
-   syncImageAxesToCurrentFrame(outRGB);
+   syncImageAxesToCurrentFrame(outRGB,fastPlayback);
 
         t = (volume - 1) * TR;
 
@@ -1771,6 +1783,7 @@ end
             if strcmp(playTimer.Running,'on')
                 stop(playTimer);
             end
+            render();
         end
     end
 
@@ -3201,7 +3214,8 @@ end
         end
     end
 
-function syncImageAxesToCurrentFrame(C)
+function syncImageAxesToCurrentFrame(C,fastPlayback)
+    if nargin<2, fastPlayback=false; end
     if isempty(C)
         return;
     end
@@ -3209,7 +3223,7 @@ function syncImageAxesToCurrentFrame(C)
     h = size(C,1);
     w = size(C,2);
     % ===== 3D PROBE SMOOTH DISPLAY (nZ>1 only; coordinates unchanged) =====
-    if exist('nZ','var') && nZ > 1
+    if exist('nZ','var') && nZ > 1 && ~fastPlayback
         kUp = max(1, round(480 / max(1, min(h,w))));
         if kUp > 1
             C = imresize(C, kUp, 'bicubic');
@@ -3224,8 +3238,11 @@ function syncImageAxesToCurrentFrame(C)
         C = min(max(C,0),1);
     end
 
+    set(img,'CData',C);
+    if isprop(img,'Interpolation'), set(img,'Interpolation','bilinear'); end
+    if fastPlayback && isequal(displayGeometryKey,[h w]), return; end
+    displayGeometryKey=[h w];
     set(img, ...
-        'CData', C, ...
         'XData', [1 w], ...
         'YData', [1 h]);
 

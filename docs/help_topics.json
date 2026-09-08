@@ -20,5 +20,6 @@
   "atlas_regions": "Atlas colors are assigned from the atlas label table and kept consistent between overlays and region summaries. When a coarse analysis is needed, select a parent region grouping (for example cortex or hippocampus) instead of averaging arbitrary small labels; the original labels remain available for detailed analysis.",
   "exports": "Exports include the source identity, schema version, tsec when known, baseline window, and processing metadata. Keep generated analysis folders separate from raw data.",
   "troubleshooting": "Popups open maximized on the Studio monitor. If a control is clipped, maximize the owning figure. If timing is uncertain, inspect the loader report and tsec before filtering. If a baseline is invalid, choose a window containing finite positive signal rather than accepting an extreme percentage.",
-  "about": "Help content is shared across the GUIs. The full manual is docs/deConfUSIon_User_Manual_2026-09-06.html; the June 2026 PDF is retained as a legacy reference."
+  "about": "Help content is shared across the GUIs. The full manual is docs/deConfUSIon_User_Manual_2026-09-06.html; the June 2026 PDF is retained as a legacy reference.",
+  "groupanalysis": "Group analysis compares prespecified ROI responses between groups and displays their mean time courses with between-subject SEM. Choose the biological window from the protocol, then inspect coverage and replicate identity before interpreting statistics."
 }

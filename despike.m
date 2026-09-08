@@ -32,6 +32,8 @@ end
 
 flat = reshape(data4D,[],T);
 Nvox = size(flat,1);
+progress=deConfUSIon_ui('progress','Motion correction - despiking');
+progressGuard=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
 
 totalPoints = numel(flat);
 removedPoints = 0;
@@ -40,6 +42,7 @@ spikesPerFrame = zeros(1,T,'single');
 spikeMap = zeros(Y,X,Z,'single');
 
 for v = 1:Nvox
+    if mod(v-1,128)==0, deConfUSIon_ui('progressupdate',progress,.95*(v-1)/Nvox,'Detecting and interpolating voxel spikes'); end
 
     sig = flat(v,:);
     med = median(sig);
@@ -72,6 +75,8 @@ for v = 1:Nvox
 end
 
 out = reshape(flat,Y,X,Z,T);
+if numel(sz)==3, out=reshape(out,sz); end
+deConfUSIon_ui('progressupdate',progress,.95,'Saving despiking QC');
 
 % =========================
 % STATS

@@ -1933,23 +1933,55 @@ function pv = robustPeak(y, tMin, s0, s1, winMin, trimPct)
 y = double(y(:)');
 tMin = double(tMin(:)');
 pv = NaN;
-idxAll = find(tMin>=s0 & tMin<=s1);
-if numel(idxAll)<1, return; end
+if numel(y)~=numel(tMin) || numel(tMin)<2 || any(~isfinite(tMin)) || ...
+        any(diff(tMin)<=0) || ~all(isfinite([s0 s1 winMin trimPct])) || ...
+        s1<=s0 || winMin<=0 || winMin>s1-s0, return; end
 dt = median(diff(tMin));
-if ~isfinite(dt) || dt<=0, dt = 0.1; end
-w = max(1, round(winMin/dt));
-iStart = idxAll(1);
-iEnd = idxAll(end);
+tol = max(1e-9,dt*1e-6);
+expected = floor(winMin/dt + 1e-6)+1;
+% Require a full-duration candidate, not a one-sample remnant after missing data.
+starts = find(tMin>=s0-tol & tMin+winMin<=min(s1,tMin(end))+tol);
 best = -Inf;
-for i=iStart:(iEnd-w+1)
-    j = i+w-1;
+j = 1;
+for i=starts
+    j = max(j,i);
+    while j<numel(tMin) && tMin(j+1)<=tMin(i)+winMin+tol, j=j+1; end
     seg = y(i:j);
     seg = seg(isfinite(seg));
-    if isempty(seg), continue; end
+    if numel(seg)<max(2,ceil(0.8*expected)), continue; end
     val = trimmedMean(seg, trimPct);
     if val > best, best = val; end
 end
 if isfinite(best), pv = best; end
+end
+
+function [value,coverage] = plateauMean(y,tMin,s0,s1)
+% Fixed-window mean on the common uniform time grid. Never choose the window
+% from the observed response; require >=80% of its expected samples.
+y=double(y(:)'); tMin=double(tMin(:)'); value=NaN; coverage=0;
+if numel(y)~=numel(tMin) || numel(tMin)<2 || any(~isfinite(tMin)) || ...
+        any(diff(tMin)<=0) || ~all(isfinite([s0 s1])) || s1<=s0, return; end
+dt=median(diff(tMin)); tol=max(1e-9,dt*1e-6);
+expected=floor((s1-s0)/dt+1e-6)+1;
+v=y(tMin>=s0-tol & tMin<=s1+tol); v=v(isfinite(v));
+coverage=min(1,numel(v)/expected);
+if numel(v)>=max(2,ceil(0.8*expected)), value=mean(v); end
+end
+
+function h = drawSEM(ax,t,y,e,col,alpha)
+% One quadrilateral per valid adjacent sample pair. NaNs cannot invalidate
+% the whole band or bridge missing intervals; dense unsmoothed traces do not
+% require triangulating a single long, jagged polygon.
+t=double(t(:)); y=double(y(:)); e=double(e(:)); h=[];
+if numel(t)~=numel(y) || numel(e)~=numel(y) || numel(t)<2, return; end
+valid=isfinite(t)&isfinite(y)&isfinite(e)&e>=0;
+j=find(valid(1:end-1)&valid(2:end)&diff(t)>0);
+if isempty(j), return; end
+n=numel(t);
+vertices=[t y+e; t y-e];
+faces=[j j+1 j+1+n j+n];
+h=patch(ax,'Vertices',vertices,'Faces',faces,'FaceColor',col, ...
+    'FaceAlpha',alpha,'EdgeColor','none','HandleVisibility','off','Tag','GroupROI_SEM');
 end
 
 function clr = excelPastelColor(idx)
@@ -2348,21 +2380,24 @@ for g = 1:numel(gNames)
     sd = nanstd_local(X(idx,:),0,1);
     n  = sum(isfinite(X(idx,:)),1);
     se = sd ./ sqrt(max(1,n));
+    se(n<2) = NaN; % Between-subject SEM is undefined with fewer than two observations.
 
     groupTC(g).name = gNames{g};
     groupTC(g).mean = mu;
     groupTC(g).sem  = se;
     groupTC(g).n    = sum(idx);
+    groupTC(g).nPerTime = n;
 end
 
 platIdx = (tCommon >= S.tc_plateauMin0) & (tCommon <= S.tc_plateauMin1);
-if ~any(platIdx)
+if ~any(platIdx) && strcmpi(S.tc_metric,'Plateau')
     error('Plateau window has no samples.');
 end
 
 plateau = nan(N,1);
+plateauCoverage = zeros(N,1);
 for i = 1:N
-    plateau(i) = nanmean_local(X(i,platIdx),2);
+    [plateau(i),plateauCoverage(i)] = plateauMean(X(i,:),tCommon,S.tc_plateauMin0,S.tc_plateauMin1);
 end
 
 peakVal = nan(N,1);
@@ -2378,6 +2413,11 @@ if strcmpi(S.tc_metric,'Plateau')
 else
     metricVals = peakVal;
     metricName = sprintf('Robust peak (%.1f-%.1f min)', S.tc_peakSearchMin0, S.tc_peakSearchMin1);
+end
+
+if ~any(isfinite(metricVals))
+    error('GroupAnalysis:MetricCoverage', ...
+        'No subject has sufficient data for the selected metric (80%% coverage required). Check the search/window times in minutes.');
 end
 
 stats = computeStats(metricVals, grpCol, S);
@@ -2403,6 +2443,10 @@ R.groupColors = groupColors;
 R.unitsPercent = unitsPercent;
 R.metricName = metricName;
 R.metricVals = metricVals;
+R.plateauCoverage = plateauCoverage;
+R.metricSettings = struct('version',2,'plateauMin',[S.tc_plateauMin0 S.tc_plateauMin1], ...
+    'peakSearchMin',[S.tc_peakSearchMin0 S.tc_peakSearchMin1], ...
+    'peakWindowMin',S.tc_peakWinMin,'trimPercentTotal',S.tc_trimPct,'minimumCoverage',0.8);
 R.stats = stats;
 R.metrics = struct('table',{Tcell});
 R.subjTable = subjActive;
@@ -3035,7 +3079,8 @@ for g = 1:numel(R.group)
     end
     col = gaPrevGroupColor(R,R.group(g).name,g);
     if gaPrevField(S,'tc_showSEM',true) && numel(e)==numel(y)
-        patch(ax,[t fliplr(t)],[y+e fliplr(y-e)],col,'FaceAlpha',gaPrevField(S,'displaySemAlpha',0.25),'EdgeColor','none','HandleVisibility','off');
+        GroupAnalysis_Common('drawSEM',ax,t,y,e,col,gaPrevField(S,'displaySemAlpha',0.25));
+        allY = [allY y+e y-e];
     end
     plot(ax,t,y,'Color',col,'LineWidth',2.4,'DisplayName',gaPrevDisplayName(R,g));
     allY = [allY y(:)'];
@@ -3112,7 +3157,7 @@ try, if isstruct(S) && isfield(S,name) && ~isempty(S.(name)), val = S.(name); en
 end
 
 function y2 = gaPrevSmooth(y,dtSec,winSec)
-y = double(y(:)'); y2 = y;
+y = double(y(:)'); y2 = y; missing = ~isfinite(y);
 if ~isfinite(dtSec) || dtSec<=0 || ~isfinite(winSec) || winSec<=0, return; end
 w = max(1,round(winSec/dtSec));
 if w <= 1, return; end
@@ -3124,6 +3169,7 @@ k = ones(1,w)./w;
 padL = repmat(y(1),1,floor(w/2));
 padR = repmat(y(end),1,w-1-floor(w/2));
 y2 = conv([padL y padR],k,'valid');
+y2(missing) = NaN; % Display smoothing must not manufacture support across missing data.
 end
 
 function col = gaPrevGroupColor(R,name,idx)

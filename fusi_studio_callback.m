@@ -277,6 +277,7 @@ function scmCallback(~,~)
     end
 
     data = getActiveData();
+    studio = guidata(fig); % Includes lazy-load and timing repairs.
 
     % -----------------------------------------------------
     % Launch setup popup: baseline + underlay selection
@@ -402,6 +403,7 @@ end
     % -----------------------------------------------------
     par = struct();
     par.interpol = 1;
+    if isfield(data,'displayDurationSec'), par.displayDurationSec=data.displayDurationSec; end
     par.previewCaxis = [];
     par.exportPath = studio.exportPath;
     par.datasetTag = studio.activeDataset;
@@ -477,16 +479,16 @@ end
     deconfPscKey = [NaN NaN NaN NaN NaN];
     try
         deconfPscKey = [double(baseline.start) double(baseline.end) ...
-                        double(baseline.sigStart) double(baseline.sigEnd) ...
+                        double(data.TR) size(data.I,ndims(data.I)) ...
                         double(par.interpol)];
     catch
     end
     deconfUseCached = false;
     try
         if isfield(data,'PSC') && ~isempty(data.PSC) && isfield(data,'bg') && ~isempty(data.bg)
-            if ~isfield(data,'deconfPscKey') || isempty(data.deconfPscKey)
-                deconfUseCached = true;   % legacy cache, keep old behaviour
-            elseif isequal(double(data.deconfPscKey(:)).', deconfPscKey)
+            if isfield(data,'deconfPscDatasetKey') && strcmp(data.deconfPscDatasetKey,studio.activeDataset) && ...
+                    isfield(data,'deconfPscKey') && isequal(double(data.deconfPscKey(:)).', deconfPscKey) && ...
+                    isequal(size(data.PSC),size(data.I))
                 deconfUseCached = true;
             end
         end
@@ -497,15 +499,9 @@ end
         bgDefault = data.bg;
         addLog('[Speed] Reusing cached PSC for this dataset and window.');
     else
-        try
-            proc = computePSC(data.I, data.TR, par, baseline);
-            PSCsig = proc.PSC;
-            bgDefault = proc.bg;
-        catch
-            proc = computePSC(double(data.I), data.TR, par, baseline);
-            PSCsig = proc.PSC;
-            bgDefault = proc.bg;
-        end
+        proc = computePSC(data.I, data.TR, par, baseline);
+        PSCsig = proc.PSC;
+        bgDefault = proc.bg;
         try
             deconfBytes = numel(PSCsig) * 4;
             if deconfBytes < 8e8
@@ -513,6 +509,7 @@ end
                 studio.datasets.(studio.activeDataset).PSC = PSCsig;
                 studio.datasets.(studio.activeDataset).bg = bgDefault;
                 studio.datasets.(studio.activeDataset).deconfPscKey = deconfPscKey;
+                studio.datasets.(studio.activeDataset).deconfPscDatasetKey = studio.activeDataset;
                 guidata(fig, studio);
                 addLog(sprintf('[Speed] PSC cached (%.0f MB) - reopening SCM will be instant.', deconfBytes/1e6));
             else
@@ -654,6 +651,7 @@ function videoGUICallback(~,~)
     end
 
     data = getActiveData();
+    studio = guidata(fig); % Setup must use the same TR as PSC computation.
 
     addLog(['Opening Video GUI (Dataset: ' studio.activeDataset ')']);
 % DECONF_STD_VIDEO_LAUNCHCFG_V61
@@ -782,17 +780,24 @@ end
 
     Iraw = data.I;
 
-    if isfield(data,'PSC') && ~isempty(data.PSC) && isfield(data,'bg') && ~isempty(data.bg)
+    videoPscKey=[double(baseline.start) double(baseline.end) double(data.TR) size(Iraw,ndims(Iraw)) double(par.interpol)];
+    if isfield(data,'PSC') && ~isempty(data.PSC) && isfield(data,'bg') && ~isempty(data.bg) && ...
+            isfield(data,'deconfPscDatasetKey') && strcmp(data.deconfPscDatasetKey,studio.activeDataset) && ...
+            isfield(data,'deconfPscKey') && isequal(double(data.deconfPscKey(:)).',videoPscKey) && isequal(size(data.PSC),size(Iraw))
         PSCsig = data.PSC;
         bgDefault = data.bg;
     else
-        try
-            proc = computePSC(Iraw, data.TR, par, baseline);
-        catch
-            proc = computePSC(double(Iraw), data.TR, par, baseline);
-        end
+        proc = computePSC(Iraw, data.TR, par, baseline);
         PSCsig = proc.PSC;
         bgDefault = proc.bg;
+        if numel(PSCsig)*4 < 8e8
+            studio=guidata(fig);
+            studio.datasets.(studio.activeDataset).PSC=PSCsig;
+            studio.datasets.(studio.activeDataset).bg=bgDefault;
+            studio.datasets.(studio.activeDataset).deconfPscKey=videoPscKey;
+            studio.datasets.(studio.activeDataset).deconfPscDatasetKey=studio.activeDataset;
+            guidata(fig,studio);
+        end
     end
 
 % -----------------------------------------------------
@@ -1214,6 +1219,11 @@ function data = getActiveData()
 
         setProgramStatus(true);
     end
+    if isfield(studio.datasets,'raw') && isfield(studio.datasets.raw,'I') && ~isempty(studio.datasets.raw.I)
+        [data,timingNotice]=deConfUSIon_signal('timing',data,studio.datasets.raw);
+        studio.datasets.(selected)=data; guidata(fig,studio);
+        if ~isempty(timingNotice), addLog(timingNotice); end
+    end
 end
 
 %% =========================================================
@@ -1592,7 +1602,9 @@ end
 
 function setProgramStatus(isReady)
 
+    if ~isgraphics(fig,'figure'), return; end
     statusState = guidata(fig);
+    if ~isstruct(statusState) || ~isfield(statusState,'statusPanel'), return; end
     statusPanel = statusState.statusPanel;
     statusText = statusState.statusText;
 
@@ -1823,6 +1835,20 @@ end
 
 function cfg = showScmVideoSetupDialog(winTitle, defaultBaseStart, defaultBaseEnd, defaultChoice, studio, I)
 
+    active=studio.datasets.(studio.activeDataset);
+    if studio_is_step_motor_dataset(active,studio), defaultBaseStart=20; defaultBaseEnd=40;
+    elseif ndims(I)==4 && size(I,3)>1, defaultBaseStart=30; defaultBaseEnd=60;
+    else, defaultBaseStart=30; defaultBaseEnd=240; end
+
+    activeTR=double(active.TR);
+    lastSampleSec=(size(I,ndims(I))-1)*activeTR;
+    if defaultBaseStart>=lastSampleSec
+        defaultBaseStart=0;
+        defaultBaseEnd=min(defaultBaseEnd,lastSampleSec);
+    else
+        defaultBaseEnd=min(defaultBaseEnd,lastSampleSec);
+    end
+
     cfg = struct();
     cfg.cancelled = true;
     cfg.baselineStart = defaultBaseStart;
@@ -1968,11 +1994,13 @@ stepMotorUnderlayKind = 'histology';
 
     makeLabel(basePanel,[0.420 0.47 0.19 0.28],'Baseline END (sec)',14,fg);
     edBaseEnd = makeEdit(basePanel,[0.615 0.49 0.13 0.28],num2str(defaultBaseEnd));
+    set(edBaseStart,'Tag','SetupBaselineStart'); set(edBaseEnd,'Tag','SetupBaselineEnd');
+    for entry=[edBaseStart edBaseEnd], setappdata(entry,'PreferredFontSize',18); end
 
     uicontrol('Parent',basePanel,'Style','text', ...
         'Units','normalized', ...
         'Position',[0.770 0.18 0.20 0.62], ...
-        'String',{'Default: 30-240 sec', 'Change only if needed.'}, ...
+        'String',{sprintf('Default: %g-%g sec',defaultBaseStart,defaultBaseEnd), 'Change only if needed.'}, ...
         'BackgroundColor',panel, ...
         'ForegroundColor',yellow, ...
         'FontName','Arial', ...
@@ -2264,6 +2292,7 @@ uicontrol('Parent',filePanel,'Style','text', ...
             'FontSize',10, ...
             'FontWeight','bold', ...
             'HorizontalAlignment','center');
+        setappdata(h,'PreferredFontSize',14);
     end
 
     function onUnderlaySelectionChanged(~,event)
@@ -2472,6 +2501,11 @@ end
 
         if ~isfinite(b1) || b1 <= b0
             setStatus('Baseline END must be larger than START.', orange);
+            return;
+        end
+
+        if b0>=lastSampleSec || b1>lastSampleSec
+            setStatus(sprintf('Available data: 0-%.3g s (TR %.6g s). Choose a baseline within this range.',lastSampleSec,activeTR),orange);
             return;
         end
 
@@ -5482,6 +5516,12 @@ function tf = studio_is_step_motor_dataset(data, studio)
 tf = false;
 try
     if isstruct(data)
+        for probeField={'probeType','probeTypeUserConfirmed'}
+            if isfield(data,probeField{1}) && (ischar(data.(probeField{1})) || isstring(data.(probeField{1}))) && ...
+                    contains(lower(char(data.(probeField{1}))),'motor')
+                tf=true; return;
+            end
+        end
         if isfield(data,'motorInfo') && ~isempty(data.motorInfo)
             tf = true; return;
         end
@@ -5513,6 +5553,12 @@ try
         end
         if isfield(studio,'meta') && isstruct(studio.meta) && isfield(studio.meta,'rawMetadata') && isstruct(studio.meta.rawMetadata)
             R = studio.meta.rawMetadata;
+            for probeField={'probeTypeUserConfirmed','probeTypeAutoDetected'}
+                if isfield(R,probeField{1}) && (ischar(R.(probeField{1})) || isstring(R.(probeField{1}))) && ...
+                        contains(lower(char(R.(probeField{1}))),'motor')
+                    tf=true; return;
+                end
+            end
             if isfield(R,'isStepMotor') && ~isempty(R.isStepMotor) && logical(R.isStepMotor(1))
                 tf = true; return;
             end
