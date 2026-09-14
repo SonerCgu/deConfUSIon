@@ -27,6 +27,7 @@ classdef registration_ccf < handle
         ms1
         ms2
         DataNoScale
+        RegistrationData
 
         scale
         Trot
@@ -219,10 +220,9 @@ classdef registration_ccf < handle
 
 
             % Normalize anatomy overlay and bring it into atlas voxel/orientation space
-            scananatomy.Data = equalizeImages(double(scananatomy.Data));
             tmp = AtlasRegistration('prepare',scananatomy,atlas);
-
-            R.ms2 = mapscan(double(tmp.Data), gray(256), 'fix');
+            R.RegistrationData=single(tmp.Data);
+            R.ms2 = mapscan(equalizeImages(double(tmp.Data)), gray(256), 'fix');
             R.ms2.caxis = [0 1];
 
             R.mapHistology = mapscan(atlas.Histology, gray(256), 'index');
@@ -1095,13 +1095,14 @@ classdef registration_ccf < handle
             try
                 if strcmpi(cfg.target,'histology'), fixed=R.mapHistology.D;
                 else, fixed=R.mapVascular.D; end
-                [M,report]=AtlasRegistration('register',fixed,R.DataNoScale,cfg,previous.M);
+                [M,report]=AtlasRegistration('register',fixed,R.RegistrationData,cfg,previous.M);
                 R.autoUndo=previous;
                 R.installMatrix(M); R.autoReport=report;
                 R.overlayOpacity=.5; set(R.uiOpacity,'Value',.5);
                 R.onAtlasMode(cfg.target); R.refresh();
                 msg=sprintf('Automatic proposal ready (%s): NMI %.3f -> %.3f. Review all planes, then Save reviewed, or Undo auto.', ...
                     report.engine,report.nmiBefore,report.nmiAfter);
+                if ~report.refinementAccepted, msg=[msg ' ' report.refinementNote]; end
                 set(R.uiSaveStatus,'String',msg); R.log(['[Atlas GUI] ' msg]);
                 if strcmpi(cfg.engine,'greedy') && isfield(cfg,'openReview') && cfg.openReview, R.onReviewSnap(); end
             catch ME

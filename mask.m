@@ -1682,6 +1682,9 @@ sliceUnderlayProcessed = anatomical_reference;
 end
         maskEditorInfo.outputFilePrefix = filePrefix;
         maskEditorInfo.underlayMode = S.underlayMode;
+        maskEditorInfo.processedUnderlayRange = [0 1];
+        maskEditorInfo.hasBrainMask = brainHas;
+        maskEditorInfo.hasOverlayMask = overlayHas;
         maskEditorInfo.underlayLabel = UbaseLabel;
         maskEditorInfo.dbLow = S.dbLow;
         maskEditorInfo.dbHigh = S.dbHigh;

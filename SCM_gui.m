@@ -273,6 +273,7 @@ state.singleScmExportBusy = false;
 state.lastSingleScmExportStampSec = -inf;
 state.seriesExportBusy = false;
 state.lastSeriesExportStampSec = -inf;
+state.seriesExportSliceRange = [1 nZ];
 
 roi = struct();
 roi.size = 5;
@@ -602,6 +603,7 @@ btnRoiExport   = mkBtn(pOverlay, 'EXPORT ROIs (TXT)', @exportROIsCB, colBtnExpor
 btnScmExport   = mkBtn(pOverlay, 'EXPORT SCM IMAGE', @exportSCMImageCB, colBtnExport, 13);
 btnTcPng       = mkBtn(pOverlay, 'EXPORT TIME COURSE PNG', @exportTimecoursePngCB, colBtnExport, 13);
 btnScmSeries   = mkBtn(pOverlay, 'EXPORT PPT', @exportScmSeries1minCB, colBtnExport, 12);
+set(btnScmSeries, 'TooltipString', 'Export SCM time windows to PowerPoint and images. Choose the first and last slice in the export dialog.');
 btnGroupBundle = mkBtn(pOverlay, 'EXPORT SCM BUNDLE', @exportForGroupAnalysisCB, colBtnPrimary, 12);
 btnOpenGroupBundle = mkBtn(pOverlay, 'OPEN GROUP BUNDLE', @openGroupBundleCB, colBtnPrimary, 12);
 btnUnfreeze    = mkBtn(pOverlay, 'UNFREEZE HOVER', @unfreezeHover, colBtnNeutral, 12);
@@ -612,7 +614,8 @@ popUnder = mkPopup(pUnderlay, { ...
     '1) Legacy (mat2gray)', ...
     '2) Robust clip (1..99%)', ...
     '3) VideoGUI robust (0.5..99.5%)', ...
-    '4) Vessel enhance (conectSize/Lev)'}, uState.mode, @underlayModeChanged);
+    '4) Vessel enhance (conectSize/Lev)', ...
+    '5) Saved appearance (0..1)'}, uState.mode, @underlayModeChanged);
 lblBri = mkLbl(pUnderlay, 'Underlay brightness');
 slBri = mkSlider(pUnderlay, -0.80, 0.80, uState.brightness, @underlaySliderChanged);
 txtBri = mkValBox(pUnderlay, sprintf('%.2f', uState.brightness));
@@ -664,6 +667,10 @@ btnTcXAll = uicontrol(tcAxisBar, 'Style', 'pushbutton', 'String', 'X = ALL', ...
 btnCompute = uicontrol(fig, 'Style', 'pushbutton', 'String', 'Compute SCM', ...
     'Units', 'pixels', 'Callback', @computeSCM, 'BackgroundColor', colBtnPrimary, ...
     'ForegroundColor', 'w', 'FontSize', 15, 'FontWeight', 'bold');
+btnAutomatic = uicontrol(fig,'Style','pushbutton','String','Automatic analysis', ...
+    'Units','pixels','Callback',@automaticAnalysisCB,'BackgroundColor',[.23 .42 .30], ...
+    'ForegroundColor','w','FontSize',12,'FontWeight','bold', ...
+    'TooltipString','Run a saved fixed-ROI protocol (JSON); coordinates must match the current anatomy.');
 btnMaskQuick = uicontrol(fig, 'Style', 'pushbutton', 'String', 'LOAD MASK', ...
     'Units', 'pixels', 'Callback', @loadMaskCB, 'BackgroundColor', colBtnNeutral, ...
     'ForegroundColor', 'w', 'FontSize', 15, 'FontWeight', 'bold');
@@ -767,7 +774,9 @@ function layoutUI()
     panelY = buttonsTop + 14;
     panelH = max(320, Hh - panelY - topM);
     set(controlsPanel, 'Position', [panelX panelY panelW panelH]);
-    set(btnCompute,   'Position', [panelX yComp panelW btnH]);
+    computeW=floor((panelW-10)/2);
+    set(btnCompute, 'Position', [panelX yComp computeW btnH],'FontSize',12);
+    set(btnAutomatic,'Position',[panelX+computeW+10 yComp panelW-computeW-10 btnH]);
     set(btnMaskQuick, 'Position', [panelX yMask panelW btnH]);
     set(btnOpenVid,   'Position', [panelX yOpen panelW btnH]);
     halfW = floor((panelW - 14) / 2);
@@ -1076,6 +1085,7 @@ function renderPendingHover(~,~)
 end
 
 function disposeHoverTimer(~,~)
+    closeCandidateReviews();
     if ~isempty(hoverTimer) && isvalid(hoverTimer)
         stop(hoverTimer); delete(hoverTimer);
     end
@@ -1337,8 +1347,8 @@ function updateSliceIndicators()
 end
 
 function updateInfoLines()
-    modeNames = {'Legacy','Robust(1..99)','VideoGUI(0.5..99.5)','Vessel enhance'};
-    m = uState.mode; if m < 1 || m > 4, m = 3; end
+    modeNames = {'Legacy','Robust(1..99)','VideoGUI(0.5..99.5)','Vessel enhance','Saved appearance'};
+    m = uState.mode; if m < 1 || m > numel(modeNames), m = 3; end
     atlasTxt = '';
     if state.isAtlasWarped, atlasTxt = ' | ATLAS'; end
     set(info1, 'String', sprintf('TR = %.4gs | Slice %d/%d | Underlay: %s%s', TR, state.z, nZ, modeNames{m}, atlasTxt));
@@ -1374,6 +1384,10 @@ try
         [~,~,ext] = fileparts(fullf); ext = lower(ext);
         if strcmp(ext, '.mat')
             B = readScmBundleFile(fullf);
+            if isfield(B,'isMaskEditor') && B.isMaskEditor
+                applyMaskEditorBundleLocal(B, fullf);
+                return;
+            end
             if ~isempty(B.overlayMask)
                 passedMask = fitBundleMaskToCurrentScm(B.overlayMask);
                 passedMaskIsInclude = B.overlayMaskIsInclude;
@@ -1418,6 +1432,59 @@ end
 end
 
 
+function applyMaskEditorBundleLocal(B, fullf)
+    % Validate the entire bundle before changing the viewer. A grayscale
+    % three-slice export must never be mistaken for a single RGB image.
+    expected = [nY nX nZ];
+    U = B.image;
+    if ndims(U) > 3 || ~isequal([size(U,1) size(U,2) size(U,3)], expected)
+        error('SCM:MaskEditorDimensions', ...
+            'Mask Editor underlay size %s does not match SCM [Y X Z] = %s. Load a bundle in the current SCM space.', ...
+            mat2str(size(U)), mat2str(expected));
+    end
+    names = {'brainMask','overlayMask'};
+    for k = 1:numel(names)
+        M = B.(names{k});
+        if ~isempty(M) && (ndims(M) > 3 || ...
+                ~isequal([size(M,1) size(M,2) size(M,3)], expected))
+            error('SCM:MaskEditorDimensions','Saved %s does not match the SCM slices.',names{k});
+        end
+    end
+    if ~isempty(B.brainMask)
+        % NaN records excluded pixels independently of black in-brain pixels.
+        % The renderer keeps this boundary black even after slider changes.
+        U(~B.brainMask) = NaN;
+    end
+    bg = U;
+    applyUnderlayMeta(defaultUnderlayMeta(), bg);
+    state.isColorUnderlay = false;
+    if ~isempty(B.includeMask)
+        passedMask = B.includeMask;
+        passedMaskIsInclude = true;
+    end
+    applyRecommendedUnderlayDisplayForModeLocal('normal');
+    if B.isProcessed
+        uState.mode = 5;
+        uState.brightness = 0;
+        uState.contrast = 1;
+        uState.gamma = 1;
+        set(popUnder,'Value',5);
+        set(slBri,'Value',0); set(txtBri,'String','0.00');
+        set(slCon,'Value',1); set(txtCon,'String','1.00');
+        set(slGam,'Value',1); set(txtGam,'String','1.00');
+        updateUnderlayControlsEnable();
+    end
+    if ~state.isAtlasWarped
+        origBG = bg;
+        origPassedMask = passedMask;
+    end
+    mask2D = getMaskForCurrentSlice();
+    set(hBG,'CData',renderUnderlayRGB(getBg2DForSlice(state.z)));
+    computeSCM();
+    set(info1,'String',['Loaded Mask Editor underlay and masks: ' shortenPath(fullf,65)], ...
+        'TooltipString',fullf);
+end
+
 function loadNewUnderlayCB(~,~)
     ensureUnderlayStateFields();
     startPath = getUnderlayStartPathFast();
@@ -1429,6 +1496,10 @@ function loadNewUnderlayCB(~,~)
     fullf = fullfile(p,f);
     try
         [Uraw, meta] = readUnderlayFile(fullf);
+        if isfield(meta,'maskEditorBundle')
+            applyMaskEditorBundleLocal(meta.maskEditorBundle, fullf);
+            return;
+        end
         Uraw = squeeze(Uraw);
         if isempty(Uraw) || ~(isnumeric(Uraw) || islogical(Uraw))
             error('Selected underlay is empty or not numeric/RGB: %s', fullf);
@@ -1931,6 +2002,8 @@ function setTitleAtlas(T)
 end
 
 function resetRoisAndRefreshAfterDataChange()
+    closeCandidateReviews();
+    setappdata(fig,'AutomaticROISelections',{});
     state.baseKey=[]; state.signalKey=[];
     refreshDimsAfterPSCChange();
     ROI_byZ = cell(1, nZ);
@@ -2056,6 +2129,151 @@ end
 %% ==========================================================
 % EXPORTS
 %% ==========================================================
+function automaticAnalysisCB(~,~)
+    choice=questdlg('Find and review peak ROIs (current or all slices), or load a fixed protocol?', ...
+        'Automatic analysis','Find and review ROI','Load fixed protocol','Cancel','Find and review ROI');
+    if strcmp(choice,'Find and review ROI'), automaticPeakROI(); return; end
+    if ~strcmp(choice,'Load fixed protocol'), return; end
+    [name,folder]=uigetfile('*.json','Select a prespecified Automatic SCM protocol');
+    if isequal(name,0), return; end
+    set(btnAutomatic,'Enable','off');
+    guard=onCleanup(@()set(btnAutomatic,'Enable','on')); %#ok<NASGU>
+    try
+        P=getSimpleExportPaths();
+        result=AutomaticSCM(PSC,TR,fullfile(folder,name),fullfile(P.roiDir,'Automatic'),fileLabel);
+        msgbox(sprintf(['Fixed target/control ROI traces exported to:\n%s\n\n' ...
+            'Protocol coordinates must have been chosen independently of this response, on the matching anatomy. ' ...
+            'Display alpha and color range do not affect these measurements.'],result.outputFolder), ...
+            'Automatic analysis complete');
+    catch ME
+        errordlg(ME.message,'Automatic analysis');
+    end
+end
+
+function automaticPeakROI()
+    [s0,s1]=parseRangeSafe(getStr(ebSig),360,540);
+    if isVolMode, s0=(s0-1)*TR; s1=(s1-1)*TR; end
+    f=figure('Name','Find and review peak ROI','NumberTitle','off','MenuBar','none','ToolBar','none', ...
+        'Color',[.07 .08 .10],'Position',[200 150 690 470],'WindowStyle','modal');
+    setappdata(f,'deConfUSIonNoMaximize',true);
+    uicontrol(f,'Style','text','Units','normalized','Position',[.05 .78 .9 .17], ...
+        'String',sprintf('%d slice(s) | Highest mean PSC in a complete square ROI\nSize is side length in pixels: 4 means 4 x 4 pixels.',nZ), ...
+        'BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',12);
+    uicontrol(f,'Style','text','Units','normalized','Position',[.05 .61 .4 .1], ...
+        'String','ROI size (4, 8, 15, 25, 50 or custom)','BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',11);
+    eSize=uicontrol(f,'Style','edit','Units','normalized','Position',[.51 .63 .4 .1], ...
+        'String',num2str(roi.size),'FontSize',13,'BackgroundColor',[.14 .17 .2],'ForegroundColor','w');
+    uicontrol(f,'Style','text','Units','normalized','Position',[.05 .43 .4 .1], ...
+        'String','Signal interval (minutes: start end)','BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',11);
+    eTime=uicontrol(f,'Style','edit','Units','normalized','Position',[.51 .45 .4 .1], ...
+        'String',sprintf('%.12g %.12g',s0/60,s1/60),'FontSize',13,'BackgroundColor',[.14 .17 .2],'ForegroundColor','w');
+    cbAll=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.05 .34 .9 .07], ...
+        'String','Search all slices (one candidate per eligible slice)','Value',double(nZ>1), ...
+        'BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',12);
+    if nZ==1, set(cbAll,'Enable','off'); end
+    cbClean=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.05 .26 .9 .07], ...
+        'String','Positive display: range 0-30%, alpha modulation 5-10%','Value',1, ...
+        'BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',12);
+    uicontrol(f,'Style','text','Units','normalized','Position',[.05 .17 .9 .08], ...
+        'String','Baseline and masks are retained. Display preset does not change measurements. Review candidates before export.', ...
+        'BackgroundColor',[.07 .08 .10],'ForegroundColor',[.9 .8 .45],'FontSize',11);
+    accepted=false;
+    uicontrol(f,'Style','pushbutton','Units','normalized','Position',[.05 .05 .57 .12], ...
+        'String','Find and mark ROI','BackgroundColor',[.12 .48 .32],'ForegroundColor','w','FontSize',13,'Callback',@accept);
+    uicontrol(f,'Style','pushbutton','Units','normalized','Position',[.67 .05 .28 .12], ...
+        'String','Cancel','BackgroundColor',[.55 .16 .21],'ForegroundColor','w','FontSize',13,'Callback',@(~,~)delete(f));
+    uiwait(f); if ~isgraphics(f), return; end
+    n=str2double(get(eSize,'String')); interval=sscanf(get(eTime,'String'),'%f')';
+    searchAll=logical(get(cbAll,'Value')); cleanDisplay=logical(get(cbClean,'Value')); delete(f);
+    if ~accepted, return; end
+    set(btnAutomatic,'Enable','off'); guard=onCleanup(@()set(btnAutomatic,'Enable','on')); %#ok<NASGU>
+    setappdata(fig,'StudioActionBusy',true); busyGuard=onCleanup(@()setappdata(fig,'StudioActionBusy',false)); %#ok<NASGU>
+    try
+        [b0,b1]=selectedBaselineFrames();
+        cfg=struct('size',n,'slice',state.z,'baselineSec',tsec([b0 b1]),'signalSec',60*interval);
+        slices=state.z; if searchAll, slices=1:nZ; end
+        candidates={}; skipped=[];
+        progress=deConfUSIon_ui('progress','Searching ROI candidates',numel(slices)>1);
+        pg=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
+        for si=1:numel(slices)
+            cfg.slice=slices(si);
+            deConfUSIon_ui('progressupdate',progress,(si-1)/numel(slices),sprintf('Searching slice %d of %d',si,numel(slices)));
+            try
+                candidate=AutomaticSCM('search',PSC,TR,cfg,getMaskForSlice(cfg.slice));
+                candidates{end+1}=candidate; %#ok<AGROW>
+            catch ME_slice
+                if strcmp(ME_slice.identifier,'deConfUSIon:SearchCoverage'), skipped(end+1)=cfg.slice; %#ok<AGROW>
+                else, rethrow(ME_slice); end
+            end
+        end
+        clear pg;
+        if isempty(candidates), error('deConfUSIon:SearchCoverage','No complete ROI fits within the mask and valid samples on the selected slices.'); end
+        % Publish marks only after the search completes. Cancellation leaves
+        % existing ROIs and display untouched.
+        audit=getappdata(fig,'AutomaticROISelections'); if isempty(audit), audit={}; end
+        for ci=1:numel(candidates)
+            candidate=candidates{ci}; bounds=candidate.boundsXY; id=roi.nextId; zz=candidate.slice;
+            ROI_byZ{zz}(end+1)=struct('id',id,'x1',bounds(1),'x2',bounds(2),'y1',bounds(3),'y2',bounds(4),'color',[1 .8 .1]);
+            roi.nextId=id+1; candidate.roiId=id; candidate.source=fileLabel;
+            candidate.displayPresetApplied=cleanDisplay;
+            audit{end+1}=candidate; candidates{ci}=candidate; %#ok<AGROW>
+        end
+        setappdata(fig,'AutomaticROISelections',audit);
+        setappdata(fig,'AutomaticROISearchSummary',struct('searchedSlices',slices,'skippedSlices',skipped, ...
+            'candidateSlices',cellfun(@(c)c.slice,candidates)));
+        if isVolMode, shown=60*interval/TR+1; else, shown=60*interval; end
+        set(ebSig,'String',sprintf('%.9g-%.9g',shown));
+        if cleanDisplay
+            set(ebCax,'String','0 30'); set(popSignMode,'Value',1);
+            set(cbAlphaMod,'Value',1); set(ebModMin,'String','5'); set(ebModMax,'String','10');
+            set(slAlpha,'Value',get(slAlpha,'Max')); alphaModToggled([],[]);
+        end
+        [~,order]=sort(cellfun(@(c)c.meanPSC,candidates),'descend'); candidates=candidates(order);
+        candidate=candidates{1}; id=candidate.roiId;
+        if nZ>1, set(slZ,'Value',nZ-candidate.slice+1); sliceChanged([],[]); end
+        roi.isFrozen=true;
+        computeSCM([],[]); redrawROIsForCurrentSlice();
+        set(hRoiCoordTxt,'Visible','on','String',sprintf('Peak ROI %d | %dx%d px | mean %.3g%% | %d baseline / %d signal frames | review before export',id,n,n,candidate.meanPSC,numel(candidate.baselineFrames),numel(candidate.signalFrames)));
+        if numel(slices)>1, showCandidateReview(candidates,skipped); end
+    catch ME
+        if ~strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'), errordlg(ME.message,'ROI search'); end
+    end
+    function accept(~,~), accepted=true; uiresume(f); end
+end
+
+function showCandidateReview(candidates,skipped)
+    closeCandidateReviews();
+    review=figure('Name',['Automatic ROI candidates | ' fileLabel],'Tag','AutomaticROICandidateReview', ...
+        'NumberTitle','off','MenuBar','none','ToolBar','none','Color',[.07 .08 .10],'Position',[250 180 740 500]);
+    setappdata(review,'deConfUSIonNoMaximize',true);
+    setappdata(review,'SCMOwner',fig);
+    description=sprintf('%d candidates found. Select a row to review that slice in SCM.\nRanked by mean PSC; these are exploratory maxima, not confirmed responses.',numel(candidates));
+    if ~isempty(skipped), description=sprintf('%s\nNo complete valid ROI on slices: %s',description,num2str(skipped)); end
+    uicontrol(review,'Style','text','Units','normalized','Position',[.04 .77 .92 .19], ...
+        'String',description,'BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',12);
+    rows=zeros(numel(candidates),5);
+    for ci=1:numel(candidates)
+        c=candidates{ci}; rows(ci,:)=[c.slice c.roiId c.meanPSC mean(c.boundsXY(1:2)) mean(c.boundsXY(3:4))];
+    end
+    uitable(review,'Units','normalized','Position',[.04 .16 .92 .60],'Data',rows, ...
+        'ColumnName',{'Slice','ROI','Mean PSC (%)','Center X','Center Y'},'ColumnEditable',false(1,5), ...
+        'ColumnWidth',{75 75 140 120 120},'FontSize',12,'CellSelectionCallback',@reviewSlice);
+    uicontrol(review,'Style','pushbutton','Units','normalized','Position',[.65 .04 .31 .08], ...
+        'String','Close','BackgroundColor',[.55 .16 .21],'ForegroundColor','w','FontSize',12,'Callback',@(~,~)delete(review));
+    function reviewSlice(~,event)
+        if isempty(event.Indices)||~isgraphics(fig), return; end
+        c=candidates{event.Indices(1,1)};
+        set(slZ,'Value',nZ-c.slice+1); sliceChanged([],[]); roi.isFrozen=true;
+    end
+end
+
+function closeCandidateReviews()
+    reviews=findall(0,'Tag','AutomaticROICandidateReview');
+    for r=reshape(reviews,1,[])
+        if isequal(getappdata(r,'SCMOwner'),fig), delete(r); end
+    end
+end
+
 function exportROIsCB(~,~)
     if roi.exportBusy, return; end
     tNowSec = now * 86400;
@@ -2107,6 +2325,12 @@ function exportROIsCB(~,~)
             fprintf(fid, '# ROI_LABEL: %s\n', labelTag);
             fprintf(fid, '# ROI_D_INDEX: %d\n', dIdx);
             fprintf(fid, '# ROI_MARKER_ID: %d\n', r.id);
+            audit=getappdata(fig,'AutomaticROISelections');
+            for ai=1:numel(audit)
+                if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
+                    fprintf(fid,'# AutomaticROISelection: %s\n',jsonencode(audit{ai}));
+                end
+            end
             fprintf(fid, '# SLICE: %d\n', r.z);
             fprintf(fid, '# BaselineWindow: %s\n', getStr(ebBase));
             fprintf(fid, '# PSC_REBASED: 1\n');
@@ -2176,15 +2400,20 @@ function exportSCMImageCB(~,~)
         if isgraphics(tf), close(tf); end
         tf = [];
 
+        % Retain the slide-ready PNG as a usable fallback, including when the
+        % Report Generator toolbox is absent or the PPT writer fails.
+        slidePng = fullfile(outDir, [baseName '_slide.png']);
+        renderSingleScmSlidePNG(slidePng, outPng, fileLabel, state.z, nZ, state.cax, colormap(ax));
         pptPath = '';
+        pptProblem = '';
         if canUsePptApi()
-            slidePng = fullfile(outDir, [baseName '_slide.png']);
-            renderSingleScmSlidePNG(slidePng, outPng, fileLabel, state.z, nZ, state.cax, colormap(ax));
-            pptPath = chooseShortSinglePptPath(outDir, fileLabel, stamp);
-            writePptFromSlidePNGs(pptPath, {slidePng});
             try
-                if exist(slidePng, 'file') == 2, delete(slidePng); end
-            catch
+                pptPath = chooseShortSinglePptPath(outDir, fileLabel, stamp);
+                writePptFromSlidePNGs(pptPath, {slidePng});
+            catch MEppt
+                pptPath = '';
+                pptProblem = MEppt.message;
+                warning('SCM:PptExportFailed','SCM images were saved, but PowerPoint export failed: %s', pptProblem);
             end
         end
 
@@ -2193,10 +2422,15 @@ function exportSCMImageCB(~,~)
         else
             set(info1,'String',sprintf('Saved SCM: %s (png/tif/jpg)', shortenPath(outDir,85)), 'TooltipString', outDir);
         end
+        if ~isempty(pptProblem)
+            set(info1,'String',sprintf('Images saved; PPT failed. %s', shortenPath(outDir,85)), ...
+                'TooltipString', sprintf('%s\n%s',outDir,pptProblem));
+            warndlg(sprintf('SCM images and the slide PNG were saved to:\n%s\n\nPowerPoint export failed:\n%s', ...
+                outDir,pptProblem), 'SCM images saved');
+        end
 
     catch ME
         try, if ~isempty(tf) && isgraphics(tf), close(tf); end, catch, end
-        try, if ~isempty(slidePng) && exist(slidePng,'file') == 2, delete(slidePng); end, catch, end
         errordlg(ME.message, 'Export SCM Image failed');
     end
 end
@@ -2260,18 +2494,34 @@ function exportScmSeries1minCB(~,~)
     SAVE_JPG = true;
 
     figT = [];
-    tmpSLD = '';
+    slideDir = '';
+    outDir = '';
     slidePNGs = {};
     slideSpecs = {};
 
     try
-        a = inputdlg({ ...
+        prompts = { ...
             'Injection start (sec). Empty if unknown:', ...
             'Window length (sec) (default 60):', ...
             'Max minutes to export (empty=all):', ...
-            'Export PPT too? (1=yes,0=no) (default 1):'}, ...
-            'Export SCM series', 1, {'', '60', '', '1'});
-        if isempty(a), return; end
+            'Export PPT too? (1=yes,0=no) (default 1):', ...
+            sprintf('First slice to export (1-%d):', nZ), ...
+            sprintf('Last slice to export (1-%d, inclusive):', nZ)};
+        defaults = {'', '60', '', '1', ...
+            num2str(state.seriesExportSliceRange(1)), num2str(state.seriesExportSliceRange(2))};
+        while true
+            a = inputdlg(prompts, 'Export SCM series', 1, defaults);
+            if isempty(a), return; end
+            try
+                exportSlices = scmExportSliceRange(a{5}, a{6}, nZ);
+                break;
+            catch ME
+                if ~strcmp(ME.identifier, 'SCM:ExportSliceRange'), rethrow(ME); end
+                uiwait(errordlg(ME.message, 'Choose slices to export', 'modal'));
+                defaults = a; % Keep all entered settings while correcting the range.
+            end
+        end
+        state.seriesExportSliceRange = exportSlices([1 end]);
 
         injSec = str2double(strtrim(a{1}));
         if ~isfinite(injSec), injSec = NaN; end
@@ -2301,8 +2551,10 @@ function exportScmSeries1minCB(~,~)
         safeMkdirIfNeeded(dirTIF);
         safeMkdirIfNeeded(dirJPG);
 
-        tmpSLD = fullfile(outDir, '_tmp_slide_pngs');
-        safeMkdirIfNeeded(tmpSLD);
+        % These are deliverables, not scratch files: they remain useful if
+        % PPT export fails and can be inserted directly into PowerPoint.
+        slideDir = fullfile(outDir, 'slides_png');
+        safeMkdirIfNeeded(slideDir);
 
         try
             set(info1, 'String', {'Saving to:', shortenPath(outDir,120), 'Tip: hover here to see full path'});
@@ -2387,7 +2639,8 @@ drawnow;
 
         nSavedTotal = 0;
 
-        for zSel = 1:nZ
+        % Keep source slice numbers in filenames and labels, even for a subset.
+        for zSel = exportSlices
             PSCz = getPSCForSlice(zSel);
             baseMap = deConfUSIon_signal('mean',PSCz(:,:,b0i:b1i),3);
             maskLocal = getMaskForSlice(zSel);
@@ -2453,8 +2706,8 @@ drawnow;
                 tileLBL{end+1} = lbl; %#ok<AGROW>
 
                 try
-                    set(info1, 'String', sprintf('Exporting tiles... slice %d/%d | %d total | %s', ...
-                        zSel, nZ, nSavedTotal, shortenPath(outDir,55)));
+                    set(info1, 'String', sprintf('Exporting slices %d-%d: slice %d/%d | %d tiles | %s', ...
+                        exportSlices(1), exportSlices(end), zSel, nZ, nSavedTotal, shortenPath(outDir,55)));
                     set(info1, 'TooltipString', outDir);
                     drawnow limitrate;
                 catch
@@ -2478,7 +2731,7 @@ drawnow;
                     tStr = shortTitle;
                 end
 
-                outSlide = fullfile(tmpSLD, sprintf('slide_z%02d_%02d.png', zSel, si));
+                outSlide = fullfile(slideDir, sprintf('slide_z%02d_%02d.png', zSel, si));
                 renderSlideMontagePNG(outSlide, tilePNG(idx), tileLBL(idx), cm, caxV, tStr, footerInfo, EXPORT_DPI_SLIDES);
                 if exist(outSlide, 'file') ~= 2
                     error('Failed to create slide PNG: %s', outSlide);
@@ -2520,33 +2773,36 @@ drawnow;
                 catch MEppt
                     warning('[SCM SERIES] PPT creation failed: %s', MEppt.message);
                     pptPath = '';
-                    pptMsg = ['PNGs only (PPT failed: ' MEppt.message ')'];
+                    pptMsg = ['Images saved; PPT failed: ' MEppt.message];
                 end
             else
-                pptMsg = 'PNGs only (PowerPoint API unavailable)';
+                pptMsg = 'Images + slide PNGs (PowerPoint API unavailable)';
             end
         else
-            pptMsg = 'PNGs only';
+            pptMsg = 'Images + slide PNGs';
         end
 
-        try
-            if exist(tmpSLD, 'dir') == 7, rmdir(tmpSLD, 's'); end
-        catch
-        end
-
-        if isempty(pptPath)
+        if doPPT && isempty(pptPath)
+            set(info1, 'String', ['Images saved; no PPT. ' shortenPath(outDir,85)], ...
+                'TooltipString', sprintf('%s\n%s\nSlide PNGs: %s',outDir,pptMsg,slideDir));
+        elseif isempty(pptPath)
             set(info1, 'String', ['DONE. Saved: ' shortenPath(outDir,80) '  (' pptMsg ')'], 'TooltipString', outDir);
         else
             set(info1, 'String', ['DONE. Saved: ' shortenPath(outDir,80) '  (PPT + PNGs)'], 'TooltipString', outDir);
         end
 
-        fprintf('[SCM SERIES] DONE. Folder: %s\n', outDir);
+        fprintf('[SCM SERIES] DONE. Slices %d-%d of %d. Folder: %s\n', ...
+            exportSlices(1), exportSlices(end), nZ, outDir);
         if ~isempty(pptPath), fprintf('[SCM SERIES] PPT: %s\n', pptPath); end
 
     catch ME
         try, if ~isempty(figT) && isgraphics(figT), close(figT); end, catch, end
-        try, if ~isempty(tmpSLD) && exist(tmpSLD,'dir') == 7, rmdir(tmpSLD,'s'); end, catch, end
-        errordlg(ME.message, 'Export SCM series failed');
+        detail = ME.message;
+        if ~isempty(outDir) && exist(outDir,'dir') == 7
+            detail = sprintf('%s\n\nCompleted images are retained in:\n%s',detail,outDir);
+            set(info1,'String',['Export stopped. Completed files: ' shortenPath(outDir,85)], 'TooltipString',detail);
+        end
+        errordlg(detail, 'Export SCM series failed');
     end
 end
 
@@ -2669,21 +2925,18 @@ function writePptFromSlidePNGs(pptPath, slidePNGs)
     pptDir = fileparts(pptPath);
     safeMkdirIfNeeded(pptDir);
     if exist(pptPath, 'file') == 2
-        try
-            delete(pptPath);
-        catch
-            error('Could not overwrite existing PPT file: %s', pptPath);
-        end
+        error('SCM:PptExists','The PowerPoint file already exists. Export again to create a new file: %s', pptPath);
     end
+    stagedPath = [tempname(pptDir) '.pptx'];
+    stagedGuard = onCleanup(@()deleteStagedPptLocal(stagedPath)); %#ok<NASGU>
     ppt = [];
     try
-        ppt = Presentation(pptPath);
+        ppt = Presentation(stagedPath);
         open(ppt);
         for i = 1:numel(slidePNGs)
             imgFile = slidePNGs{i};
             if exist(imgFile, 'file') ~= 2
-                warning('Slide image missing, skipping: %s', imgFile);
-                continue;
+                error('SCM:PptImageMissing','Slide image is missing: %s', imgFile);
             end
             try
                 slide = add(ppt, 'Blank');
@@ -2698,17 +2951,10 @@ function writePptFromSlidePNGs(pptPath, slidePNGs)
             add(slide, pic);
         end
         close(ppt);
+        scmPublishPpt(stagedPath, pptPath, numel(slidePNGs));
     catch ME
         try, if ~isempty(ppt), close(ppt); end, catch, end
         error('PowerPoint export failed: %s', ME.message);
-    end
-    pause(0.3);
-    if exist(pptPath, 'file') ~= 2
-        error('PowerPoint file was not created: %s', pptPath);
-    end
-    dpp = dir(pptPath);
-    if isempty(dpp) || dpp.bytes <= 0
-        error('PowerPoint file exists but is empty or corrupt: %s', pptPath);
     end
 end
 
@@ -2720,12 +2966,10 @@ function writePptFromSlidePNGsWithEditableTiles(pptPath, slidePNGs, slideSpecs)
     pptDir = fileparts(pptPath);
     safeMkdirIfNeeded(pptDir);
     if exist(pptPath, 'file') == 2
-        try
-            delete(pptPath);
-        catch
-            error('Could not overwrite existing PPT file: %s', pptPath);
-        end
+        error('SCM:PptExists','The PowerPoint file already exists. Export again to create a new file: %s', pptPath);
     end
+    stagedPath = [tempname(pptDir) '.pptx'];
+    stagedGuard = onCleanup(@()deleteStagedPptLocal(stagedPath)); %#ok<NASGU>
 
     slideW = 13.333;
     slideH = 7.5;
@@ -2738,13 +2982,12 @@ function writePptFromSlidePNGsWithEditableTiles(pptPath, slidePNGs, slideSpecs)
 
     ppt = [];
     try
-        ppt = Presentation(pptPath);
+        ppt = Presentation(stagedPath);
         open(ppt);
         for i = 1:numel(slidePNGs)
             bgFile = slidePNGs{i};
             if exist(bgFile, 'file') ~= 2
-                warning('Slide background missing, skipping: %s', bgFile);
-                continue;
+                error('SCM:PptImageMissing','Slide background is missing: %s', bgFile);
             end
             try
                 slide = add(ppt, 'Blank');
@@ -2764,7 +3007,9 @@ function writePptFromSlidePNGsWithEditableTiles(pptPath, slidePNGs, slideSpecs)
                 nThis = min(6, numel(pngList));
                 for k = 1:nThis
                     imgFile = pngList{k};
-                    if exist(imgFile, 'file') ~= 2, continue; end
+                    if exist(imgFile, 'file') ~= 2
+                        error('SCM:PptImageMissing','SCM tile image is missing: %s', imgFile);
+                    end
                     if k <= 3
                         cc = k - 1;
                         yNorm = yBot + cellH + rowGap;
@@ -2787,17 +3032,18 @@ function writePptFromSlidePNGsWithEditableTiles(pptPath, slidePNGs, slideSpecs)
             end
         end
         close(ppt);
+        scmPublishPpt(stagedPath, pptPath, numel(slidePNGs));
     catch ME
         try, if ~isempty(ppt), close(ppt); end, catch, end
         error('PowerPoint export failed: %s', ME.message);
     end
-    pause(0.3);
-    if exist(pptPath, 'file') ~= 2
-        error('PowerPoint file was not created: %s', pptPath);
-    end
-    dpp = dir(pptPath);
-    if isempty(dpp) || dpp.bytes <= 0
-        error('PowerPoint file exists but is empty or corrupt: %s', pptPath);
+end
+
+function deleteStagedPptLocal(stagedPath)
+    % Only the writer's private staging file is disposable. Exported images
+    % and any previously published deck must survive a failed export.
+    if exist(stagedPath,'file') == 2
+        try, delete(stagedPath); catch, end
     end
 end
 
@@ -4802,13 +5048,16 @@ function rgb = renderUnderlayRGB(Uin)
     ensureUnderlayStateFields();
     if state.isColorUnderlay
         rgb = convertUnderlayToColorRGB(Uin);
+    elseif uState.mode == 5
+        rgb = repmat(processUnderlay(Uin),[1 1 3]);
     else
         rgb = toRGB(processUnderlay(Uin));
     end
 end
 
 function U = processUnderlay(Uin)
-    U = double(Uin); U(~isfinite(U)) = 0;
+    excluded = ~isfinite(Uin);
+    U = double(Uin); U(excluded) = 0;
     switch uState.mode
         case 1
             U = mat2gray_safe(U);
@@ -4820,6 +5069,9 @@ function U = processUnderlay(Uin)
             U = clip01_percentile(U, 0.5, 99.5);
             U = vesselEnhanceStrong(U, uState.conectSize, uState.conectLev);
             U = clip01_percentile(U, 0.5, 99.5);
+        case 5
+            % Mask Editor already applied its scaling, tone and enhancement.
+            U = min(max(U,0),1);
         otherwise
             U = mat2gray_safe(U);
     end
@@ -4827,6 +5079,7 @@ function U = processUnderlay(Uin)
     U = min(max(U,0),1);
     g = uState.gamma; if ~isfinite(g) || g <= 0, g = 1; end
     U = min(max(U.^g,0),1);
+    U(excluded) = 0; % Brightness/enhancement must not reveal excluded tissue.
 end
 
 function U = vesselEnhanceStrong(U01, conectSizePx, conectLev_0_MAX)
@@ -5142,6 +5395,12 @@ end
 
 function [U, meta] = extractUnderlayFromMatStruct(S)
     meta = defaultUnderlayMeta();
+    B = scmReadMaskEditorBundle(S);
+    if ~isempty(B)
+        U = B.image;
+        meta.maskEditorBundle = B;
+        return;
+    end
     if isfield(S,'atlasMode') && ~isempty(S.atlasMode)
         try, meta.atlasMode = char(S.atlasMode); catch, meta.atlasMode = ''; end
     end
@@ -5245,6 +5504,10 @@ end
 
 function applyUnderlayMeta(meta, U)
     ensureUnderlayStateFields();
+    if uState.mode == 5
+        % Saved-appearance scaling belongs to the loaded processed image.
+        applyRecommendedUnderlayDisplayForModeLocal('normal');
+    end
     state.isColorUnderlay = false; state.regionLabelUnderlay = []; state.regionColorLUT = []; state.regionInfo = struct();
     explicitRegionMode = false;
     if nargin >= 1 && isstruct(meta)
@@ -5279,6 +5542,8 @@ end
 function B = readScmBundleFile(fullf)
     if ~exist(fullf,'file'), error('File not found: %s', fullf); end
     S = load(fullf);
+    B = scmReadMaskEditorBundle(S);
+    if ~isempty(B), return; end
     if isfield(S,'maskBundle') && isstruct(S.maskBundle) && ~isempty(S.maskBundle), R = S.maskBundle; else, R = S; end
     B = struct('brainImage',[],'overlayMask',[],'brainMask',[],'overlayMaskIsInclude',true,'brainMaskIsInclude',true,'loadedField','','source',fullf);
     overlayFields = {'loadedMask','overlayMask','signalMask','overlay','overlay_mask','signal_mask','mask','activeMask'};

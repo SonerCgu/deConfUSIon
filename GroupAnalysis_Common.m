@@ -25,8 +25,10 @@ try
         [varargout{1:nargout}] = fh(varargin{:});
     end
 catch ME
-    try, GA_printErrorLocal(ME,'caught error in GroupAnalysis_Common.m'); catch, end
-    ga_print_module_error_local(ME, actionIn, fnLocal, 'GroupAnalysis_Common');
+    if ~any(strcmp(ME.identifier,{'GroupAnalysis:MetricWindow','GroupAnalysis:MetricCoverage'}))
+        try, GA_printErrorLocal(ME,'caught error in GroupAnalysis_Common.m'); catch, end
+        ga_print_module_error_local(ME, actionIn, fnLocal, 'GroupAnalysis_Common');
+    end
     rethrow(ME);
 end
 end
@@ -1929,25 +1931,32 @@ else
 end
 end
 
-function pv = robustPeak(y, tMin, s0, s1, winMin, trimPct)
+function [pv,coverage] = robustPeak(y, tMin, s0, s1, winMin, trimPct)
 y = double(y(:)');
 tMin = double(tMin(:)');
-pv = NaN;
+pv = NaN; coverage = 0;
 if numel(y)~=numel(tMin) || numel(tMin)<2 || any(~isfinite(tMin)) || ...
         any(diff(tMin)<=0) || ~all(isfinite([s0 s1 winMin trimPct])) || ...
-        s1<=s0 || winMin<=0 || winMin>s1-s0, return; end
+        s1<=s0 || winMin<=0, return; end
 dt = median(diff(tMin));
 tol = max(1e-9,dt*1e-6);
-expected = floor(winMin/dt + 1e-6)+1;
-% Require a full-duration candidate, not a one-sample remnant after missing data.
-starts = find(tMin>=s0-tol & tMin+winMin<=min(s1,tMin(end))+tol);
+if winMin>s1-s0+tol, return; end
+% Include the requested interval edges as candidates. A full-duration window
+% need not start exactly on a frame (notably for low-rate motor acquisitions).
+lo = max(s0,tMin(1)); hi = min(s1,tMin(end))-winMin;
+if hi<lo-tol, return; end
+hi = max(lo,hi);
+starts = unique([lo tMin(tMin>=lo-tol & tMin<=hi+tol) hi]);
 best = -Inf;
-j = 1;
-for i=starts
-    j = max(j,i);
-    while j<numel(tMin) && tMin(j+1)<=tMin(i)+winMin+tol, j=j+1; end
-    seg = y(i:j);
-    seg = seg(isfinite(seg));
+i = 1; j = 0;
+for startTime=starts
+    endTime = startTime+winMin;
+    while i<=numel(tMin) && tMin(i)<startTime-tol, i=i+1; end
+    j = max(j,i-1);
+    while j<numel(tMin) && tMin(j+1)<=endTime+tol, j=j+1; end
+    seg = y(i:j); seg = seg(isfinite(seg));
+    expected = roiExpectedGridSamples(tMin(1),dt,startTime,endTime,tol);
+    if expected>0, coverage=max(coverage,min(1,numel(seg)/expected)); end
     if numel(seg)<max(2,ceil(0.8*expected)), continue; end
     val = trimmedMean(seg, trimPct);
     if val > best, best = val; end
@@ -1956,16 +1965,23 @@ if isfinite(best), pv = best; end
 end
 
 function [value,coverage] = plateauMean(y,tMin,s0,s1)
-% Fixed-window mean on the common uniform time grid. Never choose the window
-% from the observed response; require >=80% of its expected samples.
+% Fixed requested window; count expected samples on the actual grid, including
+% positions outside the recording. Missing tails must still fail coverage.
 y=double(y(:)'); tMin=double(tMin(:)'); value=NaN; coverage=0;
 if numel(y)~=numel(tMin) || numel(tMin)<2 || any(~isfinite(tMin)) || ...
         any(diff(tMin)<=0) || ~all(isfinite([s0 s1])) || s1<=s0, return; end
 dt=median(diff(tMin)); tol=max(1e-9,dt*1e-6);
-expected=floor((s1-s0)/dt+1e-6)+1;
+expected=roiExpectedGridSamples(tMin(1),dt,s0,s1,tol);
 v=y(tMin>=s0-tol & tMin<=s1+tol); v=v(isfinite(v));
-coverage=min(1,numel(v)/expected);
+if expected>0, coverage=min(1,numel(v)/expected); end
 if numel(v)>=max(2,ceil(0.8*expected)), value=mean(v); end
+end
+
+function n = roiExpectedGridSamples(origin,dt,s0,s1,tol)
+% floor(duration/dt)+1 overcounts off-grid intervals by one sample.
+first = ceil((s0-origin-tol)/dt);
+last = floor((s1-origin+tol)/dt);
+n = max(0,last-first+1);
 end
 
 function h = drawSEM(ax,t,y,e,col,alpha)
@@ -2299,7 +2315,51 @@ if isstruct(cache) && isfield(cache,'roiTC') && isa(cache.roiTC,'containers.Map'
 end
 end
 
+function validateROIMetricSettings(S)
+if strcmpi(S.tc_metric,'Plateau')
+    interval=[S.tc_plateauMin0 S.tc_plateauMin1]; label='Plateau';
+else
+    interval=[S.tc_peakSearchMin0 S.tc_peakSearchMin1]; label='Peak search';
+end
+if numel(interval)~=2 || any(~isfinite(interval)) || interval(2)<=interval(1)
+    error('GroupAnalysis:MetricWindow','%s interval must have a finite start and a later end, in minutes.',label);
+end
+if ~strcmpi(S.tc_metric,'Plateau')
+    w=S.tc_peakWinMin;
+    if ~isscalar(w) || ~isfinite(w) || w<=0 || w>diff(interval)+1e-9
+        error('GroupAnalysis:MetricWindow', ...
+            ['Peak window is %g min, but Peak search is %g-%g min (%g min long). ' ...
+             'Set Peak window to a positive duration no longer than %g min, or widen Peak search. All times are in minutes.'], ...
+            w,interval(1),interval(2),diff(interval),diff(interval));
+    end
+end
+end
+
+function reportROIMetricCoverage(S,subjects,times,plateauCoverage,peakCoverage)
+if strcmpi(S.tc_metric,'Plateau')
+    requested=sprintf('Plateau: %g-%g min.',S.tc_plateauMin0,S.tc_plateauMin1);
+    coverage=plateauCoverage;
+else
+    requested=sprintf('Peak search: %g-%g min; peak window: %g min.', ...
+        S.tc_peakSearchMin0,S.tc_peakSearchMin1,S.tc_peakWinMin);
+    coverage=peakCoverage;
+end
+lines={requested; 'Each metric needs at least 2 finite samples and 80% of the expected samples.'; ...
+    'Available recordings (peak coverage refers to the best complete candidate window):'};
+for i=1:min(8,numel(times))
+    t=times{i}; step=median(diff(t));
+    lines{end+1}=sprintf('%s: %g-%g min, frame interval %.4g min; coverage %.0f%%.', ...
+        strtrimSafe(subjects{i,2}),t(1),t(end),step,100*coverage(i)); %#ok<AGROW>
+end
+if numel(times)>8, lines{end+1}=sprintf('... and %d more subjects.',numel(times)-8); end
+lines{end+1}='Check the selected interval against these recording times. For sparse data, the peak window must span at least two frames. No metric or statistics were calculated.';
+error('GroupAnalysis:MetricCoverage','%s',strjoin(lines,sprintf('\n')));
+end
+
+
 function [R, cache] = runROITimecourseAnalysis(S, subjActive, cache)
+
+validateROIMetricSettings(S);
 grpCol = colAsStr(subjActive,3);
 grpCol(cellfun(@isempty,grpCol)) = {'GroupA'};
 
@@ -2324,7 +2384,8 @@ for i = 1:N
     isPSCInput(i) = entry.isPSCInput;
 end
 
-t0 = max(cellfun(@(x) x(1), tAll));
+% Retain early data too; late-starting scans are NaN before their first frame.
+t0 = min(cellfun(@(x) x(1), tAll));
 % GA_UNEQUAL_SCAN_LENGTH_FIX_20260903
 % Use longest scan duration. Shorter scans are NaN after their
 % actual endpoint and therefore do not contribute there.
@@ -2389,11 +2450,6 @@ for g = 1:numel(gNames)
     groupTC(g).nPerTime = n;
 end
 
-platIdx = (tCommon >= S.tc_plateauMin0) & (tCommon <= S.tc_plateauMin1);
-if ~any(platIdx) && strcmpi(S.tc_metric,'Plateau')
-    error('Plateau window has no samples.');
-end
-
 plateau = nan(N,1);
 plateauCoverage = zeros(N,1);
 for i = 1:N
@@ -2401,8 +2457,9 @@ for i = 1:N
 end
 
 peakVal = nan(N,1);
+peakCoverage = zeros(N,1);
 for i = 1:N
-    peakVal(i) = robustPeak(X(i,:), tCommon, ...
+    [peakVal(i),peakCoverage(i)] = robustPeak(X(i,:), tCommon, ...
         S.tc_peakSearchMin0, S.tc_peakSearchMin1, ...
         S.tc_peakWinMin, S.tc_trimPct);
 end
@@ -2416,8 +2473,7 @@ else
 end
 
 if ~any(isfinite(metricVals))
-    error('GroupAnalysis:MetricCoverage', ...
-        'No subject has sufficient data for the selected metric (80%% coverage required). Check the search/window times in minutes.');
+    reportROIMetricCoverage(S,subjActive,tAll,plateauCoverage,peakCoverage);
 end
 
 stats = computeStats(metricVals, grpCol, S);
@@ -2444,7 +2500,8 @@ R.unitsPercent = unitsPercent;
 R.metricName = metricName;
 R.metricVals = metricVals;
 R.plateauCoverage = plateauCoverage;
-R.metricSettings = struct('version',2,'plateauMin',[S.tc_plateauMin0 S.tc_plateauMin1], ...
+R.peakCoverage = peakCoverage;
+R.metricSettings = struct('version',3,'plateauMin',[S.tc_plateauMin0 S.tc_plateauMin1], ...
     'peakSearchMin',[S.tc_peakSearchMin0 S.tc_peakSearchMin1], ...
     'peakWindowMin',S.tc_peakWinMin,'trimPercentTotal',S.tc_trimPct,'minimumCoverage',0.8);
 R.stats = stats;
@@ -2494,6 +2551,12 @@ function meta = extractMetaFromSources(subjectTxt, dataFile, roiFile, bundleFile
 if nargin < 4, bundleFile = ''; end
 
 meta = struct('animalID','N/A','session','N/A','scanID','N/A');
+% Preserve an explicit Animal ID over conflicting historical filenames.
+explicit=strtrimSafe(subjectTxt);
+if ~isempty(regexp(explicit,'^[A-Za-z0-9]+(?:[ -][A-Za-z0-9]+)*$','once')) && ...
+        ~any(strcmpi(explicit,{'NA','Unknown','None'}))
+    meta.animalID=explicit;
+end
 cands = {bundleFile, roiFile, dataFile, subjectTxt};
 
 for i = 1:numel(cands)
@@ -3087,7 +3150,13 @@ for g = 1:numel(R.group)
 end
 xlabel(ax,'Time (min)','Color',fg,'FontWeight','bold');
 if isfield(R,'unitsPercent') && R.unitsPercent, ylabel(ax,'% signal change','Color',fg,'FontWeight','bold'); else, ylabel(ax,'Signal','Color',fg,'FontWeight','bold'); end
-title(ax,'Group ROI timecourse','Color',fg,'FontWeight','bold');
+title(ax,'','Color',fg,'FontWeight','bold');
+px=gaPrevField(S,'plotX',struct('auto',true));
+if isfield(px,'auto') && ~px.auto && isfield(px,'xmin') && isfield(px,'xmax') && ...
+        isfinite(px.xmin) && isfinite(px.xmax) && px.xmax>px.xmin
+    xlim(ax,[px.xmin px.xmax]);
+end
+applyTimeTicks(ax,gaPrevField(px,'step',0));
 gaPrevApplyY(ax,allY,gaPrevField(S,'plotTop',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
 if gaPrevField(S,'tc_showInjectionBox',true)
     yl = ylim(ax);
@@ -3108,6 +3177,14 @@ vals = double(R.metricVals(:));
 grp = R.subjTable(:,3);
 gNames = R.groupNames;
 allY = vals(:)';
+pointX=nan(size(vals));
+for g=1:numel(gNames)
+    ii=find(strcmpi(grp,gNames{g}) & isfinite(vals));
+    pointX(ii)=g+linspace(-.12,.12,numel(ii));
+end
+if gaPrevField(S,'previewConnectAnimals',false)
+    connectAnimalPoints(ax,R.subjTable,vals,pointX,gNames,fg,gaPrevField(S,'previewPairColor',[]));
+end
 for g = 1:numel(gNames)
     idx = strcmpi(grp,gNames{g});
     v = vals(idx); v = v(isfinite(v));
@@ -3120,15 +3197,72 @@ for g = 1:numel(gNames)
     xj = g + linspace(-0.12,0.12,numel(v));
     scatter(ax,xj,v,55,'MarkerFaceColor',col,'MarkerEdgeColor',fg,'LineWidth',0.8);
 end
+
 set(ax,'XTick',1:numel(gNames),'XTickLabel',gaPrevDisplayNames(R));
 try, xtickangle(ax,20); catch, end
 ylabel(ax,gaPrevField(R,'metricName','Metric'),'Color',fg,'FontWeight','bold','Interpreter','none');
-title(ax,'Per-animal ROI metric','Color',fg,'FontWeight','bold');
+title(ax,'','Color',fg,'FontWeight','bold');
 gaPrevApplyY(ax,allY,gaPrevField(S,'plotBot',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
 gaPrevStatsText(ax,R,S,styleName);
 hold(ax,'off');
 end
 
+function [names,colors] = pairLinePalette
+names={'Auto contrast','Gray','White','Black','Blue','Teal','Green','Orange','Red','Purple','Yellow','Custom...'};
+colors=[NaN NaN NaN;.55 .55 .55;1 1 1;0 0 0;.20 .65 .90;0 .70 .65; ...
+    .25 .75 .35;1 .55 .15;.90 .25 .25;.65 .45 .90;.95 .85 .20;NaN NaN NaN];
+end
+
+function [handles,pairedIDs,report] = connectAnimalPoints(ax,T,values,x,gNames,fg,lineColor)
+% Only unique, explicit Animal IDs are paired. Never guess from filenames,
+% merge similarly named animals, or average duplicate sessions/ROIs.
+handles=gobjects(0); pairedIDs={};
+report=struct('pairedIDs',{{}},'duplicateIDs',{{}},'unmatchedIDs',{{}});
+setappdata(ax,'GA_ROI_PairingReport',report);
+values=double(values(:)); x=double(x(:));
+if ~iscell(T)||size(T,2)<3||size(T,1)~=numel(values), return; end
+ids=cell(size(values)); groups=zeros(size(values));
+for i=1:numel(values)
+    ids{i}=lower(strtrim(char(string(T{i,2}))));
+    for g=1:numel(gNames)
+        if strcmpi(strtrim(char(string(T{i,3}))),strtrim(gNames{g})), groups(i)=g; break; end
+    end
+end
+names=unique(ids,'stable'); color=.55*fg+.45*get(ax,'Color');
+if nargin>=7 && isnumeric(lineColor) && numel(lineColor)==3 && ...
+        all(isfinite(lineColor(:))) && all(lineColor(:)>=0 & lineColor(:)<=1)
+    color=reshape(double(lineColor),1,3);
+end
+for k=1:numel(names)
+    if isempty(names{k}), continue; end
+    rows=find(strcmp(ids,names{k}) & groups>0);
+    gg=groups(rows);
+    if numel(unique(gg))~=numel(gg)
+        report.duplicateIDs{end+1}=names{k}; %#ok<AGROW>
+        continue;
+    end
+    rows=rows(isfinite(values(rows)) & isfinite(x(rows)));
+    if numel(rows)<2
+        report.unmatchedIDs{end+1}=names{k}; %#ok<AGROW>
+        continue;
+    end
+    [~,order]=sort(groups(rows)); rows=rows(order);
+    h=line(ax,x(rows),values(rows),'Color',color,'LineWidth',1.2, ...
+        'HandleVisibility','off','HitTest','off','Tag','GA_ROI_ANIMAL_PAIR', ...
+        'UserData',struct('animalID',names{k},'rows',rows));
+    handles(end+1)=h; pairedIDs{end+1}=names{k}; %#ok<AGROW>
+end
+if ~isempty(handles), uistack(handles,'bottom'); end
+report.pairedIDs=pairedIDs;
+setappdata(ax,'GA_ROI_PairingReport',report);
+end
+
+function applyTimeTicks(ax,step)
+if isempty(step)||~isfinite(step)||step<=0, set(ax,'XTickMode','auto'); return; end
+limits=xlim(ax); first=ceil(limits(1)/step); last=floor(limits(2)/step);
+if last-first>1000, set(ax,'XTickMode','auto'); return; end
+set(ax,'XTick',(first:last)*step);
+end
 function gaPrevStatsText(ax,R,S,styleName)
 [~,fg] = gaPrevColors(styleName);
 if ~isfield(R,'stats') || ~isfield(R.stats,'p'), return; end

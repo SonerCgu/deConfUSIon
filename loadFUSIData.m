@@ -358,6 +358,13 @@ meta.rawMetadata.reportedTotalTimeSec = TotalTimeSec;
 TotalTimeSec = nVols * TR;
 
 data = struct();
+% Reopening a processed result must retain its processing history. Rebuilding
+% only I/TR discarded PCA/ICA and drift metadata (and could change its label).
+if strcmp(extKey,'.mat')
+    if strcmp(pickedVarName,'newData.I'), data=S.newData;
+    elseif strcmp(pickedVarName,'data.I'), data=S.data;
+    end
+end
 data.I            = single(I);
 data.TR           = double(TR);
 data.nVols        = double(nVols);

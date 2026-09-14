@@ -8,8 +8,24 @@ switch lower(action)
     case 'basis', [varargout{1:nargout}] = temporalBasis(varargin{:});
     case 'mean', [varargout{1:nargout}] = finiteMean(varargin{:});
     case 'timing', [varargout{1:nargout}] = reconcileTiming(varargin{:});
+    case 'motortiming', varargout{1} = initializeMotorTiming(varargin{:});
     otherwise, error('deConfUSIon:SignalAction','Unknown action: %s',action);
 end
+end
+
+function D=initializeMotorTiming(D)
+% Only call immediately after reconstruction, before any temporal averaging.
+assert(isfield(D,'motorInfo') && isfinite(D.motorInfo.TR) && D.motorInfo.TR>0, ...
+    'deConfUSIon:MotorTR','Motor reconstruction requires a valid sample TR.');
+assert(size(D.I,ndims(D.I))==D.motorInfo.reconstructedFramesPerSlice, ...
+    'deConfUSIon:MotorFrames','Motor frame count does not match reconstructed data.');
+for field={'acquisitionTiming','originalTotalTimeSec','displayDurationSec','tsec', ...
+        'timingCorrection','PSC','bg','I1','deconfPscKey','deconfPscDatasetKey', ...
+        'baselineFrames','baselineWindowSec'}
+    if isfield(D,field{1}), D=rmfield(D,field{1}); end
+end
+D.TR=double(D.motorInfo.TR);
+D=reconcileTiming(D,D);
 end
 
 function [D,notice]=reconcileTiming(D,reference)

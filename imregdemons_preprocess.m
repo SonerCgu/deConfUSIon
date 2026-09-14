@@ -475,15 +475,18 @@ try
         warning('HUMoR:ImregdemonsSafe','Skipping demons block: moving/fixed sizes differ.');
         return;
     end
-    mv = moving(isfinite(moving));
-    fx = fixed(isfinite(fixed));
-    if isempty(mv) || isempty(fx)
-        return;
+    % The median is only a replacement for nonfinite voxels. Sorting every
+    % finite 3D reference/moving volume on every iteration wasted time and
+    % memory without changing a single value in ordinary finite acquisitions.
+    badM=~isfinite(moving); badF=~isfinite(fixed);
+    if any(badM(:))
+        mv=moving(~badM); if isempty(mv), return; end
+        moving(badM)=single(median(double(mv(:))));
     end
-    fillM = median(double(mv(:)));
-    fillF = median(double(fx(:)));
-    moving(~isfinite(moving)) = single(fillM);
-    fixed(~isfinite(fixed)) = single(fillF);
+    if any(badF(:))
+        fx=fixed(~badF); if isempty(fx), return; end
+        fixed(badF)=single(median(double(fx(:))));
+    end
     if (max(moving(:)) - min(moving(:))) <= eps(single(1))
         return;
     end

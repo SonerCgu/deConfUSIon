@@ -1,7 +1,7 @@
 function Reg2Dout = registration_coronal_2d(atlas, src2D, sourceInfo, initialReg, saveDir, funcCandidates, defaultFuncIndex, logFcn)
 % registration_coronal_2d.m
 %
-% Manual simple 2D coronal atlas registration.
+% Coronal atlas registration with automatic refinement and manual review.
 %
 % Updated for 2D step-motor / multi-slice data:
 %   - One larger GUI.
@@ -93,6 +93,7 @@ srcH = size(src2D,1);
 srcW = size(src2D,2);
 
 sourceStates = cell(sourceNSlices,1);
+autoUndo = cell(sourceNSlices,1);
 
 %% ---------------------------------------------------------------------
 % State defaults
@@ -497,6 +498,14 @@ hStatus = uicontrol('Style','text','Parent',ctrl,'Units','normalized', ...
     'HorizontalAlignment','left', ...
     'FontSize',FS.status);
 
+uicontrol('Style','pushbutton','Parent',ctrl,'Units','normalized','Position',[.08 .207 .51 .035], ...
+    'String','Auto: current atlas plane','BackgroundColor',greenBtn,'ForegroundColor','w', ...
+    'FontSize',FS.button,'FontWeight','bold','Callback',@onAutomaticPlane, ...
+    'TooltipString','Refine the selected vascular/histology plane from the current placement; review before saving.');
+uicontrol('Style','pushbutton','Parent',ctrl,'Units','normalized','Position',[.64 .207 .27 .035], ...
+    'String','Undo auto','BackgroundColor',[.55 .38 .12],'ForegroundColor','w', ...
+    'FontSize',FS.button,'Callback',@onUndoAutomatic);
+
 % Action buttons
 btnW3 = 0.24;
 btnH2 = 0.060;
@@ -586,6 +595,7 @@ catch
 end
 
 renderAll();
+setappdata(fig,'Atlas2DReady',true);
 uiwait(fig);
 
 %% ======================================================================
@@ -647,10 +657,12 @@ uiwait(fig);
         st.rotDeg = S.rotDeg;
         st.sx = S.sx;
         st.sy = S.sy;
+        if isfield(S,'autoReport'), st.autoReport=S.autoReport; end
         sourceStates{currentSourceSlice} = st;
     end
 
     function restoreSourceStateOrDefault(newIdx)
+        if isfield(S,'autoReport'), S=rmfield(S,'autoReport'); end
         if newIdx >= 1 && newIdx <= numel(sourceStates) && ~isempty(sourceStates{newIdx})
             st = sourceStates{newIdx};
             S.atlasMode = st.atlasMode;
@@ -665,6 +677,7 @@ uiwait(fig);
             S.rotDeg = st.rotDeg;
             S.sx = st.sx;
             S.sy = st.sy;
+            if isfield(st,'autoReport'), S.autoReport=st.autoReport; end
         else
             % New source slice: keep atlas slice/mode/display, but recenter transform.
             S.tx = ((targetW + 1) / 2) - ((srcW + 1) / 2);
@@ -868,6 +881,7 @@ uiwait(fig);
     end
 
     function onScrollWheel(~, event)
+        if isequal(getappdata(fig,'StudioActionBusy'),true), return; end
         try
             d = event.VerticalScrollCount;
         catch
@@ -925,12 +939,66 @@ uiwait(fig);
     function onSyMinus(~, ~), S.sy = max(0.05, S.sy - 0.01); renderAll(); end
     function onSyPlus(~, ~),  S.sy = S.sy + 0.01; renderAll(); end
 
+    function onAutomaticPlane(~,~)
+        if isequal(getappdata(fig,'StudioActionBusy'),true), return; end
+        if strcmpi(S.atlasMode,'regions')
+            errordlg('Select vascular or histology as the registration reference. Region IDs are not anatomy intensities.','Automatic 2D registration'); return;
+        end
+        previous=S;
+        p=deConfUSIon_ui('progress','Automatic 2D atlas registration');
+        guard=onCleanup(@()deConfUSIon_ui('progressclose',p)); %#ok<NASGU>
+        controls=findall(fig,'Type','uicontrol'); enabled=get(controls,'Enable');
+        setappdata(fig,'StudioActionBusy',true); setappdata(fig,'AtlasAutoCancel',false);
+        set(controls,'Enable','off');
+        busy=onCleanup(@()finishAutomatic(controls,enabled)); %#ok<NASGU>
+        try
+            fixed=getAtlasSliceNumeric(atlas,S.atlasMode,S.slice);
+            cfg=struct('target',S.atlasMode,'progressFcn',@(msg)deConfUSIon_ui('progressupdate',p,.3,msg), ...
+                'cancelFcn',@()~isgraphics(p)||~isgraphics(fig)||isequal(getappdata(p,'CancelProcessing'),true)||isequal(getappdata(fig,'AtlasAutoCancel'),true));
+            cfg.movingMask=sourceMask2D;
+            [A,report]=AtlasRegistration('register2d',fixed,src2D,cfg,buildAffine2D(S,[srcH srcW]));
+            % Row-vector A = translate(-center)*scale*rotation*translate(center+offset).
+            next=S; next.sx=norm(A(1,1:2)); next.sy=norm(A(2,1:2));
+            next.rotDeg=atan2d(A(1,2),A(1,1)); center=[(srcW+1)/2 (srcH+1)/2];
+            offset=A(3,1:2)+center*A(1:2,1:2)-center;
+            next.tx=offset(1); next.ty=offset(2); next.autoReport=report;
+            next.autoReport.atlasSlice=S.slice; next.autoReport.sourceSlice=currentSourceSlice;
+            assert(norm(buildAffine2D(next,[srcH srcW])-A,'fro')<1e-6,'Automatic transform cannot be represented by the editor.');
+            autoUndo{currentSourceSlice}=previous; S=next;
+            saveCurrentSourceState(); renderAll();
+            set(hStatus,'String',sprintf('Auto proposal: NMI %.3f -> %.3f. Review or Undo; Save is explicit.',report.nmiBefore,report.nmiAfter));
+        catch ME
+            S=previous;
+            if ~any(strcmp(ME.identifier,{'deConfUSIon:AtlasCancelled','deConfUSIon:ProcessingCancelled'}))
+                errordlg(ME.message,'Automatic 2D registration');
+            else
+                set(hStatus,'String','Automatic registration cancelled; previous alignment preserved.');
+            end
+        end
+    end
+
+    function finishAutomatic(controls,enabled)
+        drawnow;
+        for k=1:numel(controls)
+            if isgraphics(controls(k)), set(controls(k),'Enable',enabled{k}); end
+        end
+        if isgraphics(fig), setappdata(fig,'StudioActionBusy',false); end
+    end
+
+    function onUndoAutomatic(~,~)
+        if isempty(autoUndo{currentSourceSlice}), return; end
+        S=autoUndo{currentSourceSlice}; autoUndo{currentSourceSlice}=[];
+        saveCurrentSourceState(); renderAll();
+    end
+
     function onReset(~, ~)
         S.tx = ((targetW + 1) / 2) - ((srcW + 1) / 2);
         S.ty = ((targetH + 1) / 2) - ((srcH + 1) / 2);
         S.rotDeg = 0;
         S.sx = 1;
         S.sy = 1;
+        if isfield(S,'autoReport'), S=rmfield(S,'autoReport'); end
+        autoUndo{currentSourceSlice}=[];
         renderAll();
         set(hStatus,'String','Transform reset.');
     end
@@ -1200,6 +1268,7 @@ end
     end
 
     function onFigureButtonDown(~, ~)
+        if isequal(getappdata(fig,'StudioActionBusy'),true), return; end
         try
             if isPointerInsideAxes(axFuse)
                 onStartDrag([], []);
@@ -1242,6 +1311,7 @@ end
     end
 
     function onStartDrag(~, ~)
+        if isequal(getappdata(fig,'StudioActionBusy'),true), return; end
         cp = get(axFuse, 'CurrentPoint');
         x = cp(1,1);
         y = cp(1,2);
@@ -1288,6 +1358,9 @@ end
     end
 
     function onClose(~, ~)
+        if isequal(getappdata(fig,'StudioActionBusy'),true)
+            setappdata(fig,'AtlasAutoCancel',true); return;
+        end
         if ~didExplicitSave
             Reg2Dout = [];
             logMessage('2D registration closed without explicit save.');
@@ -1315,6 +1388,7 @@ function Reg2D = buildReg2DFromState(st, sourceIdx)
     % This A is already MATLAB affine2d-compatible.
     % SCM should use it directly.
     Reg2D.A = buildAffine2D(st, [srcHlocal srcWlocal]);
+    if isfield(st,'autoReport'), Reg2D.autoReport=st.autoReport; end
 
     Reg2D.atlasSliceIndex = round(st.slice);
     Reg2D.atlasMode = st.atlasMode;
