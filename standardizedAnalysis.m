@@ -773,41 +773,71 @@ end
 function [ok,errMsg] = triggerStudioStep(studioFig,stepName,stepStruct)
 ok = false;
 errMsg = '';
+% Do not replace another running action's parameters or bypass its lock.
+if isequal(getappdata(studioFig,'StudioActionBusy'),true)
+    errMsg='Studio is still running another action. Wait for it to finish.';
+    return;
+end
 try
+    cleanupStep=onCleanup(@clearStdStepAppdata); %#ok<NASGU>
     setStdStepAppdata(studioFig,stepStruct);
     candidates = stepCandidates(stepName);
-    allBtns = findall(studioFig,'Type','uicontrol');
+    % Current Studio buttons are axes with a guarded ButtonDownFcn. Keep
+    % support for older uicontrol buttons, without calling inner callbacks
+    % directly and bypassing Studio's busy/error handling.
+    modern=findall(studioFig,'Type','axes','Tag','dcModernButton');
+    legacy=findall(studioFig,'Type','uicontrol');
+    allBtns=[num2cell(modern(:));num2cell(legacy(:))];
     for cc = 1:numel(candidates)
         target = cleanLabel(candidates{cc});
         for ii = 1:numel(allBtns)
+            h=allBtns{ii};
             try
-                style = get(allBtns(ii),'Style');
-                label = get(allBtns(ii),'String');
+                if strcmp(get(h,'Tag'),'dcModernButton')
+                    ud=get(h,'UserData');
+                    if ~isstruct(ud) || ~isfield(ud,'text') || ~isgraphics(ud.text), continue; end
+                    label=get(ud.text,'String');
+                    enabled=isfield(ud,'enabled') && isequal(ud.enabled,true);
+                    cb=get(h,'ButtonDownFcn');
+                else
+                    style=get(h,'Style');
+                    if ~any(strcmpi(style,{'pushbutton','togglebutton'})), continue; end
+                    label=get(h,'String'); enabled=strcmp(get(h,'Enable'),'on');
+                    cb=get(h,'Callback');
+                end
             catch
                 continue;
             end
             if ~ischar(label) || isempty(label), continue; end
-            if ~(strcmpi(style,'pushbutton') || strcmpi(style,'togglebutton')), continue; end
             if strcmp(cleanLabel(label),target)
-                cb = get(allBtns(ii),'Callback');
+                if ~enabled
+                    errMsg=['Studio action is disabled: ' stepName '. Load a dataset first.'];
+                    return;
+                end
+                before=guidata(studioFig);
+                if isappdata(studioFig,'StudioLastCallbackError'), rmappdata(studioFig,'StudioLastCallbackError'); end
                 try
                     if isa(cb,'function_handle')
-                        feval(cb,allBtns(ii),[]);
+                        feval(cb,h,[]);
                     elseif iscell(cb) && ~isempty(cb) && isa(cb{1},'function_handle')
-                        feval(cb{1},allBtns(ii),[],cb{2:end});
+                        feval(cb{1},h,[],cb{2:end});
                     elseif ischar(cb)
                         eval(cb);
                     else
                         errMsg = 'Button callback is empty or unsupported.';
                         return;
                     end
+                    callbackError=getappdata(studioFig,'StudioLastCallbackError');
+                    if isa(callbackError,'MException'), rethrow(callbackError); end
+                    % GUI callbacks show their own error dialogs. A caught
+                    % write failure must still stop the automated workflow.
+                    DataIO('wait');
+                    requireSavedStepResult(studioFig,stepName,before);
                     ok = true;
-                    clearStdStepAppdata();
                     return;
                 catch ME_step
                     ok = false;
                     errMsg = ME_step.message;
-                    clearStdStepAppdata();
                     return;
                 end
             end
@@ -817,6 +847,25 @@ try
 catch ME
     ok = false;
     errMsg = ME.message;
+end
+end
+
+function requireSavedStepResult(studioFig,stepName,before)
+% A cancelled or internally caught preprocessing error can return normally.
+% Do not continue the pipeline on its unchanged parent dataset in that case.
+processing={'motor','frame rejection','scrubbing','filtering','temporal smoothing', ...
+    'pca / ica','despike','imregdemons','drift compensation'};
+if ~any(strcmp(cleanLabel(stepName),processing)) || ~isstruct(before) || ...
+        ~isfield(before,'datasets') || ~isfield(before,'activeDataset'), return; end
+after=guidata(studioFig);
+if ~isstruct(after) || ~isfield(after,'activeDataset') || ...
+        isempty(after.activeDataset) || strcmp(after.activeDataset,before.activeDataset) || ...
+        ~isfield(after,'datasets') || ~isfield(after.datasets,after.activeDataset)
+    error('deConfUSIon:WorkflowNoResult','%s produced no new dataset. The operation was cancelled or failed.',stepName);
+end
+result=after.datasets.(after.activeDataset);
+if ~isfield(result,'savedFile') || isempty(result.savedFile) || ~isfile(result.savedFile)
+    error('deConfUSIon:WorkflowUnsavedResult','%s did not produce a completed saved file. Finish saving before continuing.',stepName);
 end
 end
 function setStdStepAppdata(studioFig,stepStruct)
@@ -862,17 +911,17 @@ switch lower(strtrim(stepName))
     case 'motor'
         candidates = {'Motor','Step Motor','Step-Motor','Motor Correction'};
     case 'frame rejection'
-        candidates = {'Frame Rejection','Frame Reject'};
+        candidates = {'Frame Rejection','Frame Reject','Motion correction'};
     case 'scrubbing'
-        candidates = {'Scrubbing','Scrub'};
+        candidates = {'Scrubbing','Scrub','Motion correction'};
     case 'filtering'
         candidates = {'Filtering','Filter','Temporal Filtering'};
     case 'temporal smoothing'
-        candidates = {'Temporal Smoothing','Smoothing/Subsampling','Temporal Smoothing/Subsampling','Subsampling'};
+        candidates = {'Temporal Smoothing','Temporal Interpolation','Smoothing/Subsampling','Temporal Smoothing/Subsampling','Subsampling'};
     case 'pca / ica'
         candidates = {'PCA / ICA','PCA/ICA','ICA','PCA'};
     case 'despike'
-        candidates = {'Despike','Despiking'};
+        candidates = {'Despike','Despiking','Motion correction'};
     case 'drift compensation'
         candidates = {'Drift Compensation','Drift','Drift Correction'};
     case 'imregdemons'
@@ -912,6 +961,7 @@ end
 function setStudioReady(studioFig,isReady)
 try
     if isempty(studioFig) || ~ishghandle(studioFig), return; end
+    if isReady && isequal(getappdata(studioFig,'StudioActionBusy'),true), return; end
     S = guidata(studioFig);
     if isstruct(S) && isfield(S,'statusPanel') && ishghandle(S.statusPanel) && isfield(S,'statusText') && ishghandle(S.statusText)
         if isReady

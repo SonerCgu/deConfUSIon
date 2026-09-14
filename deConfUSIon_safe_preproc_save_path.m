@@ -12,55 +12,49 @@ try, if isstring(fullName),  fullName  = char(fullName);  end, catch, end
 try, if isstring(keyName),   keyName   = char(keyName);   end, catch, end
 try, if isstring(opTag),     opTag     = char(opTag);     end, catch, end
 
-if exist(preFolder,'dir') ~= 7, mkdir(preFolder); end
+% Resolve the name without writing. DataIO creates the directory only after
+% retaining the completed result, so an unavailable drive can be retried.
 
-lf = lower(fullName);
-op = lower(opTag);
-tag = opTag;
-
-if strcmp(op,'pca') || ~isempty(strfind(lf,'_pca_'))
-    opTag = 'pca';
-    tok = regexp(fullName,'dropPC[^_]*','match','once');
-    sl  = regexp(fullName,'sl\d+of\d+|slice\d+of\d+','match','once');
-    tag = local_join(sl,tok);
-elseif strcmp(op,'ica') || ~isempty(strfind(lf,'_ica_'))
-    opTag = 'ica';
-    tok = regexp(fullName,'dropIC[^_]*','match','once');
-    sl  = regexp(fullName,'sl\d+of\d+|slice\d+of\d+','match','once');
-    tag = local_join(sl,tok);
-elseif ~isempty(strfind(lf,'framerej')) || ~isempty(strfind(lf,'frame_rej')) || ~isempty(strfind(lf,'frame-rej'))
-    opTag = 'framerej';
-    tag = 'framerej';
-elseif ~isempty(strfind(lf,'_scrub_')) || ~isempty(strfind(lf,'scrub_')) || ~isempty(strfind(lf,'dvars'))
-    opTag = 'scrub';
-    tok = regexp(fullName,'scrub_[A-Za-z0-9]+_[A-Za-z0-9]+','match','once','ignorecase');
-    if ~isempty(tok), tag = tok; else, tag = 'scrub'; end
-elseif ~isempty(strfind(lf,'despike')) || ~isempty(strfind(lf,'despiking')) || ~isempty(strfind(lf,'despiked'))
-    opTag = 'despike';
-    tok = regexp(fullName,'despike_z[0-9pPmM\.\-]+','match','once','ignorecase');
-    if ~isempty(tok)
-        tok = strrep(tok,'.','p');
-        tok = strrep(tok,'-','m');
-        tag = tok;
-    else
-        tag = 'despike';
-    end
-elseif ~isempty(strfind(lf,'bpf')) || ~isempty(strfind(lf,'lpf')) || ~isempty(strfind(lf,'hpf'))
-    opTag = 'filter';
-    tok = regexp(fullName,'BPF[^_]*to[^_]*Hz_o\d+|LPF[^_]*Hz_o\d+|HPF[^_]*Hz_o\d+','match','once');
-    if ~isempty(tok), tag = tok; end
-elseif ~isempty(strfind(lf,'submean')) || ~isempty(strfind(lf,'submed')) || ~isempty(strfind(lf,'subsample'))
-    opTag = 'subsample';
-    tok = regexp(fullName,'sub(mean|med)[^_]*_nsub\d+|subsample_[^_]*_nsub\d+','match','once');
-    if ~isempty(tok), tag = tok; end
-elseif ~isempty(strfind(lf,'tsmooth')) || ~isempty(strfind(lf,'temporalsmooth'))
-    opTag = 'tsmooth';
-    tok = regexp(fullName,'tsmooth_[^_]+s|temporalSmooth_[^_]+s','match','once');
-    if ~isempty(tok), tag = tok; end
-elseif ~isempty(strfind(lf,'imreg'))
-    opTag = 'imreg';
-    tok = regexp(fullName,'imreg[^_]*_?(med|median)?_?n\d+','match','once');
-    if ~isempty(tok), tag = tok; end
+% The explicit operation is the step being saved, not one of its ancestors.
+% Older code searched the whole chain for PCA first, so even GLM/imreg outputs
+% could receive a PCA or imreg filename. Generic legacy callers use the last tag.
+op = lower(char(opTag));
+if strcmp(op,'preproc')
+    [~,~,tokens]=regexp(fullName,'(?:^|_)(pca|ica|imreg(?:demons)?|driftComp|DRIFTCOMP|frameRej|scrub|despike|motor|BPF|LPF|HPF|tsmooth|submean|submed|subsample|SVD)(?=[_\-]|$)','start','end','tokens','ignorecase');
+    if ~isempty(tokens), op=lower(tokens{end}{1}); end
+end
+switch op
+    case {'imreg','imregdemons'}
+        opTag='imreg'; pattern='imreg(?:demons)?[_-]?(?:med|median|mean)?[_-]?n\d+';
+    case {'drift','driftcomp'}
+        opTag='drift'; pattern='driftcomp[_-][A-Za-z]+';
+    case 'pca'
+        opTag='pca'; pattern='dropPC[^_]*';
+    case 'ica'
+        opTag='ica'; pattern='dropIC[^_]*';
+    case {'framerej','frame_rej'}
+        opTag='framerej'; pattern='frameRej';
+    case 'scrub'
+        opTag='scrub'; pattern='scrub_[A-Za-z0-9]+_[A-Za-z0-9]+';
+    case 'despike'
+        opTag='despike'; pattern='despike_z[0-9pPmM.\-]+';
+    case {'filter','bpf','lpf','hpf'}
+        opTag='filter'; pattern='BPF[^_]*to[^_]*Hz_o\d+|LPF[^_]*Hz_o\d+|HPF[^_]*Hz_o\d+';
+    case {'submean','submed','subsample'}
+        opTag='subsample'; pattern='sub(?:mean|med)[^_]*_nsub\d+|subsample_[^_]*_nsub\d+';
+    case 'tsmooth'
+        opTag='tsmooth'; pattern='tsmooth_[^_]+s|temporalSmooth_[^_]+s';
+    otherwise
+        opTag=op; pattern='';
+end
+tag=opTag;
+if ~isempty(pattern)
+    matches=regexp(fullName,pattern,'match','ignorecase');
+    if ~isempty(matches), tag=matches{end}; end
+end
+if any(strcmp(opTag,{'pca','ica'}))
+    sl=regexp(fullName,'sl\d+of\d+|slice\d+of\d+','match','once','ignorecase');
+    tag=local_join(sl,tag);
 end
 
 if isempty(tag), tag = opTag; end
@@ -83,7 +77,6 @@ savePath = fullfile(preFolder,[base '.mat']);
 if numel(savePath) > 240
     [parentFolder,thisFolder] = fileparts(preFolder);
     if strcmpi(thisFolder,'Preprocessing'), shortFolder = fullfile(parentFolder,'P'); else, shortFolder = fullfile(preFolder,'P'); end
-    if exist(shortFolder,'dir') ~= 7, mkdir(shortFolder); end
     base = sprintf('%s_%s_%s', opTag, tag, h);
     if numel(base) > 75, base = [base(1:64) '_' h]; end
     savePath = fullfile(shortFolder,[base '.mat']);
@@ -111,7 +104,7 @@ try
     md = java.security.MessageDigest.getInstance('MD5');
     md.update(uint8(s(:)'));
     d = typecast(md.digest,'uint8');
-    hx = lower(reshape(dec2hex(d,2).','1',[]));
+    hx = lower(reshape(dec2hex(d,2).',1,[]));
     h = hx(1:8);
 catch
     h = sprintf('%08x', mod(sum(uint32(s)), 2^32));

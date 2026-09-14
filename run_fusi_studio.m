@@ -16,6 +16,17 @@ end
 
 cd(root);
 
+% Relaunching must not discard results that an older session only queued.
+% Complete those writes before replacing the assembled GUI/runtime.
+previousFigure=getappdata(0,'deConfUSIonMainFigure');
+if ~isempty(previousFigure) && isgraphics(previousFigure)
+    DataIO('flushstudio',guidata(previousFigure));
+end
+
+% Old versions staged complete results in tempdir. Only certified complete
+% stages are recovered; partial movies are left untouched.
+DataIO('recover',tempdir);
+
 try
     atlasToolsDCU = fullfile(root,'atlas_tools');
     if exist(atlasToolsDCU,'dir') == 7, addpath(atlasToolsDCU,'-begin'); end

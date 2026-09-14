@@ -1,10 +1,10 @@
 function studio = deConfUSIon_add_preproc_lazy_datasets(studio)
-% Fast scanner for saved Preprocessing/P datasets.
+% Fast scanner for saved preprocessing and explicit PSC analysis datasets.
 %
 % Performance rules:
 %   - never load newData during Studio startup
 %   - never write into preprocessing MAT files while refreshing dropdowns
-%   - read only small top-level naming variables
+%   - read only small naming/provenance fields (including legacy newData)
 %   - cache metadata by filename, byte size and modification time
 
 if nargin < 1 || ~isstruct(studio), return; end
@@ -17,6 +17,8 @@ try
     if isfield(studio,'exportPath') && ~isempty(studio.exportPath)
         folders{end+1} = fullfile(studio.exportPath,'Preprocessing'); %#ok<AGROW>
         folders{end+1} = fullfile(studio.exportPath,'P'); %#ok<AGROW>
+        folders{end+1} = fullfile(studio.exportPath,'PSC'); %#ok<AGROW>
+        folders{end+1} = fullfile(studio.exportPath,'PSC','P'); %#ok<AGROW>
     end
 catch
 end
@@ -37,8 +39,8 @@ for ff = 1:numel(folders)
 
     if exist(cacheFile,'file') == 2
         try
-            C = load(cacheFile,'cache','-mat');
-            if isfield(C,'cache') && isstruct(C.cache)
+            C = load(cacheFile,'-mat'); % Older indexes have no cacheVersion.
+            if isfield(C,'cache') && isstruct(C.cache) && isfield(C,'cacheVersion') && C.cacheVersion==2
                 cache = C.cache;
             end
         catch
@@ -105,12 +107,14 @@ for ff = 1:numel(folders)
             end
 
             try
-                if isfield(S,'displayNameShort') && ~isempty(S.displayNameShort)
-                    displayNameShort = char(S.displayNameShort);
-                else
-                    displayNameShort = deConfUSIon_display_short_name( ...
-                        displayNameFull,[],'');
+                % Reconcile legacy picker labels with the actual saved result.
+                % An old GLM file must not masquerade as an imreg-only result.
+                provenance=deConfUSIon_read_processing_metadata(matFile);
+                if isfield(provenance,'displayNameFull') && ~isempty(provenance.displayNameFull)
+                    displayNameFull=char(provenance.displayNameFull);
                 end
+                displayNameShort=deConfUSIon_display_short_name(displayNameFull,provenance,matFile);
+                displayNameFull=displayNameShort;
             catch
                 displayNameShort = displayNameFull;
             end
@@ -162,7 +166,8 @@ for ff = 1:numel(folders)
 
     if cacheDirty
         try
-            save(cacheFile,'cache','-mat');
+            cacheVersion=2; %#ok<NASGU>
+            save(cacheFile,'cache','cacheVersion','-mat');
         catch
             % Cache failure must never prevent loading the dataset.
         end
@@ -219,12 +224,12 @@ key = regexprep(key,'_+','_');
 key = regexprep(key,'^_+|_+$','');
 if isempty(key), key = 'dataset'; end
 if ~isletter(key(1)), key = ['d_' key]; end
-if numel(key) > 75, key = key(1:75); end
+if numel(key) > namelengthmax, key = key(1:namelengthmax); end
 base = key;
 n = 1;
 while isfield(datasets,key)
     suffix = sprintf('_v%d',n);
-    maxBase = max(1,83-numel(suffix));
+    maxBase = max(1,namelengthmax-numel(suffix));
     key = [base(1:min(numel(base),maxBase)) suffix];
     n = n + 1;
 end

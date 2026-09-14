@@ -722,6 +722,7 @@ set(fig,'CloseRequestFcn',@cleanup);
 % Nested functions
 % =========================================================================
     function updateMousePos
+        setappdata(fig,'deConfUSIonInteractionUntil',now+0.75/86400);
         if ~isvalid(ax1)
             return;
         end
@@ -748,6 +749,7 @@ set(fig,'CloseRequestFcn',@cleanup);
     end
 
     function stepPlayback_A(varargin)
+        setappdata(fig,'deConfUSIonInteractionUntil',now+0.75/86400);
         if ~ishghandle(fig)
             return;
         end
@@ -1087,6 +1089,7 @@ set(fig,'CloseRequestFcn',@cleanup);
     end
 
     function mouseWheelScroll(~,event)
+        setappdata(fig,'deConfUSIonInteractionUntil',now+0.75/86400);
         if dims ~= 4
             return;
         end

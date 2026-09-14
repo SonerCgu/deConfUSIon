@@ -598,17 +598,10 @@ if isstruct(underlayInfo) && isfield(underlayInfo,'isMulti') && underlayInfo.isM
 end
 
     % -----------------------------------------------------
-    % Pass stored mask if available
+    % Viewer masks are loaded explicitly inside SCM, never from editor drafts.
     % -----------------------------------------------------
     loadedMask = [];
     loadedMaskIsInclude = true;
-
-    if isfield(studio,'mask') && ~isempty(studio.mask)
-        loadedMask = studio.mask;
-        if isfield(studio,'maskIsInclude') && ~isempty(studio.maskIsInclude)
-            loadedMaskIsInclude = logical(studio.maskIsInclude);
-        end
-    end
 
     % -----------------------------------------------------
     % Launch SCM GUI
@@ -879,13 +872,9 @@ if isstruct(underlayInfo) && isfield(underlayInfo,'isMulti') && underlayInfo.isM
     end
 end
 
-    if isfield(studio,'mask') && ~isempty(studio.mask)
-        loadedMask = studio.mask;
-        loadedMaskIsInclude = studio.maskIsInclude;
-    else
-        loadedMask = [];
-        loadedMaskIsInclude = true;
-    end
+    % Drawing/saving a mask does not opt this viewer into using it.
+    loadedMask = [];
+    loadedMaskIsInclude = true;
 
     initialFPS = 10;
     maxFPS = 240;
@@ -933,7 +922,19 @@ function maskEditorCallback(~,~)
     drawnow;
 
     try
-        out = mask(studio, data.I, studio.activeDataset);
+        % Editor drafts belong only to this source scan. They are not active
+        % Studio/viewer masks or automatically selected underlays.
+        sourceFile = fullfile(studio.loadedPath, studio.loadedFile);
+        editorStudio = studio;
+        maskFields = {'mask','brainMask','underlayMask','overlayMask','signalMask'};
+        for kk = 1:numel(maskFields), editorStudio.(maskFields{kk}) = []; end
+        if isfield(studio,'maskEditorDraft') && isstruct(studio.maskEditorDraft) && ...
+                isfield(studio.maskEditorDraft,'sourceFile') && ...
+                strcmpi(studio.maskEditorDraft.sourceFile, sourceFile)
+            editorStudio.brainMask = studio.maskEditorDraft.brainMask;
+            editorStudio.overlayMask = studio.maskEditorDraft.overlayMask;
+        end
+        out = mask(editorStudio, data.I, studio.activeDataset);
 
         if ~isstruct(out) || (isfield(out,'cancelled') && out.cancelled)
             addLog('Mask Editor cancelled.');
@@ -941,106 +942,19 @@ function maskEditorCallback(~,~)
             return;
         end
 
-     if isfield(out,'mask') && ~isempty(out.mask)
-    studio.mask = logical(out.mask);
-    studio.maskIsInclude = true;
-    addLog('Mask stored in Studio (studio.mask).');
-end
-
-if isfield(out,'brainMask') && ~isempty(out.brainMask)
-    studio.brainMask = logical(out.brainMask);
-end
-
-if isfield(out,'underlayMask') && ~isempty(out.underlayMask)
-    studio.underlayMask = logical(out.underlayMask);
-end
-
-if isfield(out,'overlayMask') && ~isempty(out.overlayMask)
-    studio.overlayMask = logical(out.overlayMask);
-end
-
-       % -----------------------------------------------------
-% Store Mask Editor underlay/reference robustly
-% Priority:
-%   1) display-ready Mask Editor underlay
-%   2) raw anatomical reference
-% -----------------------------------------------------
-
-storedDisplayUnderlay = false;
-
-displayFields = { ...
-    'anatomical_reference', ...
-    'savedUnderlayDisplay', ...
-    'savedUnderlayForReload', ...
-    'underlayDisplay', ...
-    'brainImage'};
-
-for ii = 1:numel(displayFields)
-    fn = displayFields{ii};
-
-    if isfield(out,fn) && ~isempty(out.(fn))
-        studio.anatomicalReference = out.(fn);
-        studio.anatomicalReferenceIsDisplayReady = true;
-        storedDisplayUnderlay = true;
-        addLog(['Mask Editor display-ready underlay stored from field: ' fn]);
-        break;
-    end
-end
-
-% Also check maskBundle, if Mask Editor returned a bundle-style output
-if ~storedDisplayUnderlay && isfield(out,'maskBundle') && isstruct(out.maskBundle)
-    B = out.maskBundle;
-
-    for ii = 1:numel(displayFields)
-        fn = displayFields{ii};
-
-        if isfield(B,fn) && ~isempty(B.(fn))
-            studio.anatomicalReference = B.(fn);
-            studio.anatomicalReferenceIsDisplayReady = true;
-            storedDisplayUnderlay = true;
-            addLog(['Mask Editor display-ready underlay stored from maskBundle.' fn]);
-            break;
+        % Keep edits available when reopening the editor for the same scan.
+        % Never publish them as studio.mask or the viewer's anatomical image.
+        studio = guidata(fig);
+        if strcmpi(fullfile(studio.loadedPath,studio.loadedFile),sourceFile)
+            studio.maskEditorDraft = struct('sourceFile',sourceFile, ...
+                'brainMask',logical(out.brainMask),'overlayMask',logical(out.overlayMask));
+            guidata(fig,studio);
+            addLog('Mask Editor draft retained for this scan. Load the saved MAT explicitly in SCM or Video to apply it.');
         end
-    end
-end
-
-rawFields = { ...
-    'anatomical_reference_raw', ...
-    'anatomicalReferenceRaw', ...
-    'rawUnderlay', ...
-    'underlayRaw'};
-
-for ii = 1:numel(rawFields)
-    fn = rawFields{ii};
-
-    if isfield(out,fn) && ~isempty(out.(fn))
-        studio.anatomicalReferenceRaw = out.(fn);
-
-        if ~storedDisplayUnderlay
-            studio.anatomicalReference = out.(fn);
-            studio.anatomicalReferenceIsDisplayReady = false;
-            addLog(['Mask Editor raw underlay stored from field: ' fn]);
+        if isfield(out,'files') && isstruct(out.files) && ...
+                isfield(out.files,'maskBundle_mat') && ~isempty(out.files.maskBundle_mat)
+            addLog(['Mask bundle saved: ' out.files.maskBundle_mat]);
         end
-
-        break;
-    end
-end
-
-if isfield(out,'files') && isstruct(out.files)
-    if isfield(out.files,'brainImage_mat') && ~isempty(out.files.brainImage_mat)
-        studio.anatomicalReferenceFile = out.files.brainImage_mat;
-    elseif isfield(out.files,'underlay_mat') && ~isempty(out.files.underlay_mat)
-        studio.anatomicalReferenceFile = out.files.underlay_mat;
-    end
-end
-
-        if isfield(out,'files') && isstruct(out.files) && isfield(out.files,'brainImage_mat') ...
-                && ~isempty(out.files.brainImage_mat)
-            studio.brainImageFile = out.files.brainImage_mat;
-            addLog(['Brain-only image saved: ' studio.brainImageFile]);
-        end
-
-        guidata(fig, studio);
 
     catch ME
         addLog(['Mask Editor ERROR: ' ME.message]);
@@ -5145,10 +5059,11 @@ end
 %  CLOSE HANDLER
 % =========================================================
 function onCloseStudio(~,~)
-    saves=DataIO('status');
-    if ~isempty(saves) && any(ismember({saves.state},{'queued','saving','failed'}))
+    try
+        DataIO('flushstudio',guidata(fig));
+    catch ME
         DataIO('show');
-        addLog('Finish or retry pending saves before closing Studio.');
+        addLog(['Studio remains open: finish or retry the unsaved result. ' ME.message]);
         return;
     end
     try

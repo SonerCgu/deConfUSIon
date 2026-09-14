@@ -4,6 +4,7 @@ function varargout = AtlasRegistration(action,varargin)
 switch lower(action)
     case 'settings', varargout{1}=settingsDialog(varargin{:});
     case 'register', [varargout{1:nargout}]=registerVolume(varargin{:});
+    case 'register2d', [varargout{1:nargout}]=registerPlane(varargin{:});
     case 'greedy', varargout{1}=findGreedy();
     case 'geometry', varargout{1}=geometryDialog(varargin{:});
     case 'itksnap', varargout{1}=findSnap();
@@ -38,7 +39,7 @@ model=uicontrol(f,'Style','popupmenu','Units','normalized','Position',[.31 .52 .
     'String',{'Rigid: rotation and translation','Rigid then affine: also size and shear'}, ...
     'BackgroundColor',C.input,'ForegroundColor',C.text,'FontName','Arial','FontSize',12);
 useCurrent=uicontrol(f,'Style','checkbox','Units','normalized', ...
-    'Position',[.04 .41 .91 .055],'String','Refine current manual alignment; otherwise start from image centers', ...
+    'Position',[.04 .41 .91 .055],'String','Refine current manual alignment; otherwise search anatomy-based starting positions', ...
     'BackgroundColor',C.background,'ForegroundColor',C.text,'FontName','Arial','FontSize',12,'Value',0);
 review=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.04 .35 .91 .05], ...
     'String','Greedy only: open one ITK-SNAP review with anatomy over the selected atlas', ...
@@ -164,9 +165,15 @@ else
     sf=size(fixed); sm=size(moving);
     start(4,1:3)=(sf([2 1 3])-sm([2 1 3]))/2;
 end
+originalStart=start; initReport=[];
+if ~cfg.useCurrent && cfg.searchInitialization
+    [start,initReport]=chooseInitial3D(F,V,factor,start,cfg);
+end
 report=struct('engine',cfg.engine,'model',cfg.model,'target',cfg.target, ...
     'sampleStride',factor,'voxelSizeUm',cfg.voxelSizeUm,'initialMatrix',start, ...
     'created',datestr(now,30),'reviewRequired',true,'log','');
+report.initialization=initReport;
+report.originalMatrix=originalStart;
 progress(cfg,'Preparing 3D anatomy and atlas...');
 switch lower(cfg.engine)
     case 'greedy'
@@ -258,20 +265,139 @@ end
 ref=sampleReference(size(F),factor); movingRef=sampleReference(size(V),factor);
 before=imwarp(V,movingRef,affine3d(start),'OutputView',ref);
 after=imwarp(V,movingRef,affine3d(M),'OutputView',ref);
-report.nmiBefore=normalizedMI(F,before); report.nmiAfter=normalizedMI(F,after);
-if report.nmiAfter<report.nmiBefore*.98
-    error('deConfUSIon:AtlasQuality','The automatic proposal reduced image similarity. Previous alignment preserved; try a manual starting position or a different atlas target.');
-end
+originalBefore=imwarp(V,movingRef,affine3d(originalStart),'OutputView',ref);
+report.nmiBefore=normalizedMI(F,originalBefore);
+report.nmiInitialized=normalizedMI(F,before); report.nmiAfter=normalizedMI(F,after);
 report.foregroundOverlap=nnz(F>.05 & after>.05)/max(1,min(nnz(F>.05),nnz(after>.05)));
 report.retainedForeground=nnz(after>.05)/max(1,nnz(V>.05)*det(M(1:3,1:3)));
 retainedBefore=nnz(before>.05)/max(1,nnz(V>.05)*det(start(1:3,1:3)));
-if report.retainedForeground<min(.65,.8*retainedBefore)
-    error('deConfUSIon:AtlasCoverage','Automatic alignment moved too much of the anatomy outside the atlas. Previous alignment preserved; refine the manual starting position.');
+report.refinementAccepted=true; report.refinementNote='';
+if report.retainedForeground<min(.65,.8*retainedBefore) || report.nmiAfter<report.nmiInitialized
+    % Keep the valid, scored initialization when the numerical optimizer
+    % drifts. Report this explicitly instead of presenting a failed fine fit.
+    report.refinementAccepted=false;
+    report.refinementNote='Fine fit reduced similarity or coverage; retained the scored starting proposal. Review or refine a manual alignment.';
+    report.rejectedOptimizerMatrix=M; report.rejectedOptimizerNMI=report.nmiAfter;
+    M=start; after=before; report.nmiAfter=report.nmiInitialized;
+    report.retainedForeground=retainedBefore;
+    report.foregroundOverlap=nnz(F>.05 & after>.05)/max(1,min(nnz(F>.05),nnz(after>.05)));
 end
 if nnz(after>.05)<.05*nnz(V>.05) || report.foregroundOverlap<.01
     error('deConfUSIon:AtlasOverlap','The proposed alignment has almost no brain overlap. Check geometry or start from a manual alignment.');
 end
 report.matrix=M;
+end
+
+function [start,report]=chooseInitial3D(F,V,step,center,cfg)
+% Compare the box center with intensity-centroid/AP offsets on the existing
+% oriented physical grid. Never introduce a reflection or change scan spacing.
+progress(cfg,'Scoring anatomy-based starting positions...');
+rf=sampleReference(size(F),step); rv=sampleReference(size(V),step);
+centroid=@(X) volumeCentroid(X,step);
+base=center; base(4,1:3)=centroid(F)-centroid(V);
+starts=center;
+for ap=[-30 -15 0 15 30]
+    for dv=[-16 -8 0 8 16]
+        seed=base; seed(4,1:2)=seed(4,1:2)+[dv ap];
+        starts(:,:,end+1)=seed; %#ok<AGROW>
+    end
+end
+scores=-inf(1,size(starts,3)); overlap=scores;
+for k=1:size(starts,3)
+    checkCancel(cfg);
+    W=imwarp(V,rv,affine3d(starts(:,:,k)),'OutputView',rf);
+    overlap(k)=nnz(W>.05 & F>.05)/max(1,nnz(W>.05));
+    retained=nnz(W>.05)/max(1,nnz(V>.05));
+    if retained>=.65 && overlap(k)>=.05
+        scores(k)=normalizedMI(F,W);
+    end
+end
+[best,k]=max(scores); if ~isfinite(best), k=1; end
+start=starts(:,:,k);
+report=struct('candidateMatrices',starts,'nmi',scores,'overlap',overlap,'selected',k, ...
+    'method','box/foreground centers plus AP/depth translation candidates; no mirrors');
+end
+
+function c=volumeCentroid(V,step)
+% Winsorized weights reduce domination by one very bright vessel or artifact.
+W=double(min(V,.5)); W(V<.05)=0; total=sum(W(:));
+if total<=0, error('deConfUSIon:AtlasEmpty','No foreground for initialization.'); end
+sx=squeeze(sum(sum(W,1),3)); sy=squeeze(sum(sum(W,2),3)); sz=squeeze(sum(sum(W,1),2));
+c=[sum(sx(:).*(1:numel(sx))') sum(sy(:).*(1:numel(sy))') sum(sz(:).*(1:numel(sz))')]/total;
+c=1+(c-1)*step;
+end
+
+function [A,report]=registerPlane(fixed,moving,cfg,initial)
+% Deterministic bounded similarity search on full source pixels. Prewarping
+% into the atlas before optimization would permanently crop a partial FOV.
+% Incremental similarities preserve the editor's independent scales/rotation.
+if nargin<3, cfg=struct(); end
+if nargin<4, initial=eye(3); initial(3,1:2)=([size(fixed,2) size(fixed,1)]-[size(moving,2) size(moving,1)])/2; end
+cfg=defaults(cfg);
+maskUsed=isfield(cfg,'movingMask') && ~isempty(cfg.movingMask);
+if maskUsed
+    assert(isequal(size(cfg.movingMask),size(moving)),'Source brain mask dimensions do not match anatomy.');
+    moving=single(moving); moving(~logical(cfg.movingMask))=0;
+end
+F=robustVolume(fixed); V=robustVolume(moving);
+assert(ismatrix(F)&&ismatrix(V),'deConfUSIon:AtlasPlane','2D registration requires two anatomy planes.');
+assert(isequal(size(initial),[3 3])&&all(isfinite(initial(:)))&&det(initial(1:2,1:2))>0,'Invalid initial 2D transform.');
+rf=imref2d(size(F)); pre=imwarp(V,affine2d(initial),'OutputView',rf);
+report=struct('initialMatrix',initial,'target',cfg.target,'reviewRequired',true,'created',datestr(now,30), ...
+    'method','bounded multiscale normalized mutual information; no mirrors or shear');
+report.sourceMaskUsed=maskUsed;
+retained0=nnz(pre>.05)/max(1,nnz(V>.05)*det(initial(1:2,1:2)));
+A=initial; best=score(A); report.nmiBefore=normalizedMI(F,pre);
+if ~cfg.useCurrent && cfg.searchInitialization
+    progress(cfg,'Comparing image and foreground centers...');
+    cf=volumeCentroid(F,1); cv=volumeCentroid(V,1);
+    seed=initial; seed(3,1:2)=cf(1:2)-cv(1:2)*initial(1:2,1:2);
+    for dy=[-24 -12 0 12 24]
+        B=seed; B(3,2)=B(3,2)+dy; s=score(B);
+        if s>best, A=B; best=s; end
+    end
+end
+% Coarse-to-fine coordinate descent uses the same deterministic objective for
+% vascular and histology; Doppler/atlas intensities are not assumed identical.
+schedule=[16 6 .08;8 3 .04;4 1.5 .02;2 .75 .01;1 .35 .005];
+for level=1:size(schedule,1)
+    progress(cfg,sprintf('Refining coronal alignment: level %d/%d...',level,size(schedule,1)));
+    steps=[schedule(level,1)*[1 1] schedule(level,2:3)];
+    for sweep=1:6
+        changed=false;
+        for dim=1:4
+            origin=A;
+            for sign=[-1 1]
+                checkCancel(cfg); delta=zeros(1,4); delta(dim)=sign*steps(dim);
+                B=planeIncrement(origin,delta,size(F)); s=score(B);
+                if s>best+1e-7, A=B; best=s; changed=true; end
+            end
+        end
+        if ~changed, break; end
+    end
+end
+after=imwarp(V,affine2d(A),'OutputView',rf);
+report.nmiAfter=normalizedMI(F,after);
+report.retainedFraction=nnz(after>.05)/max(1,nnz(V>.05)*det(A(1:2,1:2)));
+report.matrix=A; report.changed=norm(A-initial,'fro')>1e-6;
+if ~isfinite(best)
+    error('deConfUSIon:AtlasOverlap','No valid plane overlap. Choose the approximate coronal atlas slice and position the anatomy, then retry.');
+end
+    function s=score(B)
+        scale=svd(initial(1:2,1:2)\B(1:2,1:2));
+        if any(scale<.7|scale>1.4), s=-inf; return; end
+        W=imwarp(V,affine2d(B),'OutputView',rf);
+        retained=nnz(W>.05)/max(1,nnz(V>.05)*det(B(1:2,1:2)));
+        overlap=nnz(F>.05 & W>.05)/max(1,nnz(W>.05));
+        if retained<min(.65,.8*retained0) || overlap<.1, s=-inf; return; end
+        s=normalizedMI(F,W);
+    end
+end
+
+function B=planeIncrement(A,d,sz)
+c=([sz(2) sz(1)]+1)/2; angle=d(3)*pi/180; scale=exp(d(4));
+R=scale*[cos(angle) sin(angle);-sin(angle) cos(angle)];
+T=eye(3); T(1:2,1:2)=R; T(3,1:2)=c-c*R+d(1:2); B=A*T;
 end
 
 function t=matlabFit(V,rv,F,rf,model,optimizer,metric,initial,levels)
@@ -287,7 +413,7 @@ end
 function cfg=defaults(cfg)
 d=struct('engine','greedy','target','vascular','model','rigid','useCurrent',false, ...
     'executable','','voxelSizeUm',[50 50 50],'maxDimension',160, ...
-    'iterations',[100 50 20],'progressFcn',[],'cancelFcn',[]);
+    'iterations',[100 50 20],'progressFcn',[],'cancelFcn',[],'searchInitialization',true);
 names=fieldnames(d);
 for k=1:numel(names), if ~isfield(cfg,names{k}), cfg.(names{k})=d.(names{k}); end, end
 end
@@ -303,6 +429,10 @@ if numel(samples)<32, error('deConfUSIon:AtlasEmpty','Anatomy or atlas contains 
 lim=double(prctile(samples,[1 99.5]));
 if lim(2)<=lim(1), error('deConfUSIon:AtlasConstant','Use a continuous anatomy image; a constant/binary label volume cannot be intensity registered.'); end
 V(~valid)=0; V=min(1,max(0,(V-lim(1))/(lim(2)-lim(1))));
+% Doppler spans orders of magnitude. A fixed square-root compression keeps
+% weaker vessels represented in the MI histogram instead of collapsing them
+% into its zero bin. This is registration-only; source amplitudes stay intact.
+V=sqrt(V);
 end
 
 function nmi=normalizedMI(A,B)

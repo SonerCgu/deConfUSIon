@@ -572,6 +572,10 @@ for s = 1:nSlices
 
     % Sort by time index, then file date
     subset = localSortSplitEntries(subset);
+    if numel(unique([subset.timeIndex]))~=numel(subset)
+        error('deConfUSIon:MotorDuplicateBlock', ...
+            'Slice %d has duplicate time-block IDs. Select a folder with one raw file per slice/time block.',s);
+    end
 
     nBase = min(splitBaselineBlocksPerSlice, numel(subset));
 
@@ -620,6 +624,21 @@ for s = 1:nSlices
     outputBlockInfo{s} = infoThisSlice;
     sliceBlockCount(s) = numel(blocksThisSlice);
     sliceDetectedTimes{s} = cellfun(@(z)z.timeIndex, infoThisSlice);
+end
+
+% A shared time dimension must describe the same blocks for every slice.
+% Previously min(fillCount) silently discarded data or joined different cycles.
+for s=2:nSlices
+    if ~isequal(sliceDetectedTimes{s},sliceDetectedTimes{1})
+        error('deConfUSIon:MotorMissingBlock', ...
+            'Slice %d and slice 1 contain different time-block IDs. Restore the missing files before reconstruction.',s);
+    end
+    counts=cellfun(@(b)size(b,3),blockCells{s});
+    refCounts=cellfun(@(b)size(b,3),blockCells{1});
+    if ~isequal(counts,refCounts)
+        error('deConfUSIon:MotorUnequalBlocks', ...
+            'Slice %d has different frame counts per time block than slice 1. Reconstruction stopped instead of silently truncating or shifting time.',s);
+    end
 end
 
 % Validate dimensions from first block

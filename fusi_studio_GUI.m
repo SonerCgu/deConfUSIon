@@ -196,7 +196,7 @@ uicontrol(fig,'Style','pushbutton','Units','normalized','Position',[.400 .946 .2
     'FontName','Arial','FontSize',9,'FontWeight','bold', ...
     'BackgroundColor',theme.card,'ForegroundColor',theme.muted, ...
     'HorizontalAlignment','right','Callback',@(~,~)DataIO('show'), ...
-    'TooltipString','Background save queue status. Outputs are finalized here without blocking the GUI.');
+    'TooltipString','Analysis results are saved before completion. Inspect saves or retry a failed write.');
 guiGap    = 0.012;
 col1X = guiMargin;
 col1W = 0.305;
@@ -911,6 +911,19 @@ end
 function motionCorrectionCallback(~,~)
     studio=guidata(fig);
     if ~studio.isLoaded, errordlg('Load data first.'); return; end
+    % These former toolbar actions now share the Motion correction button.
+    % A workflow already selects the method; keep its original settings UI
+    % where needed instead of asking the user to select a different method.
+    if isappdata(fig,'deconf_std_workflow_step')
+        step=getappdata(fig,'deconf_std_workflow_step');
+        if isstruct(step) && isfield(step,'name')
+            switch lower(strtrim(step.name))
+                case 'frame rejection', frameRateCallback([],[]); return;
+                case 'scrubbing', scrubbingCallback([],[]); return;
+                case 'despike', despikeCallback([],[]); return;
+            end
+        end
+    end
     cfg=Motion('choose',fig);
     if isempty(cfg), return; end
     setappdata(fig,'motionCorrectionConfig',cfg);
@@ -942,10 +955,10 @@ function chopDataCallback(~,~)
         savePath=deConfUSIon_safe_preproc_save_path(fullfile(studio.exportPath,'Preprocessing'),fullName,keyName,'cut');
         newData.savedFile=savePath; newData.lazyFile=savePath;
         payload=struct('newData',newData,'displayNameFull',fullName,'preprocDisplayName',fullName,'datasetSortTime',newData.datasetSortTime);
-        DataIO('enqueue',savePath,payload);
+        DataIO('save',savePath,payload);
         studio.datasets.(keyName)=newData; studio.activeDataset=keyName;
         studio.pipeline.preprocDone=true; guidata(fig,studio); refreshDatasetDropdown();
-        addLog(['Cut dataset ready; background save queued: ' fullName]);
+        addLog(['Cut dataset saved: ' fullName]);
     catch ME, errordlg(ME.message,'Chop data'); addLog(['Chop data failed: ' ME.message]); end
 end
 
@@ -981,6 +994,17 @@ function loadDataCallback(~,~)
         return;
     end
 
+    % Finish saving the previous animal before its in-memory state is replaced.
+    % If the drive is unavailable, leave that session intact for Save queue Retry.
+    try
+        DataIO('flushstudio',previousStudio);
+    catch ME
+        addLog(['Previous analysis is not saved: ' ME.message]);
+        DataIO('show');
+        errordlg(ME.message,'Finish saving before loading another animal');
+        return;
+    end
+
     addLog('Loading dataset...');
     setProgramStatus(false);
     drawnow;
@@ -1007,6 +1031,14 @@ studio.atlasRegistrationMode = '';
 studio.mask = [];
 studio.maskIsInclude = true;
 studio.brainMask = [];
+studio.underlayMask = [];
+studio.overlayMask = [];
+studio.signalMask = [];
+studio.loadedMask = [];
+studio.activeMask = [];
+studio.loadedMaskIsInclude = true;
+studio.overlayMaskIsInclude = true;
+studio.maskEditorDraft = [];
 studio.brainImageFile = '';
 studio.anatomicalReferenceRaw = [];
 studio.anatomicalReference = [];
@@ -1198,18 +1230,10 @@ studio.meta.registration2DPath = reg2DFolder;
 studio.meta.visualizationPath = visFolder;
 studio.meta.preprocessingPath = preFolder;
 studio.meta.pscPath = pscFolder;
-      pscFolder = fullfile(datasetFolder,'PSC');
-if exist(pscFolder,'dir')
-    pscFiles = dir(fullfile(pscFolder,'*.mat'));
-    for kk = 1:numel(pscFiles)
-        [~,fullName] = fileparts(pscFiles(kk).name);
-        safeKey = makeSafeKey(fullName, studio.datasets);
-        studio.datasets.(safeKey) = struct( ...
-            'lazyFile', fullfile(pscFiles(kk).folder, pscFiles(kk).name), ...
-            'isLazy', true, ...
-            'displayNameFull', fullName);
-    end
-end
+
+        % A completed save interrupted during final publication can be
+        % recovered before the picker scans this animal's result folders.
+        DataIO('recover',{preFolder,fullfile(datasetFolder,'P'),pscFolder,fullfile(pscFolder,'P')});
 
         % Register preprocessing datasets from saved MAT metadata.
         % Do not use shortened physical filenames as dropdown names.
@@ -1844,19 +1868,16 @@ function imregdemonsCallback(~,~)
         studio.pipeline.preprocDone = true;
 
         preFolder = fullfile(studio.exportPath,'Preprocessing');
-        if ~exist(preFolder,'dir')
-            mkdir(preFolder);
-        end
 
-                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'preproc');
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'imreg');
         newData.savedFile = savePath;
         newData.lazyFile = savePath;
         displayNameFull = fullName;
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-        addLog(['Background save queued -> ' savePath]);
+        DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2499,22 +2520,15 @@ function frameRateCallback(~,~)
         studio.pipeline.preprocDone = true;
 
                         preFolder = fullfile(studio.exportPath,'Preprocessing');
-                if ~isempty(strfind(lower(fullName),'_ica_'))
-                    opSaveTag = 'ica';
-                elseif ~isempty(strfind(lower(fullName),'_pca_'))
-                    opSaveTag = 'pca';
-                else
-                    opSaveTag = 'preproc';
-                end
-                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'framerej');
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-                addLog(['Background save queued -> ' savePath]);
+                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2598,22 +2612,15 @@ fullName = [baseStem '_scrub_' methKey '_' interpKey '_' ts];
         studio.pipeline.preprocDone = true;
 
                         preFolder = fullfile(studio.exportPath,'Preprocessing');
-                if ~isempty(strfind(lower(fullName),'_ica_'))
-                    opSaveTag = 'ica';
-                elseif ~isempty(strfind(lower(fullName),'_pca_'))
-                    opSaveTag = 'pca';
-                else
-                    opSaveTag = 'preproc';
-                end
-                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'scrub');
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-                addLog(['Background save queued -> ' savePath]);
+                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2750,6 +2757,9 @@ function stepMotorCallback(~,~)
 
         newData.preprocessing = 'Motor slice reconstruction';
         newData.motorInfo = motorInfo;
+        % Reconstruction creates a new time series, not a derivative with
+        % the duration of the single split file used to open Studio.
+        newData = deConfUSIon_signal('motortiming',newData);
         % HUMOR_STUDIO_MARK_MOTOR_PATCH_V2
         newData.isStepMotor = true;
         newData.stepMotorMode = true;
@@ -2774,22 +2784,15 @@ function stepMotorCallback(~,~)
         studio.pipeline.preprocDone = true;
 
                         preFolder = fullfile(studio.exportPath,'Preprocessing');
-                if ~isempty(strfind(lower(fullName),'_ica_'))
-                    opSaveTag = 'ica';
-                elseif ~isempty(strfind(lower(fullName),'_pca_'))
-                    opSaveTag = 'pca';
-                else
-                    opSaveTag = 'preproc';
-                end
-                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'motor');
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-                addLog(['Background save queued -> ' savePath]);
+                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -2876,22 +2879,15 @@ fullName = sprintf('%s_despike_z%s_%s', baseStem, numTag(zthr), ts);
         studio.pipeline.preprocDone = true;
 
                         preFolder = fullfile(studio.exportPath,'Preprocessing');
-                if ~isempty(strfind(lower(fullName),'_ica_'))
-                    opSaveTag = 'ica';
-                elseif ~isempty(strfind(lower(fullName),'_pca_'))
-                    opSaveTag = 'pca';
-                else
-                    opSaveTag = 'preproc';
-                end
-                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opSaveTag);
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'despike');
                 newData.savedFile = savePath;
                 newData.lazyFile = savePath;
                 displayNameFull = fullName;
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-                addLog(['Background save queued -> ' savePath]);
+                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -3018,7 +3014,6 @@ function svdClutterCallback(~,~)
         newData.sourceDatasetKey = studio.activeDataset;
 
         preFolder = fullfile(studio.exportPath,'Preprocessing');
-        if ~exist(preFolder,'dir'), mkdir(preFolder); end
         savePath = deConfUSIon_safe_preproc_save_path(preFolder,fullName,keyName,'svd');
         newData.savedFile = savePath;
         newData.lazyFile = savePath;
@@ -3030,7 +3025,7 @@ function svdClutterCallback(~,~)
         displayNameFull = fullName; %#ok<NASGU>
         preprocDisplayName = fullName; %#ok<NASGU>
         datasetSortTime = newData.datasetSortTime; %#ok<NASGU>
-        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
 
         guidata(fig,studio);
         refreshDatasetDropdown();
@@ -3038,7 +3033,7 @@ function svdClutterCallback(~,~)
         addLog(sprintf('SVD applied: %.1f%% (%d/%d components), scope=%s, center=%s.', ...
             svdStats.cutoffPercent,svdStats.nRejected,svdStats.nFrames, ...
             svdStats.scope,svdStats.centerMode));
-        addLog(['Background save queued -> ' savePath]);
+        addLog(['Saved and verified -> ' savePath]);
         if isfield(svdStats,'qcFile') && ~isempty(svdStats.qcFile)
             addLog(['SVD QC saved -> ' svdStats.qcFile]);
         end
@@ -3279,10 +3274,8 @@ function driftCompensationCallback(~,~)
         preprocDisplayName = fullName;
         try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
         studio.datasets.(keyName) = newData;
-        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-        try, deConfUSIon_commit_full_display_name(savePath,newData,newData.displayNameFull); catch ME2, addLog(['[drift] name commit skipped: ' ME2.message]); end
-        try, deConfUSIon_write_full_display_metadata(savePath,newData); catch ME2, addLog(['[drift] metadata skipped: ' ME2.message]); end
-        addLog(['Background save queued -> ' savePath]);
+        DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -3481,19 +3474,16 @@ function temporalSmoothingCallback(~,~)
         studio.pipeline.preprocDone = true;
 
         preFolder = fullfile(studio.exportPath,'Preprocessing');
-        if ~exist(preFolder,'dir')
-            mkdir(preFolder);
-        end
 
-                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'preproc');
+                savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'tsmooth');
         newData.savedFile = savePath;
         newData.lazyFile = savePath;
         displayNameFull = fullName;
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-        addLog(['Background save queued -> ' savePath]);
+        DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();
@@ -4117,8 +4107,8 @@ end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-                addLog(['Background save queued -> ' savePath]);
+                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Saved and verified -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
                 if isfield(stats,'percentExplainedRemoved'), addLog(sprintf('PCA removed %.2f%% variance proxy.', stats.percentExplainedRemoved)); end
@@ -4187,8 +4177,8 @@ end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-                addLog(['Background save queued -> ' savePath]);
+                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                addLog(['Saved and verified -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
                 if isfield(stats,'percentEnergyRemoved'), addLog(sprintf('ICA removed %.2f%% component-energy proxy.', stats.percentEnergyRemoved)); end
@@ -4260,6 +4250,9 @@ function computePSCCallback(~,~)
         proc = computePSC(data.I, data.TR, par, baseline);
 
         newData = data;
+        % This is an explicitly requested PSC analysis, not a viewer cache.
+        % Drop cache ownership markers so durable saving retains its PSC.
+        newData=rmfield(newData,intersect(fieldnames(newData),{'deconfPscKey','deconfPscDatasetKey','I1'}));
         newData.PSC = single(proc.PSC);
         newData.bg = single(proc.bg);
         if isfield(proc,'TR_eff')
@@ -4281,22 +4274,20 @@ function computePSCCallback(~,~)
         newData.datasetSortTime = now;
         newData.sourceDatasetKey = studio.activeDataset;
 
+        pscFolder = fullfile(studio.exportPath,'PSC');
+        savePath=deConfUSIon_safe_preproc_save_path(pscFolder,fullName,keyName,'psc');
+        newData.savedFile=savePath; newData.lazyFile=savePath;
+        newData.isLazy=false;
+        newData.pscParameters=struct('baseline',baseline,'filtering',par);
+        DataIO('save',savePath,struct('newData',newData));
         studio.datasets.(keyName) = newData;
         studio.activeDataset = keyName;
         studio.pipeline.pscDone = true;
 
-        pscFolder = fullfile(studio.exportPath,'PSC');
-if ~exist(pscFolder,'dir')
-    mkdir(pscFolder);
-end
-
-save(fullfile(pscFolder,[fullName '.mat']), ...
-    'newData','-v7.3');
-
         guidata(fig, studio);
         refreshDatasetDropdown();
 
-        addLog(['PSC computation -> ' fullName]);
+        addLog(['PSC saved and verified -> ' savePath]);
 
     catch ME
         addLog(['PSC ERROR: ' ME.message]);
@@ -4453,9 +4444,6 @@ function filteringCallback(~,~)
         studio.pipeline.preprocDone = true;
 
         preFolder = fullfile(studio.exportPath,'Preprocessing');
-        if ~exist(preFolder,'dir')
-            mkdir(preFolder);
-        end
 
         savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, 'filter');
         newData.savedFile = savePath;
@@ -4470,8 +4458,8 @@ function filteringCallback(~,~)
             newData.datasetSortTime = datasetSortTime;
             studio.datasets.(keyName) = newData;
         end
-        DataIO('enqueue',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
-        addLog(['Background save queued -> ' savePath]);
+        DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
         refreshDatasetDropdown();

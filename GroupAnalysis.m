@@ -301,6 +301,10 @@ S.plotTop = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
 S.plotBot = struct('auto',true,'forceZero',false,'ymin',0,'ymax',300,'step',0);
 
 S.plotX = struct('auto',false,'xmin',0,'xmax',20);
+S.previewConnectAnimals = false;
+S.previewPairColor = []; % Empty selects contrast appropriate for Dark/Light.
+S.previewPairColorChoice = 1;
+S.previewPairCustomColor = [.55 .55 .55];
 
 S.previewStyle    = 'Dark';
 S.previewShowGrid = false;
@@ -1158,14 +1162,14 @@ try
     uicontrol(S.hPrevTop,'Style','text','String','A color','Units','normalized', ...
         'Position',[0.560 0.470 0.065 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
         'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
-    S.hPrevColorA = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Vehicle gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black'}, ...
+    S.hPrevColorA = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Vehicle gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black','White'}, ...
         'Value',1,'Units','normalized','Position',[0.630 0.445 0.125 0.180], ...
         'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_COLOR_A');
 
     uicontrol(S.hPrevTop,'Style','text','String','B color','Units','normalized', ...
         'Position',[0.775 0.470 0.065 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
         'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
-    S.hPrevColorB = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Vehicle gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black'}, ...
+    S.hPrevColorB = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Vehicle gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black','White'}, ...
         'Value',2,'Units','normalized','Position',[0.845 0.445 0.125 0.180], ...
         'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_COLOR_B');
 
@@ -1174,7 +1178,30 @@ try
         'Value',0,'BackgroundColor',bg2,'ForegroundColor','w','FontSize',10, ...
         'Callback',@onSmoothChanged,'Tag','GA_RPV_ANIMAL_LABELS');
 
-    uicontrol(S.hPrevTop,'Style','text','String','X min / max','Units','normalized', ...
+    S.hPrevConnectAnimals = uicontrol(S.hPrevTop,'Style','checkbox','String','Connect same animal', ...
+        'Units','normalized','Position',[0.020 0.330 0.210 0.110], ...
+        'Value',0,'BackgroundColor',bg2,'ForegroundColor','w','FontSize',10, ...
+        'Callback',@onSmoothChanged,'Tag','GA_RPV_CONNECT_ANIMALS', ...
+        'TooltipString','Links matching Animal IDs across groups. Case/outer spaces are ignored; ambiguous duplicate IDs are skipped. Display only: statistics are unchanged.');
+    uicontrol(S.hPrevTop,'Style','text','String','Line color', ...
+        'Units','normalized','Position',[0.235 0.330 0.080 0.110], ...
+        'BackgroundColor',bg2,'ForegroundColor','w','FontSize',10,'Tag','GA_RPV_DYNAMIC');
+    [pairNames,pairColors]=callCommon('pairLinePalette');
+    S.hPrevPairColor=uicontrol(S.hPrevTop,'Style','popupmenu','String',pairNames, ...
+        'Units','normalized','Position',[0.320 0.325 0.140 0.120], ...
+        'Value',1,'UserData',pairColors,'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+        'FontSize',10,'Callback',@onPairColorChanged,'Tag','GA_RPV_PAIR_COLOR', ...
+        'TooltipString','Color of same-animal connecting lines, including PNG exports. Custom opens the color picker.');
+    uicontrol(S.hPrevTop,'Style','text','String','X tick step (min)', ...
+        'Units','normalized','Position',[0.475 0.330 0.145 0.110], ...
+        'BackgroundColor',bg2,'ForegroundColor','w','FontSize',10,'Tag','GA_RPV_DYNAMIC');
+    S.hPrevXStep = uicontrol(S.hPrevTop,'Style','edit','String','auto', ...
+        'Units','normalized','Position',[0.630 0.325 0.060 0.120], ...
+        'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',10, ...
+        'Callback',@onSmoothChanged,'Tag','GA_RPV_XSTEP');
+    S.hPrevXAll = mkBtn(S.hPrevTop,'Full time range',[0.700 0.325 0.140 0.120],C.btnSecondary,@onPreviewFullTime);
+
+    uicontrol(S.hPrevTop,'Style','text','String','Top X min/max (min)','Units','normalized', ...
         'Position',[0.020 0.155 0.095 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
         'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
     S.hPrevXMin = uicontrol(S.hPrevTop,'Style','edit','String','0','Units','normalized', ...
@@ -1659,6 +1686,29 @@ drawnow;
         try, S0 = readPreviewAxisControlsLocal(S0); catch, end
         guidata(hFig,S0);
         updatePreview();
+    end
+
+    function onPreviewFullTime(~,~)
+        S0=guidata(hFig);
+        set(S0.hPrevXMin,'String','auto'); set(S0.hPrevXMax,'String','auto');
+        onSmoothChanged([],[]);
+    end
+
+    function onPairColorChanged(h,~)
+        S0=guidata(hFig); choice=get(h,'Value'); colors=get(h,'UserData');
+        if choice==size(colors,1)
+            color=uisetcolor(gaPrevField(S0,'previewPairCustomColor',[.55 .55 .55]),'Connecting line color');
+            if ~isnumeric(color)||numel(color)~=3
+                set(h,'Value',gaPrevField(S0,'previewPairColorChoice',1)); return;
+            end
+            S0.previewPairCustomColor=color;
+        elseif choice==1
+            color=[];
+        else
+            color=colors(choice,:);
+        end
+        S0.previewPairColor=color; S0.previewPairColorChoice=choice;
+        guidata(hFig,S0); updatePreview();
     end
 
     function onPlotScaleChanged(~,~)
@@ -2268,7 +2318,9 @@ S0.activeTab = 'PREV';
             updatePreview();
             setStatusText('ROI analysis complete.');
         catch ME
-            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            if ~any(strcmp(ME.identifier,{'GroupAnalysis:MetricWindow','GroupAnalysis:MetricCoverage'}))
+                try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            end
             errordlg(ME.message,'ROI Analysis');
             setStatusText(['ROI analysis failed: ' ME.message]);
         end
@@ -2315,6 +2367,7 @@ S0.activeTab = 'PREV';
     end
     function onExportPreviewPNG(which)
         S0 = guidata(hFig);
+        S0 = readPreviewAxisControlsLocal(S0);
         S0 = readPlotScaleSettingsFromUI(S0);
         guidata(hFig,S0);
 
@@ -2544,7 +2597,18 @@ try, S0 = readPlotScaleSettingsFromUI(S0); catch, end
             end
 
             try
-                setStatusText('ROI preview plotted.');
+                message='ROI preview plotted.';
+                if S0.previewConnectAnimals && isappdata(S0.ax2,'GA_ROI_PairingReport')
+                    pairing=getappdata(S0.ax2,'GA_ROI_PairingReport');
+                    message=sprintf('ROI preview: %d animal pairs.',numel(pairing.pairedIDs));
+                    if ~isempty(pairing.duplicateIDs)
+                        message=[message ' Duplicate Animal IDs within a group: ' strjoin(pairing.duplicateIDs,', ') '.'];
+                    end
+                    if ~isempty(pairing.unmatchedIDs)
+                        message=[message ' No finite partner: ' strjoin(pairing.unmatchedIDs,', ') '.'];
+                    end
+                end
+                setStatusText(message);
             catch
             end
 
@@ -2845,7 +2909,9 @@ drawnow;
         try
             [varargout{1:nargout}] = GroupAnalysis_Common(action,varargin{:});
         catch ME
+            if ~any(strcmp(ME.identifier,{'GroupAnalysis:MetricWindow','GroupAnalysis:MetricCoverage'}))
             try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
+            end
             error('GroupAnalysis_Common action "%s" failed: %s',action,ME.message);
         end
     end
@@ -3489,6 +3555,7 @@ end
 end
 
 function S = readPreviewAxisControlsLocal(S)
+try, S.previewConnectAnimals=logical(get(S.hPrevConnectAnimals,'Value')); catch, end
 % Reads ROI-tab Y controls first, then optional compact Preview-tab overrides.
 try, S.plotTop.auto      = logical(get(S.hTopAuto,'Value')); catch, end
 try, S.plotTop.forceZero = logical(get(S.hTopZero,'Value')); catch, end
@@ -3537,6 +3604,13 @@ end
 
 x0 = previewAxisNumLocal(S,'hPrevXMin');
 x1 = previewAxisNumLocal(S,'hPrevXMax');
+step=previewAxisNumLocal(S,'hPrevXStep');
+S.plotX.step=0; if isfinite(step) && step>0, S.plotX.step=step; end
+if isfinite(x0) && isfinite(x1) && x1<=x0
+    x0=gaPrevField(S.plotX,'xmin',0); x1=gaPrevField(S.plotX,'xmax',20);
+    if ~isfinite(x0)||~isfinite(x1)||x1<=x0, x0=0; x1=20; end
+    set(S.hPrevXMin,'String',num2str(x0)); set(S.hPrevXMax,'String',num2str(x1));
+end
 if isfinite(x0) || isfinite(x1)
     S.plotX.auto = false;
     S.plotX.xmin = x0;
@@ -3698,7 +3772,7 @@ for kk = 1:numel(texts)
     end
 end
 
-edits = {'hPrevStyle','hSmoothWin','hPrevColorA','hPrevColorB'};
+edits = {'hPrevStyle','hSmoothWin','hPrevColorA','hPrevColorB','hPrevPairColor'};
 for kk = 1:numel(edits)
     try
         h = S.(edits{kk});
@@ -3709,7 +3783,7 @@ for kk = 1:numel(edits)
     end
 end
 
-checks = {'hPrevGrid','hSmoothEnable','hPrevAnimalLabels'};
+checks = {'hPrevGrid','hSmoothEnable','hPrevAnimalLabels','hPrevConnectAnimals'};
 for kk = 1:numel(checks)
     try
         h = S.(checks{kk});
@@ -3944,6 +4018,13 @@ end
 function meta = extractMetaFromSources(subjectTxt,dataFile,roiFile,bundleFile)
 if nargin < 4, bundleFile = ''; end
 meta = struct('animalID','N/A','session','N/A','scanID','N/A');
+% An explicit Animal ID is authoritative. Older acquisition filenames can
+% contain a stale animal name; do not undo a user's table correction.
+explicit=strtrimSafe(subjectTxt);
+if ~isempty(regexp(explicit,'^[A-Za-z0-9]+(?:[ -][A-Za-z0-9]+)*$','once')) && ...
+        ~any(strcmpi(explicit,{'NA','Unknown','None'}))
+    meta.animalID=explicit;
+end
 cands = {bundleFile,roiFile,dataFile,subjectTxt};
 for i = 1:numel(cands)
     txt = strtrimSafe(cands{i});
@@ -4181,6 +4262,8 @@ if isempty(ax) || ~ishandle(ax)
 end
 
 figH = ancestor(ax,'figure');
+% PNG export creates a separate figure; read styles from the live controls.
+if isfield(S,'hPrevTop') && isgraphics(S.hPrevTop), figH=ancestor(S.hPrevTop,'figure'); end
 [lineW, shadeA, colA, colB, showAnimalLabels] = ga_preview_style_from_gui(figH);
 
 cla(ax,'reset');
@@ -4302,14 +4385,14 @@ grp = grp(okTrace);
 subjName = subjName(okTrace);
 n = numel(tCell);
 
-t0 = -inf;
+t0 = inf;
 % GA_UNEQUAL_SCAN_LENGTH_PREVIEW_FIX_20260903
-% Longest scan determines display endpoint.
+% Match analysis: preserve the full available range, with NaN outside each scan.
 t1 = -inf;
 dtList = [];
 for i = 1:n
     t = tCell{i};
-    t0 = max(t0,min(t));
+    t0 = min(t0,min(t));
     % Keep the latest available endpoint across subjects.
 t1 = max(t1,max(t));
     d = diff(t);
@@ -4454,7 +4537,7 @@ end
 
 xlabel(ax,'Time (min)','Color',fgCol,'FontWeight','bold');
 ylabel(ax,'PSC (%)','Color',fgCol,'FontWeight','bold');
-title(ax,'Group ROI timecourse','Color',fgCol,'FontWeight','bold');
+title(ax,'','Color',fgCol,'FontWeight','bold');
 
 ga_apply_preview_x(ax,t,S);
 gaPrevApplyY(ax,allY,gaPrevField(S,'plotTop',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
@@ -4506,6 +4589,14 @@ for i = 1:numel(metricVals)
     end
 end
 
+pointX=nan(size(metricVals));
+for g=1:numel(gNames)
+    ii=find(strcmpi(grp,gNames{g}) & isfinite(metricVals));
+    for k=1:numel(ii), pointX(ii(k))=g+ga_jitter(ii(k),.22); end
+end
+if gaPrevField(S,'previewConnectAnimals',false)
+    GroupAnalysis_Common('connectAnimalPoints',ax,T,metricVals,pointX,gNames,fgCol,gaPrevField(S,'previewPairColor',[]));
+end
 allY = [];
 for g = 1:numel(gNames)
     idxRows = find(strcmpi(grp,gNames{g}) & isfinite(metricVals));
@@ -4564,7 +4655,7 @@ set(ax,'XTick',1:numel(gNames),'XTickLabel',dispNames,'FontSize',11);
 try, xtickangle(ax,20); catch, end
 xlabel(ax,'','Color',fgCol);
 ylabel(ax,'PSC (%)','Color',fgCol,'FontWeight','bold');
-title(ax,'Per-animal ROI metric','Color',fgCol,'FontWeight','bold');
+title(ax,'','Color',fgCol,'FontWeight','bold');
 xlim(ax,[0.4 numel(gNames)+0.6]);
 
 gaPrevApplyY(ax,allY,gaPrevField(S,'plotBot',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
@@ -4746,6 +4837,7 @@ try
     end
     if isfinite(xmin) && isfinite(xmax) && xmax > xmin
         xlim(ax,[xmin xmax]);
+        GroupAnalysis_Common('applyTimeTicks',ax,gaPrevField(S.plotX,'step',0));
     end
 catch
 end
@@ -4979,7 +5071,12 @@ for g = 1:numel(R.group)
 end
 xlabel(ax,'Time (min)','Color',fg,'FontWeight','bold');
 if isfield(R,'unitsPercent') && R.unitsPercent, ylabel(ax,'% signal change','Color',fg,'FontWeight','bold'); else, ylabel(ax,'Signal','Color',fg,'FontWeight','bold'); end
-title(ax,'Group ROI timecourse','Color',fg,'FontWeight','bold');
+title(ax,'','Color',fg,'FontWeight','bold');
+px=gaPrevField(S,'plotX',struct('auto',true));
+if isfield(px,'auto') && ~px.auto && isfield(px,'xmin') && isfield(px,'xmax') && ...
+        isfinite(px.xmin) && isfinite(px.xmax) && px.xmax>px.xmin
+    xlim(ax,[px.xmin px.xmax]);
+end
 gaPrevApplyY(ax,allY,gaPrevField(S,'plotTop',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
 if gaPrevField(S,'tc_showInjectionBox',true)
     yl = ylim(ax);
@@ -5014,7 +5111,7 @@ end
 set(ax,'XTick',1:numel(gNames),'XTickLabel',gaPrevDisplayNames(R));
 try, xtickangle(ax,20); catch, end
 ylabel(ax,gaPrevField(R,'metricName','Metric'),'Color',fg,'FontWeight','bold','Interpreter','none');
-title(ax,'Per-animal ROI metric','Color',fg,'FontWeight','bold');
+title(ax,'','Color',fg,'FontWeight','bold');
 gaPrevApplyY(ax,allY,gaPrevField(S,'plotBot',struct('auto',true,'forceZero',false,'ymin',0,'ymax',1,'step',0)));
 gaPrevStatsText(ax,R,S,styleName);
 hold(ax,'off');
@@ -5169,6 +5266,7 @@ f = figure( ...
     'ToolBar','none', ...
     'NumberTitle','off');
 
+figureGuard = onCleanup(@()close(f)); %#ok<NASGU>
 if whichPlot == 1
     set(f,'Position',[100 100 1400 650]);
     ax = axes('Parent',f,'Units','normalized','Position',[0.09 0.16 0.86 0.74]);
@@ -5178,10 +5276,41 @@ else
 end
 
 exportOnePreview(ax,whichPlot,S,styleName);
+stylePreviewPNGForSlides(ax,whichPlot);
 
 set(f,'PaperPositionMode','auto');
 print(f, outFile, '-dpng', '-r300');
-close(f);
+end
+
+function stylePreviewPNGForSlides(ax,whichPlot)
+% PNGs are usually reduced to a half-slide panel. Increase the typography
+% before rasterizing; extra DPI alone does not make labels larger on slides.
+set(ax,'FontUnits','points','FontSize',24,'FontWeight','bold','LineWidth',2);
+labels = [get(ax,'XLabel') get(ax,'YLabel')];
+set(labels,'FontUnits','points','FontSize',28,'FontWeight','bold');
+annotations = setdiff(findall(ax,'Type','text'),[labels get(ax,'Title')]);
+set(annotations,'FontUnits','points','FontSize',18,'FontWeight','bold');
+legends = findall(ancestor(ax,'figure'),'Type','legend');
+set(legends,'FontUnits','points','FontSize',20,'FontWeight','bold');
+
+% PACAP/Vehicle read best horizontally. Keep angled labels for many groups.
+if whichPlot == 2 && numel(get(ax,'XTick')) <= 2
+    try, set(ax,'XTickLabelRotation',0); catch, end
+end
+
+% Measure the enlarged labels so tick numbers and PSC (%) remain inside the
+% PNG, including negative/large values and longer group names.
+drawnow;
+set(ax,'Units','normalized');
+margin = get(ax,'TightInset') + [0.02 0.02 0.02 0.03];
+if whichPlot == 1
+    margin = max(margin,[0.10 0.20 0.035 0.05]);
+else
+    margin = max(margin,[0.12 0.12 0.035 0.06]);
+end
+set(ax,'Position',[margin(1) margin(2) ...
+    max(0.2,1-margin(1)-margin(3)) max(0.2,1-margin(2)-margin(4))]);
+drawnow;
 end
 
 
@@ -5440,6 +5569,8 @@ try
             colA = [0.95 0.85 0.20];
         elseif ~isempty(strfind(s,'black'))
             colA = [0 0 0];
+        elseif ~isempty(strfind(s,'white'))
+            colA = [1 1 1];
         else
             colA = [0.20 0.65 0.90];
         end
@@ -5482,6 +5613,8 @@ try
             colB = [0.95 0.85 0.20];
         elseif ~isempty(strfind(s,'black'))
             colB = [0 0 0];
+        elseif ~isempty(strfind(s,'white'))
+            colB = [1 1 1];
         else
             colB = [0.60 0.60 0.60];
         end

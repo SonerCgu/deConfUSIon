@@ -1,4 +1,16 @@
-# Automatic 3D atlas registration
+# Automatic atlas registration: 2D, motor and 3D
+
+## Single-slice and motor data
+
+Open the **2D Coronal Atlas Registration** editor with an anatomical underlay (preferably a brain-masked Mask Editor export). Choose **Vascular** or **Histology**, select the approximate matching coronal atlas plane, and click the green **Auto: current atlas plane** button. The source slice moves; the chosen atlas plane stays fixed. **Undo auto** restores the preceding alignment. **Save Current Slice** explicitly exports the existing Reg2D transform format plus vascular, histology, regions and region TXT files.
+
+For motor data, select each source slice with **Prev/Next** or the source slider. Every slice retains its own transform, automatic-run report and undo state. Pick that slice's matching atlas plane before fitting. **Save ALL Visited** retains its existing behavior. Automatic refinement does not infer motor spacing, assign atlas slices, or propagate one slice's transform to the others.
+
+The 2D fit searches translation, rotation and uniform incremental scale with decreasing step sizes. It evaluates the complete original source at every candidate, avoiding an early crop into the smaller atlas field of view. It compares the current placement with foreground-center starts, then maximizes normalized mutual information using a 32 x 32 joint histogram:
+
+`NMI(F,W) = (H(F) + H(W)) / H(F,W)`, where `H(p) = -sum(p log(p))` and `W` is the transformed source. Only the union of non-background pixels contributes. A supplied source brain mask excludes pixels outside that mask. Relative scale is bounded to 0.7–1.4, and candidates must retain sufficient foreground and atlas overlap. Incremental similarities preserve the editor's independent scale/rotation model; no shear or reflection is introduced. The saved report records the chosen source and atlas slice. This is refinement of an approximately selected anatomical plane, not automatic anatomical plane identification.
+
+## Matrix-probe / 3D data
 
 Open **Registration to Atlas**, choose **3D atlas: AUTOMATIC registration**, and select **ACTIVE 3D DATASET: mean anatomy** for a loaded matrix-probe time series. The active option computes a mean over time without rereading the acquisition file. A saved 3D anatomy can also be selected. The 3D review window always has a green **Automatic 3D registration** button.
 
@@ -14,21 +26,27 @@ Open **Registration to Atlas**, choose **3D atlas: AUTOMATIC registration**, and
 
 The bundled atlas is stored as **[AP, DV, LR]**. A native coronal acquisition is **[DV, LR, AP]**, so the new coronal geometry uses `permute(native,[3 1 2])`, then resamples each axis by its confirmed spacing. It preserves the acquired coronal image without a hidden mirror or transpose. Reverse AP slice order explicitly in Scan geometry if acquisition ran posterior to anterior. Spacing alone cannot establish probe left/right handedness. A separate legacy option retains the original paper convention for files acquired in that layout.
 
-The new convention is saved as `coronal_stack_v2` in geometry metadata. Old transforms retain their legacy application path in SCM/Video; the registration dialog does not silently reuse one as a new coronal transform. Re-register and explicitly save a reviewed transform to adopt the corrected convention. Intensities used for fitting are robustly scaled using the 1st and 99.5th percentiles; acquired functional samples remain unchanged.
+The new convention is saved as `coronal_stack_v2` in geometry metadata. Old transforms retain their legacy application path in SCM/Video; the registration dialog does not silently reuse one as a new coronal transform. Re-register and explicitly save a reviewed transform to adopt the corrected convention. Intensities used for fitting are clipped/scaled using the 1st and 99.5th nonzero percentiles and square-root compressed. This gives weaker Doppler vessels useful histogram resolution. The 3D fitter uses a separate anatomy buffer, independent of the viewer's display equalization. Acquired functional samples remain unchanged.
 
 Rigid registration estimates `x_atlas = R*x_scan + t`, with rotation `R` and translation `t`. Affine registration estimates `x_atlas = A*x_scan + t`, additionally allowing scaling and shear. Both fit a single linear transform that remains compatible with the toolbox's `affine3d` and `Transformation.mat` pipeline. Deformable warps and ANTs are not part of this implementation.
 
-Greedy fits normalized cross-correlation for the vascular target and normalized mutual information for histology, at several resolutions. MATLAB uses its multimodal mutual-information optimizer with a small initial radius, a translation stage, then rigid refinement and optional affine refinement. Manual starts are prewarped before fitting an incremental transform, preserving their existing rotation and scale. Divergence is rejected, and coverage checks reject proposals that move excessive anatomy outside the atlas. Fitting uses a reduced volume when the maximum image dimension exceeds 160; the resulting matrix remains in the original atlas voxel coordinates. Final functional resampling uses the full spatial grid and processes each time point with the same transform.
+Without a manual start, the fitter compares the image-box center and foreground-centroid positions with anterior/posterior and depth offsets. Candidate starting positions are scored by NMI and must retain foreground coverage. The search keeps confirmed spacing and orientation. A manual start bypasses this coarse search.
+
+Greedy fits normalized cross-correlation for the vascular target and normalized mutual information for histology, at several resolutions. MATLAB uses its multimodal mutual-information optimizer with a small initial radius, a translation stage, then rigid refinement and optional affine refinement. Manual starts are prewarped before fitting an incremental transform, preserving their existing rotation and scale. Divergence is rejected. If the fine optimizer decreases NMI or loses too much coverage, the valid scored starting proposal is retained and the GUI reports that the fine fit was rejected. The report distinguishes original, initialized and final NMI, and records a rejected optimizer matrix when applicable. A retained coarse proposal still needs careful review. Fitting uses a reduced volume when the maximum image dimension exceeds 160; the resulting matrix remains in the original atlas voxel coordinates. Final functional resampling uses the full spatial grid and processes each time point with the same transform.
 
 Greedy matrices map fixed RAS coordinates to moving RAS coordinates with column vectors. MATLAB uses a moving-to-fixed transform with row vectors, and names its image axes column/row/slice. If `H` maps MATLAB voxel coordinates to the temporary NIfTI RAS coordinates and `G` is Greedy's matrix, the MATLAB matrix is `(H^-1 * G^-1 * H)'`. The conversion includes the row/column swap and zero/one-based origins. Each Greedy result is also resliced by Greedy and MATLAB and compared in the shared interior to detect coordinate-conversion errors.
 
-Failed or canceled proposals preserve the prior alignment. Reflections, extreme scales, negligible overlap, or a substantial decrease in similarity are rejected. These checks are numerical guards; visual review remains necessary for a limited field of view or a poorly matched atlas.
+Failed or canceled runs preserve the prior alignment. Reflections, extreme scales and negligible overlap are rejected. These checks are numerical guards; visual review remains necessary for a limited field of view or a poorly matched atlas.
 
 ITK-SNAP review files use NIfTI axes **[LR, AP, DV]**, consistently permuting the reference, anatomy and optional regions. The RAS header represents increasing AP as posterior and increasing DV as ventral. Thus the acquired coronal slice is displayed in the coronal review plane. This review-file conversion does not change the saved MATLAB matrix or the original acquisition.
 
 ## Verification
 
 `tests/test_viewer_registration.m` exercises both viewer orientations and square-pixel rendering, repeated load cancellation including setup cancellation, actual Greedy rigid/affine execution, MATLAB fallback, landmark recovery on an asymmetric synthetic volume, coordinate conversion, proposal/undo/save behavior, static volumes with more than 16 slices, and full 4D resampling. The 4D test confirms that the same spatial transform preserves a known proportional relationship between time points. These tests do not establish registration accuracy on a particular animal.
+
+`tests/test_atlas_2d_registration.m` checks known 2D landmark recovery, changed intensity contrast, cancellation and transform representability. `tests/test_atlas_2d_gui.m` exercises the actual editor with animal 788's saved brain image, including automatic fitting, exact undo, independent motor-slice states and all three atlas export types. It saves only to a disposable test folder.
+
+`tests/test_atlas_real_proposals.m` is a read-only exploratory comparison using animal 788, animal 1115's PC1-removal/imregdemons-n25 motor derivative, and animal 1287's 54-slice imregdemons-n50 anatomy. The 2D atlas planes come from existing user registrations (111 for 788; 138/128/118/108 for the four motor slices). Proposals and comparison PNGs are written under `validation/atlas_real`, separately from the animal folders. These comparisons measure numerical behavior and support visual review; they are not independent anatomical ground truth.
 
 ## References
 
