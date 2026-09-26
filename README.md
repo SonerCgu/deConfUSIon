@@ -2,7 +2,6 @@
 
 **deConfUSIon** is a MATLAB-based graphical toolbox for functional ultrasound imaging (fUSI) analysis. It supports data loading, quality control, preprocessing, percentage signal change (PSC) computation, signal-change-map (SCM) visualization, masking, atlas registration, segmentation, functional connectivity, and group analysis.
 
-The 2026-09-06 repair release adds a shared numerical contract, safer timing and baseline handling, chunked large-data operations, a consistent GUI theme, context Help, dynamic SCM rebasing, dataset identity headers in PCA/ICA, and seven validated Standardized Analysis presets. Existing files are backed up in `_backup_repair_20260906_131128`.
 
 This repository was previously developed as **HUMoR / HUMOR-Analysis-Tool**. The active launcher and current repository name are now **deConfUSIon**.
 
