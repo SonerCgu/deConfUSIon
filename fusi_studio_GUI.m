@@ -1731,6 +1731,10 @@ function imregdemonsCallback(~,~)
         return;
     end
 
+    % True 3D awake preset registers volumes rather than independent motor slices.
+    if isstruct(stdStep) && isfield(stdStep,'imregMode') && strcmp(stdStep.imregMode,'standard')
+        cfg.stepMotorMode='standard';
+    end
     blockMethod = lower(strtrim(cfg.blockMethod));
     nsub = round(cfg.nsub);
 

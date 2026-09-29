@@ -142,12 +142,12 @@ state = struct();
 state.baseKey=[]; state.baseMean=[];
 state.signalKey=[]; state.signalMean=[];
 state.z   = max(1, round(nZ/2));
-state.cax = [-100 100];
+state.cax = [0 30];
 state.alphaModOn = true;
-state.modMin = -20;
-state.modMax = 20;
-state.signMode = 3;           % 1 positive, 2 negative magnitude, 3 signed
-state.prevSignMode = 3;
+state.modMin = 5;
+state.modMax = 10;
+state.signMode = 1;           % 1 positive, 2 negative magnitude, 3 signed
+state.prevSignMode = 1;
 % DECONF_STD_SCM_STATE_FORCE_V11
 try
     if exist('par','var') && isstruct(par) && isfield(par,'standardizedWorkflow') && par.standardizedWorkflow
@@ -241,6 +241,11 @@ try
     end
 catch
 end
+% Standalone SCM opens with the requested unsmoothed positive display.
+if ~isfield(par,'standardizedWorkflow') || ~par.standardizedWorkflow
+    state.cax=[0 30]; state.signMode=1; state.prevSignMode=1;
+    state.alphaModOn=true; state.modMin=5; state.modMax=10;
+end
 state.lastSignedMap = zeros(nY, nX);
 state.hoverMaxPts   = 1200;
 state.hoverStride   = max(1, ceil(nT / state.hoverMaxPts));
@@ -280,6 +285,7 @@ roi.size = 5;
 roi.colors = lines(12);
 roi.isFrozen = false;
 roi.nextId = 1;
+roi.exportedIds = [];
 roi.lastAddStamp = 0;
 roi.lastHoverXY = [-inf -inf];
 roi.pendingHover = [];
@@ -593,7 +599,11 @@ try
 catch
 end
 lblSigma = mkLblImp(pOverlay, 'SCM smoothing sigma');
-ebSigma = mkEdit(pOverlay, '1', @computeSCM);
+ebSigma = mkEdit(pOverlay, '0', @computeSCM);
+set(ebSigma,'Tag','SCM_SmoothingSigma');
+btnScale=mkBtn(pOverlay,'Scale / units',@scaleSettings,colBtnNeutral,10);
+set(btnScale,'Tag','SCM_ScaleSettings');
+par.scmSizeYXZ=[nY nX nZ]; spatial=scmSpatialCalibration(par); rulerStep=0;
 set(ebSigma, 'ForegroundColor', [1.00 0.35 0.35]);
 set(ebCax,'Tag','SCM_DisplayRange');
 set(ebSig,'Tag','SCM_SignalWindow');
@@ -606,7 +616,10 @@ btnScmSeries   = mkBtn(pOverlay, 'EXPORT PPT', @exportScmSeries1minCB, colBtnExp
 set(btnScmSeries, 'TooltipString', 'Export SCM time windows to PowerPoint and images. Choose the first and last slice in the export dialog.');
 btnGroupBundle = mkBtn(pOverlay, 'EXPORT SCM BUNDLE', @exportForGroupAnalysisCB, colBtnPrimary, 12);
 btnOpenGroupBundle = mkBtn(pOverlay, 'OPEN GROUP BUNDLE', @openGroupBundleCB, colBtnPrimary, 12);
-btnUnfreeze    = mkBtn(pOverlay, 'UNFREEZE HOVER', @unfreezeHover, colBtnNeutral, 12);
+btnClearROIs = mkBtn(pOverlay, 'CLEAR ALL ROIs', @clearAllMarkedROIs, colBtnDanger, 12);
+set(btnClearROIs,'Tag','SCM_ClearAllROIs');
+btnUnfreeze    = mkBtn(pOverlay, 'HOVER ACTIVE', @unfreezeHover, [.10 .48 .20], 12);
+set(btnUnfreeze,'Tag','SCM_HoverToggle');
 
 %% ---------------- Underlay controls ----------------
 lblUnderMode = mkLbl(pUnderlay, 'Underlay view');
@@ -720,6 +733,10 @@ try
     end
 catch
 end
+if state.signMode==1
+    set(popMap,'Value',findPopupIndexByName(popMap,'blackbdy_iso'));
+    setOverlayColormap('blackbdy_iso');
+end
 alphaModToggled();
 updateUnderlayControlsEnable();
 updateInfoLines();
@@ -729,6 +746,9 @@ tcAxisModeChanged();
 updateSliceIndicators();
 computeSCM();
 redrawROIsForCurrentSlice();
+if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'awake3DAutoSearch') && isequal(stdStep.awake3DAutoSearch,true)
+    automaticPeakROI(true);
+end
 
 if ~isempty(startupAtlasNote)
     try
@@ -881,6 +901,7 @@ function layoutOverlay(w, h)
     set(lblMap, 'Position', [xLabel y wLabel rowHLoc]);
     set(popMap, 'Position', [xCtrl y (w-xCtrl-pad) rowHLoc]);
     y = y - (rowHLoc + groupGapLoc);
+    set(btnScale,'Position',[xCtrl y max(70,xVal-xCtrl-8) rowHLoc]);
     setRowEditOverlay(lblSigma, ebSigma);
     y = y - 2;
 btnW2 = floor((w - 2*pad - 10) / 2);
@@ -897,7 +918,8 @@ set(btnGroupBundle, 'Position', [xLabel y btnW2 wideBtnHLoc]);
 set(btnOpenGroupBundle, 'Position', [xLabel + btnW2 + 10 y btnW2 wideBtnHLoc]);
 y = y - (wideBtnHLoc + groupGapLoc);
 
-set(btnUnfreeze, 'Position', [xLabel y (w-2*pad) smallBtnHLoc]);
+set(btnUnfreeze, 'Position', [xLabel y btnW2 smallBtnHLoc]);
+set(btnClearROIs,'Position',[xLabel+btnW2+10 y btnW2 smallBtnHLoc]);
 
     function setRowEditOverlay(lbl, ed)
         set(lbl, 'Position', [xLabel y wLabel rowHLoc]);
@@ -993,7 +1015,7 @@ function sliceChanged(~,~)
     set(slZ, 'Value', nZ - state.z + 1);
     mask2D = getMaskForCurrentSlice();
     set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
-    roi.isFrozen = false;
+    roi.pendingHover=[];
     set(hLiveRect, 'Visible', 'off');
     set(hLivePSC, 'Visible', 'off');
     set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
@@ -1001,11 +1023,24 @@ function sliceChanged(~,~)
 end
 
 function unfreezeHover(~,~)
-    roi.isFrozen = false;
+    setHoverActive(roi.isFrozen);
     set(hLiveRect, 'Visible', 'off');
     set(hLivePSC, 'Visible', 'off');
     set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
     applyTimecourseAxisMode();
+end
+
+function setHoverActive(active)
+    roi.isFrozen = ~active;
+    roi.pendingHover=[]; roi.lastHoverXY=[-inf -inf];
+    roi.hoverScheduled=false;
+    if ~isempty(hoverTimer) && isvalid(hoverTimer), stop(hoverTimer); end
+    if active
+        set(btnUnfreeze,'String','HOVER ACTIVE','BackgroundColor',[.10 .48 .20],'ForegroundColor','w');
+    else
+        set(btnUnfreeze,'String','HOVER INACTIVE','BackgroundColor',[.65 .12 .12],'ForegroundColor','w');
+    end
+    setappdata(btnUnfreeze,'HoverActive',logical(active));
 end
 
 function setROIsize()
@@ -1111,7 +1146,7 @@ function mouseScroll(~, evt)
     state.z = clamp(state.z + dz, 1, nZ);
     mask2D = getMaskForCurrentSlice();
     set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
-    roi.isFrozen = false;
+    roi.pendingHover=[];
     set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
     updateSliceIndicators(); updateInfoLines(); computeSCM(); redrawROIsForCurrentSlice();
 end
@@ -1139,7 +1174,7 @@ function addRoiAtCenter(x, ypix)
     col = roi.colors(mod(numel(ROI_byZ{state.z}), size(roi.colors,1))+1, :);
     ROI_byZ{state.z}(end+1) = struct('id', roi.nextId, 'x1', x1, 'x2', x2, 'y1', y1, 'y2', y2, 'color', col);
     roi.nextId = roi.nextId + 1;
-    roi.isFrozen = true;
+    setHoverActive(false);
     redrawROIsForCurrentSlice();
     set(hLiveRect, 'Position', [x1 y1 x2-x1+1 y2-y1+1], 'EdgeColor', col, 'Visible', 'on');
     tcHover = computeRoiPSC_idx(state.z, x1, x2, y1, y2, state.hoverIdx);
@@ -1153,7 +1188,7 @@ function addRoiAtCenter(x, ypix)
 end
 
 function removeNearestRoi(x, ypix)
-    roi.isFrozen = false;
+    roi.pendingHover=[];
     if ~isempty(ROI_byZ{state.z})
         ROI = ROI_byZ{state.z};
         ctr = arrayfun(@(r)[(r.x1+r.x2)/2, (r.y1+r.y2)/2], ROI, 'UniformOutput', false);
@@ -1182,7 +1217,7 @@ function computeSCM(~,~)
     [b0,b1] = parseRangeSafe(getStr(ebBase), 30, 240);
     [s0,s1] = parseRangeSafe(getStr(ebSig), 840, 900);
     sig = str2double(getStr(ebSigma));
-    if ~isfinite(sig), sig = 1; end
+    if ~isfinite(sig) || sig<0, sig = 0; set(ebSigma,'String','0'); end
     if ~isVolMode
         b0i = clamp(round(b0/TR)+1, 1, nT);
         b1i = clamp(round(b1/TR)+1, 1, nT);
@@ -1213,6 +1248,79 @@ function computeSCM(~,~)
     set(hOV, 'CData', map);
     updateView();
     applyTimecourseAxisMode();
+    updateSpatialScale();
+end
+
+function scaleSettings(~,~)
+    raw=mat2str(spatial.rawSpacing);
+    choice=questdlg(sprintf(['Voxel spacing [row column slice] in um: %s\n%s\nRaw spacing: %s\n' ...
+        'Sampling spacing is not acoustic resolution.'],mat2str(spatial.spacingUm),spatial.source,raw), ...
+        'Spatial scale','Ruler settings','Probe presets','Calibrate spacing','Ruler settings');
+    if strcmp(choice,'Probe presets')
+        [ix,ok]=listdlg('PromptString','Use only for native data from the matching sequence (not resampled data)', ...
+            'SelectionMode','single','ListSize',[560 140], ...
+            'ListString',{'Matrix: row 100 / column 150 / slice 150 um','Linear: row 45 / column 45 um; motor spacing unknown'});
+        if ~ok, return; end
+        profiles={'matrix','linear'}; calibration=scmProbeSpacing(profiles{ix});
+        if nX~=calibration.expectedColumns || (ix==1 && nZ~=calibration.expectedSlices)
+            warndlg('Current dimensions do not match this native sequence grid. Calibrate current spacing for cropped/resampled data.','Spatial scale'); return;
+        end
+        spatial=calibration; rulerStep=500;
+    elseif strcmp(choice,'Calibrate spacing')
+        answer=inputdlg({'Row spacing (um)','Column spacing (um)','Slice spacing (um, NaN if unknown)'}, ...
+            'Confirm spacing in CURRENT image coordinates',1,arrayfun(@num2str,spatial.spacingUm,'UniformOutput',false));
+        if isempty(answer), return; end
+        v=str2double(answer)';
+        if any(~isfinite(v(1:2)) | v(1:2)<=0) || ~(isnan(v(3)) || (isfinite(v(3)) && v(3)>0))
+            warndlg('Enter positive row/column spacing. Slice spacing may be NaN.','Spatial scale'); return;
+        end
+        spatial.spacingUm=v; spatial.source='User-confirmed spacing for current image.';
+    elseif strcmp(choice,'Ruler settings')
+        [ix,ok]=listdlg('PromptString','Ruler tick interval','SelectionMode','single', ...
+            'ListString',{'Off','100 um','500 um'});
+        if ~ok, return; end
+        values=[0 100 500]; rulerStep=values(ix);
+        if rulerStep>0 && any(~isfinite(spatial.spacingUm(1:2)))
+            rulerStep=0; warndlg('Units could not be verified. Use Scale / units > Probe presets for these sequences, or Calibrate spacing.','Spatial scale');
+        end
+    end
+    updateSpatialScale();
+end
+
+function updateSpatialScale()
+    delete(findall(ax,'Tag','SCM_PhysicalRuler'));
+    sig=str2double(getStr(ebSigma)); if ~isfinite(sig), sig=0; end
+    detail=sprintf(['Gaussian sigma = %.3g pixels in each in-plane axis; FWHM = %.3g pixels.\n' ...
+        'No smoothing across slices. Sigma 0 = off. Voxel spacing is not acoustic resolution.\n' ...
+        'Native rulers are suppressed after atlas warping.\n' ...
+        'Spacing [row column slice] um: %s\n%s'],sig,2.35482*sig,mat2str(spatial.spacingUm),spatial.source);
+    if all(isfinite(spatial.spacingUm(1:2)))
+        detail=sprintf('%s\nSigma [row column] = %s um; FWHM = %s um.',detail, ...
+            mat2str(sig*spatial.spacingUm(1:2),4),mat2str(2.35482*sig*spatial.spacingUm(1:2),4));
+    end
+    set(ebSigma,'TooltipString',detail); set(btnScale,'TooltipString',detail);
+    setappdata(fig,'SCMSpatialCalibration',spatial);
+    if rulerStep<=0 || any(~isfinite(spatial.spacingUm(1:2))), return; end
+    if state.isAtlasWarped || state.isStepMotorAtlasWarped, return; end
+    % Edge rulers in native pixel coordinates; no resizing of scientific data.
+    x0=max(1,.06*nX); y0=max(1,.90*nY); tick=.008*nY;
+    dx=rulerStep/spatial.spacingUm(2); dy=rulerStep/spatial.spacingUm(1);
+    nx=floor(.70*nX/dx); ny=floor(.65*nY/dy);
+    if nx<1 && ny<1, return; end
+    if nx>0
+        line(ax,[x0 x0+nx*dx],[y0 y0],'Color','w','LineWidth',1.3,'Tag','SCM_PhysicalRuler','HitTest','off');
+        for k=0:nx
+            line(ax,[x0+k*dx x0+k*dx],[y0-tick y0+tick],'Color','w','Tag','SCM_PhysicalRuler','HitTest','off');
+        end
+        text(ax,x0,y0+2*tick,sprintf('%g um / tick | total %g um',rulerStep,nx*rulerStep), ...
+            'Color','w','BackgroundColor','k','FontSize',11,'Tag','SCM_PhysicalRuler','HitTest','off','Interpreter','none');
+    end
+    if ny>0
+        line(ax,[x0 x0],[y0 y0-ny*dy],'Color','w','LineWidth',1.3,'Tag','SCM_PhysicalRuler','HitTest','off');
+        for k=0:ny
+            line(ax,[x0-tick x0+tick],[y0-k*dy y0-k*dy],'Color','w','Tag','SCM_PhysicalRuler','HitTest','off');
+        end
+    end
 end
 
 function alphaModToggled(~,~)
@@ -2010,7 +2118,7 @@ function resetRoisAndRefreshAfterDataChange()
     for zzi = 1:nZ
         ROI_byZ{zzi} = struct('id', {}, 'x1', {}, 'x2', {}, 'y1', {}, 'y2', {}, 'color', {});
     end
-    roi.nextId = 1; roi.isFrozen = false;
+    roi.nextId = 1; roi.exportedIds = []; setHoverActive(true);
     deleteIfValid(roiHandles); roiHandles = gobjects(0);
     deleteIfValid(roiPlotPSC); roiPlotPSC = gobjects(0);
     deleteIfValid(roiTextHandles); roiTextHandles = gobjects(0);
@@ -2150,121 +2258,226 @@ function automaticAnalysisCB(~,~)
     end
 end
 
-function automaticPeakROI()
+function automaticPeakROI(useAwakePreset)
+    if nargin<1, useAwakePreset=false; end
     [s0,s1]=parseRangeSafe(getStr(ebSig),360,540);
     if isVolMode, s0=(s0-1)*TR; s1=(s1-1)*TR; end
-    f=figure('Name','Find and review peak ROI','NumberTitle','off','MenuBar','none','ToolBar','none', ...
-        'Color',[.07 .08 .10],'Position',[200 150 690 470],'WindowStyle','modal');
-    setappdata(f,'deConfUSIonNoMaximize',true);
-    uicontrol(f,'Style','text','Units','normalized','Position',[.05 .78 .9 .17], ...
-        'String',sprintf('%d slice(s) | Highest mean PSC in a complete square ROI\nSize is side length in pixels: 4 means 4 x 4 pixels.',nZ), ...
-        'BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',12);
-    uicontrol(f,'Style','text','Units','normalized','Position',[.05 .61 .4 .1], ...
-        'String','ROI size (4, 8, 15, 25, 50 or custom)','BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',11);
-    eSize=uicontrol(f,'Style','edit','Units','normalized','Position',[.51 .63 .4 .1], ...
-        'String',num2str(roi.size),'FontSize',13,'BackgroundColor',[.14 .17 .2],'ForegroundColor','w');
-    uicontrol(f,'Style','text','Units','normalized','Position',[.05 .43 .4 .1], ...
-        'String','Signal interval (minutes: start end)','BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',11);
-    eTime=uicontrol(f,'Style','edit','Units','normalized','Position',[.51 .45 .4 .1], ...
-        'String',sprintf('%.12g %.12g',s0/60,s1/60),'FontSize',13,'BackgroundColor',[.14 .17 .2],'ForegroundColor','w');
-    cbAll=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.05 .34 .9 .07], ...
-        'String','Search all slices (one candidate per eligible slice)','Value',double(nZ>1), ...
-        'BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',12);
-    if nZ==1, set(cbAll,'Enable','off'); end
-    cbClean=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.05 .26 .9 .07], ...
-        'String','Positive display: range 0-30%, alpha modulation 5-10%','Value',1, ...
-        'BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',12);
-    uicontrol(f,'Style','text','Units','normalized','Position',[.05 .17 .9 .08], ...
-        'String','Baseline and masks are retained. Display preset does not change measurements. Review candidates before export.', ...
-        'BackgroundColor',[.07 .08 .10],'ForegroundColor',[.9 .8 .45],'FontSize',11);
-    accepted=false;
-    uicontrol(f,'Style','pushbutton','Units','normalized','Position',[.05 .05 .57 .12], ...
-        'String','Find and mark ROI','BackgroundColor',[.12 .48 .32],'ForegroundColor','w','FontSize',13,'Callback',@accept);
-    uicontrol(f,'Style','pushbutton','Units','normalized','Position',[.67 .05 .28 .12], ...
-        'String','Cancel','BackgroundColor',[.55 .16 .21],'ForegroundColor','w','FontSize',13,'Callback',@(~,~)delete(f));
-    uiwait(f); if ~isgraphics(f), return; end
-    n=str2double(get(eSize,'String')); interval=sscanf(get(eTime,'String'),'%f')';
-    searchAll=logical(get(cbAll,'Value')); cleanDisplay=logical(get(cbClean,'Value')); delete(f);
-    if ~accepted, return; end
+    try, [b0,b1]=selectedBaselineFrames();
+    catch ME, errordlg(ME.message,'ROI search'); return; end
+    ctx=struct('sizeYXZ',[nY nX nZ],'slice',state.z,'roiSize',roi.size, ...
+        'baselineSec',tsec([b0 b1]),'signalSec',[s0 s1],'TR',TR,'nT',nT, ...
+        'underlay',@(z)renderUnderlayRGB(getBg2DForSlice(z)),'mask',@(z)getMaskForSlice(z));
+    if useAwakePreset
+        [window,canSearch,note]=scmAwakeSearchWindow(TR,nT);
+        setappdata(fig,'AwakeSearchStatus',note);
+        if ~canSearch
+            set(info1,'String',note,'TooltipString',note); return;
+        end
+        opt=struct('size',5,'signalSec',window,'plateauSec',180,'sharedWindow',true, ...
+            'boundsXY',[1 nX 1 nY],'bilateral',true,'splitX',floor(nX/2),'leftIsTarget',true, ...
+            'allSlices',true,'slice',state.z,'cleanDisplay',true,'polygons',{cell(nZ,2)});
+    else
+        ctx.plateauSec=180; ctx.roiSize=5; ctx.signalSec=[240 min(960,tsec(end))];
+        opt=scmAutoSearchDialog(ctx); if isempty(opt), return; end
+    end
+    n=opt.size; interval=opt.signalSec/60; searchAll=opt.allSlices; cleanDisplay=opt.cleanDisplay;
     set(btnAutomatic,'Enable','off'); guard=onCleanup(@()set(btnAutomatic,'Enable','on')); %#ok<NASGU>
     setappdata(fig,'StudioActionBusy',true); busyGuard=onCleanup(@()setappdata(fig,'StudioActionBusy',false)); %#ok<NASGU>
     try
         [b0,b1]=selectedBaselineFrames();
-        cfg=struct('size',n,'slice',state.z,'baselineSec',tsec([b0 b1]),'signalSec',60*interval);
-        slices=state.z; if searchAll, slices=1:nZ; end
-        candidates={}; skipped=[];
-        progress=deConfUSIon_ui('progress','Searching ROI candidates',numel(slices)>1);
+        cfg=struct('size',n,'slice',opt.slice,'baselineSec',tsec([b0 b1]),'signalSec',60*interval,'plateauSec',opt.plateauSec);
+        slices=opt.slice; if searchAll, slices=1:nZ; end
+        progress=deConfUSIon_ui('progress','Searching ROI candidates',true);
         pg=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
-        for si=1:numel(slices)
-            cfg.slice=slices(si);
-            deConfUSIon_ui('progressupdate',progress,(si-1)/numel(slices),sprintf('Searching slice %d of %d',si,numel(slices)));
-            try
-                candidate=AutomaticSCM('search',PSC,TR,cfg,getMaskForSlice(cfg.slice));
-                candidates{end+1}=candidate; %#ok<AGROW>
-            catch ME_slice
-                if strcmp(ME_slice.identifier,'deConfUSIon:SearchCoverage'), skipped(end+1)=cfg.slice; %#ok<AGROW>
-                else, rethrow(ME_slice); end
-            end
-        end
+        [candidates,skipped]=scmSearchCandidates(PSC,TR,cfg,opt,slices,@getMaskForSlice, ...
+            @(fraction,message)deConfUSIon_ui('progressupdate',progress,fraction,message));
         clear pg;
-        if isempty(candidates), error('deConfUSIon:SearchCoverage','No complete ROI fits within the mask and valid samples on the selected slices.'); end
+        if isempty(candidates)
+            set(info1,'String','No complete ROI found in the mask and available frames. Adjust search settings.'); return;
+        end
         % Publish marks only after the search completes. Cancellation leaves
         % existing ROIs and display untouched.
+        replaceUnsavedAutomaticROIs();
         audit=getappdata(fig,'AutomaticROISelections'); if isempty(audit), audit={}; end
+        highSlices=cellfun(@(c)c.slice,candidates(cellfun(@(c)c.meanPSC>200,candidates)));
         for ci=1:numel(candidates)
             candidate=candidates{ci}; bounds=candidate.boundsXY; id=roi.nextId; zz=candidate.slice;
-            ROI_byZ{zz}(end+1)=struct('id',id,'x1',bounds(1),'x2',bounds(2),'y1',bounds(3),'y2',bounds(4),'color',[1 .8 .1]);
+            color=[1 .55 .05]; if strcmp(candidate.role,'Control'), color=[.05 .65 1]; end
+            if ismember(zz,highSlices), color=[1 .15 .15]; end
+            ROI_byZ{zz}(end+1)=struct('id',id,'x1',bounds(1),'x2',bounds(2),'y1',bounds(3),'y2',bounds(4),'color',color);
             roi.nextId=id+1; candidate.roiId=id; candidate.source=fileLabel;
             candidate.displayPresetApplied=cleanDisplay;
             audit{end+1}=candidate; candidates{ci}=candidate; %#ok<AGROW>
         end
         setappdata(fig,'AutomaticROISelections',audit);
-        setappdata(fig,'AutomaticROISearchSummary',struct('searchedSlices',slices,'skippedSlices',skipped, ...
+        setappdata(fig,'AutomaticROISearchSummary',struct('searchedSlices',slices,'skippedRegions',{skipped}, ...
             'candidateSlices',cellfun(@(c)c.slice,candidates)));
         if isVolMode, shown=60*interval/TR+1; else, shown=60*interval; end
         set(ebSig,'String',sprintf('%.9g-%.9g',shown));
         if cleanDisplay
+            set(ebSigma,'String','0');
+            set(popMap,'Value',findPopupIndexByName(popMap,'blackbdy_iso'));
+            setOverlayColormap('blackbdy_iso');
             set(ebCax,'String','0 30'); set(popSignMode,'Value',1);
             set(cbAlphaMod,'Value',1); set(ebModMin,'String','5'); set(ebModMax,'String','10');
             set(slAlpha,'Value',get(slAlpha,'Max')); alphaModToggled([],[]);
         end
         [~,order]=sort(cellfun(@(c)c.meanPSC,candidates),'descend'); candidates=candidates(order);
         candidate=candidates{1}; id=candidate.roiId;
+        showAutomaticWindow(candidate);
         if nZ>1, set(slZ,'Value',nZ-candidate.slice+1); sliceChanged([],[]); end
-        roi.isFrozen=true;
+        setHoverActive(false);
         computeSCM([],[]); redrawROIsForCurrentSlice();
         set(hRoiCoordTxt,'Visible','on','String',sprintf('Peak ROI %d | %dx%d px | mean %.3g%% | %d baseline / %d signal frames | review before export',id,n,n,candidate.meanPSC,numel(candidate.baselineFrames),numel(candidate.signalFrames)));
-        if numel(slices)>1, showCandidateReview(candidates,skipped); end
+        showCandidateReview(candidates,skipped);
     catch ME
         if ~strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'), errordlg(ME.message,'ROI search'); end
     end
-    function accept(~,~), accepted=true; uiresume(f); end
 end
 
 function showCandidateReview(candidates,skipped)
     closeCandidateReviews();
     review=figure('Name',['Automatic ROI candidates | ' fileLabel],'Tag','AutomaticROICandidateReview', ...
-        'NumberTitle','off','MenuBar','none','ToolBar','none','Color',[.07 .08 .10],'Position',[250 180 740 500]);
-    setappdata(review,'deConfUSIonNoMaximize',true);
-    setappdata(review,'SCMOwner',fig);
-    description=sprintf('%d candidates found. Select a row to review that slice in SCM.\nRanked by mean PSC; these are exploratory maxima, not confirmed responses.',numel(candidates));
-    if ~isempty(skipped), description=sprintf('%s\nNo complete valid ROI on slices: %s',description,num2str(skipped)); end
-    uicontrol(review,'Style','text','Units','normalized','Position',[.04 .77 .92 .19], ...
-        'String',description,'BackgroundColor',[.07 .08 .10],'ForegroundColor','w','FontSize',12);
-    rows=zeros(numel(candidates),5);
-    for ci=1:numel(candidates)
-        c=candidates{ci}; rows(ci,:)=[c.slice c.roiId c.meanPSC mean(c.boundsXY(1:2)) mean(c.boundsXY(3:4))];
+        'NumberTitle','off','MenuBar','none','ToolBar','none','Color','k','Position',[160 150 1080 600]);
+    setappdata(review,'deConfUSIonNoMaximize',true); setappdata(review,'SCMOwner',fig);
+    order=[]; selected=[]; exportIds=[];
+    description=sprintf('%d candidates. Green = marked for export; red text = slice with mean PSC >200%%. Click a row to view its window.\nExploratory maxima. Shared mode uses the globally strongest candidate window for all slices.',numel(candidates));
+    if ~isempty(skipped), description=sprintf('%s\nNo valid ROI: %s',description,strjoin(skipped,', ')); end
+    ctl('text',[.025 .80 .95 .18],description,[]);
+    role=ctl('popupmenu',[.025 .72 .18 .05],{'All','Target','Control','Search'},@refresh);
+    set(role,'Tag','CandidateRoleFilter');
+    sortBy=ctl('popupmenu',[.225 .72 .25 .05],{'Maximum PSC first','Minimum PSC first','Slice ascending','Slice descending'},@refresh);
+    set(sortBy,'Tag','CandidateSort');
+    units=ctl('popupmenu',[.50 .72 .17 .05],{'Time: minutes','Time: seconds'},@refresh);
+    set(units,'Tag','CandidateTimeUnits');
+    sliceRange=ctl('edit',[.69 .72 .13 .05],sprintf('1 %d',nZ),@refresh); set(sliceRange,'Tag','CandidateSliceFilter','TooltipString','Slice range: start end (inclusive)');
+    ctl('pushbutton',[.84 .72 .135 .05],'Show maximum',@showMaximum);
+    tbl=uitable(review,'Units','normalized','Position',[.025 .23 .95 .46],'Data',cell(0,10), ...
+        'ColumnName',{'Slice','ROI','Role','Region','Mean PSC (%)','Center X','Center Y','Start (min)','End (min)','Export'}, ...
+        'ColumnEditable',[false(1,9) true],'ColumnFormat',[repmat({'char'},1,9) {'logical'}], ...
+        'ColumnWidth',{50 50 70 85 100 75 75 95 95 65},'CellEditCallback',@markForExport, ...
+        'FontSize',12,'CellSelectionCallback',@reviewSlice,'Tag','CandidateTable');
+    msg=ctl('text',[.025 .155 .95 .06],'',[]); set(msg,'Tag','CandidateStatus');
+    ctl('pushbutton',[.025 .065 .25 .07],'Export SELECTED ROIs (TXT)',@exportSelected);
+    ctl('pushbutton',[.29 .065 .25 .07],'Choose Target + Control to export',@exportPair);
+    ctl('pushbutton',[.555 .065 .24 .07],'Clear ALL marked ROIs',@clearAllMarkedROIs);
+    ctl('pushbutton',[.82 .065 .155 .07],'Close',@(~,~)delete(review));
+    refresh();
+    function h=ctl(style,pos,str,cb)
+        h=uicontrol(review,'Style',style,'Units','normalized','Position',pos,'String',str, ...
+            'BackgroundColor',[.10 .10 .10],'ForegroundColor','w','FontSize',11,'Callback',cb);
     end
-    uitable(review,'Units','normalized','Position',[.04 .16 .92 .60],'Data',rows, ...
-        'ColumnName',{'Slice','ROI','Mean PSC (%)','Center X','Center Y'},'ColumnEditable',false(1,5), ...
-        'ColumnWidth',{75 75 140 120 120},'FontSize',12,'CellSelectionCallback',@reviewSlice);
-    uicontrol(review,'Style','pushbutton','Units','normalized','Position',[.65 .04 .31 .08], ...
-        'String','Close','BackgroundColor',[.55 .16 .21],'ForegroundColor','w','FontSize',12,'Callback',@(~,~)delete(review));
+    function refresh(varargin)
+        range=sscanf(get(sliceRange,'String'),'%f')';
+        if numel(range)==1, range=[range range]; end
+        if numel(range)~=2||any(~isfinite(range))||any(range<1|range>nZ|range~=round(range))
+            set(msg,'String',sprintf('Enter a slice or two slice numbers within 1-%d.',nZ)); return;
+        end
+        roles=get(role,'String'); order=scmCandidateOrder(candidates,roles{get(role,'Value')},range,get(sortBy,'Value'));
+        highSlices=cellfun(@(c)c.slice,candidates(cellfun(@(c)c.meanPSC>200,candidates)));
+        divisor=60; unit='min';
+        if get(units,'Value')==2, divisor=1; unit='s'; end
+        headers=get(tbl,'ColumnName'); headers{8}=['Start (' unit ')']; headers{9}=['End (' unit ')'];
+        set(tbl,'ColumnName',headers);
+        rows=cell(numel(order),10);
+        for row=1:numel(order)
+            c=candidates{order(row)};
+            values={c.slice c.roiId c.role c.region c.meanPSC mean(c.boundsXY(1:2)) mean(c.boundsXY(3:4)) c.signalSampleSec(1)/divisor c.signalSampleSec(end)/divisor};
+            for col=1:9
+                v=values{col}; if isnumeric(v), v=sprintf('%.6g',v); end
+                if ismember(c.slice,highSlices), v=['<html><font color="#ff3030">' v '</font></html>']; end
+                if ismember(c.roiId,exportIds)
+                    v=['<html><span style="background-color:#16803c;color:white">' regexprep(v,'</?html>','') '</span></html>'];
+                end
+                rows{row,col}=v;
+            end
+            rows{row,10}=ismember(c.roiId,exportIds);
+        end
+        set(tbl,'Data',rows); setappdata(tbl,'ExportROIIds',exportIds); setappdata(tbl,'CandidateIndices',order);
+        selected=[]; set(msg,'String',sprintf('%d / %d shown; %d selected for export (including hidden rows).',numel(order),numel(candidates),numel(exportIds)));
+    end
+    function markForExport(~,event)
+        if isempty(event.Indices)||event.Indices(2)~=10, return; end
+        id=candidates{order(event.Indices(1))}.roiId;
+        if logical(event.NewData), exportIds=unique([exportIds id],'stable');
+        else, exportIds(exportIds==id)=[]; end
+        refresh();
+    end
+    function exportSelected(~,~)
+        if isempty(exportIds)
+            set(msg,'String','Tick the Export checkbox for at least one ROI first.'); return;
+        end
+        exportROIsCB([],[],[],exportIds);
+    end
     function reviewSlice(~,event)
         if isempty(event.Indices)||~isgraphics(fig), return; end
-        c=candidates{event.Indices(1,1)};
-        set(slZ,'Value',nZ-c.slice+1); sliceChanged([],[]); roi.isFrozen=true;
+        selected=order(event.Indices(1,1)); displayCandidate(candidates{selected});
     end
+    function showMaximum(~,~)
+        if isempty(order), return; end
+        [~,ix]=max(cellfun(@(c)c.meanPSC,candidates(order))); selected=order(ix); displayCandidate(candidates{selected});
+    end
+end
+
+function displayCandidate(c)
+    showAutomaticWindow(c);
+    if nZ>1, set(slZ,'Value',nZ-c.slice+1); sliceChanged([],[]); end
+    setHoverActive(false); computeSCM([],[]); redrawROIsForCurrentSlice();
+    set(hRoiCoordTxt,'Visible','on','String',sprintf('ROI %d | %s | slice %d | mean %.3g%% | %.3g-%.3g min', ...
+        c.roiId,c.role,c.slice,c.meanPSC,c.signalSampleSec(1)/60,c.signalSampleSec(end)/60));
+end
+
+function replaceUnsavedAutomaticROIs()
+    % Replace previews only after the new search succeeds. Keep manual marks
+    % and marks already written to TXT; exported file numbering is separate.
+    audit=getappdata(fig,'AutomaticROISelections');
+    remove=[];
+    for ai=1:numel(audit)
+        if ~ismember(audit{ai}.roiId,roi.exportedIds), remove(end+1)=audit{ai}.roiId; end %#ok<AGROW>
+    end
+    closeCandidateReviews();
+    existing=[];
+    for zz=1:nZ
+        marks=ROI_byZ{zz}; marks=marks(~ismember([marks.id],remove)); ROI_byZ{zz}=marks;
+        existing=[existing [marks.id]]; %#ok<AGROW>
+    end
+    if ~isempty(audit), audit=audit(~cellfun(@(c)ismember(c.roiId,remove),audit)); end
+    setappdata(fig,'AutomaticROISelections',audit);
+    roi.nextId=max([0 existing])+1;
+end
+
+function clearAllMarkedROIs(~,~)
+    for zz=1:nZ
+        ROI_byZ{zz}=struct('id',{},'x1',{},'x2',{},'y1',{},'y2',{},'color',{});
+    end
+    % Reviews and audit records are cleared together, so IDs can safely restart.
+    roi.nextId=1; roi.exportedIds=[];
+    setappdata(fig,'AutomaticROISelections',{}); setappdata(fig,'AutomaticROISearchSummary',[]);
+    roi.pendingHover=[]; setHoverActive(false);
+    set(hLiveRect,'Visible','off'); set(hLivePSC,'Visible','off');
+    closeCandidateReviews(); redrawROIsForCurrentSlice(); set(hRoiCoordTxt,'Visible','off');
+end
+
+function exportPair(~,~)
+    ids=[]; names={};
+    for zz=1:nZ
+        for rr=ROI_byZ{zz}
+            ids(end+1)=rr.id; %#ok<AGROW>
+            names{end+1}=sprintf('ROI %d | slice %d | X %d-%d, Y %d-%d',rr.id,zz,rr.x1,rr.x2,rr.y1,rr.y2); %#ok<AGROW>
+        end
+    end
+    if numel(ids)<2, warndlg('Mark at least two ROIs first.','Export pair'); return; end
+    [ti,ok]=listdlg('PromptString','Choose ONE Target ROI','SelectionMode','single','ListString',names,'ListSize',[470 300]);
+    if ~ok, return; end
+    remaining=setdiff(1:numel(ids),ti,'stable');
+    [ci,ok]=listdlg('PromptString','Choose ONE Control ROI','SelectionMode','single','ListString',names(remaining),'ListSize',[470 300]);
+    if ~ok, return; end
+    exportROIsCB([],[],[ids(ti) ids(remaining(ci))]);
+end
+
+function showAutomaticWindow(c)
+    shown=c.signalSec; if isVolMode, shown=shown/TR+1; end
+    set(ebSig,'String',sprintf('%.9g-%.9g',shown));
 end
 
 function closeCandidateReviews()
@@ -2274,7 +2487,9 @@ function closeCandidateReviews()
     end
 end
 
-function exportROIsCB(~,~)
+function exportROIsCB(~,~,pairIds,selectedIds)
+    if nargin<3, pairIds=[]; end
+    if nargin<4, selectedIds=[]; end
     if roi.exportBusy, return; end
     tNowSec = now * 86400;
     if (tNowSec - roi.lastExportStampSec) < 0.75, return; end
@@ -2287,7 +2502,13 @@ function exportROIsCB(~,~)
             warndlg('No ROIs to export. Add ROIs first.', 'Export ROIs'); return;
         end
         P = getSimpleExportPaths(); roiDir = P.roiDir; safeMkdirIfNeeded(roiDir);
-        labelTag = askExportLabel(roi.lastExportLabel, 'ROI export label');
+        if ~isempty(selectedIds)
+            labelTag='Selected';
+        elseif isempty(pairIds)
+            labelTag = askExportLabel(roi.lastExportLabel, 'ROI export label');
+        else
+            labelTag='Target_and_Ctrl';
+        end
         if isempty(labelTag), return; end
         roi.lastExportLabel = labelTag;
         roi.sessionSetId = roi.sessionSetId + 1;
@@ -2301,34 +2522,63 @@ function exportROIsCB(~,~)
                 flat(end+1) = struct('z', zz, 'id', r.id, 'x1', r.x1, 'x2', r.x2, 'y1', r.y1, 'y2', r.y2, 'color', r.color); %#ok<AGROW>
             end
         end
+        if ~isempty(selectedIds)
+            flat=flat(ismember([flat.id],selectedIds));
+            assert(numel(flat)==numel(selectedIds),'A selected ROI is no longer marked. Refresh the candidate search.');
+        end
+        if ~isempty(pairIds)
+            flat=flat(ismember([flat.id],pairIds));
+            assert(numel(flat)==2,'The selected ROIs are no longer marked.');
+        end
         keys = cell(numel(flat),1);
         for i = 1:numel(flat)
             keys{i} = sprintf('%d_%d_%d_%d_%d', flat(i).z, flat(i).x1, flat(i).x2, flat(i).y1, flat(i).y2);
         end
-        [~, ia] = unique(keys, 'stable'); flat = flat(sort(ia));
+        if isempty(pairIds) && isempty(selectedIds)
+            [~, ia] = unique(keys, 'stable'); flat = flat(sort(ia));
+        elseif ~isempty(pairIds)
+            assert(numel(unique(keys))==2,'Target and Control must not be the same spatial ROI.');
+        end
         A = [[flat.z].' [flat.id].']; [~, ord] = sortrows(A, [1 2]); flat = flat(ord);
         for i = 1:numel(flat)
-            r = flat(i);
-            outFile = fullfile(roiDir, sprintf('ROI%d_%s_d%d.txt', setId, labelTag, dIdx));
+            r = flat(i); exportLabel=labelTag;
+            if ~isempty(pairIds)
+                exportLabel='Ctrl'; if r.id==pairIds(1), exportLabel='Target'; end
+            end
+            if ~isempty(selectedIds)
+                audit=getappdata(fig,'AutomaticROISelections');
+                for ai=1:numel(audit)
+                    if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
+                        exportLabel=audit{ai}.role;
+                        if strcmpi(exportLabel,'Control'), exportLabel='Ctrl'; end
+                        break;
+                    end
+                end
+            end
+            outFile = fullfile(roiDir, sprintf('ROI%d_%s_d%d.txt', setId, exportLabel, dIdx));
             while exist(outFile,'file') == 2
                 dIdx = dIdx + 1;
-                outFile = fullfile(roiDir, sprintf('ROI%d_%s_d%d.txt', setId, labelTag, dIdx));
+                outFile = fullfile(roiDir, sprintf('ROI%d_%s_d%d.txt', setId, exportLabel, dIdx));
             end
             fid = fopen(outFile, 'w');
             if fid < 0, error('Could not write ROI file: %s', outFile); end
+            fileGuard=onCleanup(@()fclose(fid));
             fprintf(fid, '# ROI export from SCM_gui\n');
             fprintf(fid, '# Date: %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
             fprintf(fid, '# FileLabel: %s\n', fileLabel);
             fprintf(fid, '# TR_sec: %.6g\n', TR);
             fprintf(fid, '# nY nX nZ nT: %d %d %d %d\n', nY,nX,nZ,nT);
             fprintf(fid, '# ROI_SET_ID: %d\n', setId);
-            fprintf(fid, '# ROI_LABEL: %s\n', labelTag);
+            fprintf(fid, '# ROI_LABEL: %s\n', exportLabel);
             fprintf(fid, '# ROI_D_INDEX: %d\n', dIdx);
             fprintf(fid, '# ROI_MARKER_ID: %d\n', r.id);
+            roiSignalWindow=getStr(ebSig);
             audit=getappdata(fig,'AutomaticROISelections');
             for ai=1:numel(audit)
                 if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
                     fprintf(fid,'# AutomaticROISelection: %s\n',jsonencode(audit{ai}));
+                    shown=audit{ai}.signalSec; if isVolMode, shown=shown/TR+1; end
+                    roiSignalWindow=sprintf('%.9g-%.9g',shown);
                 end
             end
             fprintf(fid, '# SLICE: %d\n', r.z);
@@ -2337,17 +2587,18 @@ function exportROIsCB(~,~)
             fprintf(fid, '# PSC_REBASE_METHOD: exact_percent_rebase_per_voxel_100_times_P_minus_B_over_100_plus_B\n');
             fprintf(fid, '# PSC_BASELINE_TARGET: mean_selected_baseline_equals_0_percent\n');
 
-            fprintf(fid, '# SignalWindow: %s\n', getStr(ebSig));
+            fprintf(fid, '# SignalWindow: %s\n', roiSignalWindow);
             fprintf(fid, '# x1 x2 y1 y2\n%d %d %d %d\n', r.x1,r.x2,r.y1,r.y2);
             fprintf(fid, '# color_rgb\n%.6f %.6f %.6f\n', r.color(1),r.color(2),r.color(3));
             tc = computeRoiPSC_atSlice(r.z, r.x1, r.x2, r.y1, r.y2);
             if isempty(tc) || numel(tc) ~= nT, tc = nan(1,nT); end
             fprintf(fid, '# columns: time_sec\ttime_min\tPSC\n');
             for ii = 1:nT, fprintf(fid, '%.6f\t%.6f\t%.6f\n', tsec(ii), tmin(ii), tc(ii)); end
-            fclose(fid);
+            clear fileGuard;
+            roi.exportedIds=unique([roi.exportedIds r.id]);
             dIdx = dIdx + 1;
         end
-        msgbox(sprintf('Exported %d ROI(s) to:\n%s\n(as ROI%d_%s_d#.txt)', numel(flat), roiDir, setId, labelTag), 'Export ROIs');
+        msgbox(sprintf('Exported %d ROI(s) to:\n%s\n(ROI set %d, %s)', numel(flat), roiDir, setId, labelTag), 'Export ROIs');
     catch ME
         errordlg(ME.message, 'ROI export failed');
     end
@@ -2607,7 +2858,7 @@ drawnow;
         caxV = state.cax;
 
         sigma = str2double(getStr(ebSigma));
-        if ~isfinite(sigma), sigma = 1; end
+        if ~isfinite(sigma), sigma = 0; end
 
         thrStr  = strtrim(getStr(ebThr));
         caxStr  = strtrim(getStr(ebCax));
@@ -3075,7 +3326,7 @@ function exportForGroupAnalysisCB(~,~)
         safeMkdirIfNeeded(Pexp.bundleRoot); safeMkdirIfNeeded(Pexp.bundleDir);
         [b0,b1] = parseRangeSafe(getStr(ebBase),30,240);
         [s0,s1] = parseRangeSafe(getStr(ebSig),840,900);
-        sigma = str2double(getStr(ebSigma)); if ~isfinite(sigma), sigma = 1; end
+        sigma = str2double(getStr(ebSigma)); if ~isfinite(sigma), sigma = 0; end
         thr = str2double(getStr(ebThr)); if ~isfinite(thr), thr = 0; end
         stamp = datestr(now,'yyyymmdd_HHMMSS');
         outFile = makeShortGroupBundleOutFileLocal(Pexp, stamp);
@@ -4038,6 +4289,7 @@ function applyScmGroupBundleLocal(G, fullf)
     % ---------------------------------------------------------
     % 1) Load PSC data from bundle
     % ---------------------------------------------------------
+    spatial=scmSpatialCalibration(struct()); rulerStep=0; % Never reuse another dataset's physical scale.
     PSC = G.pscAtlas4D;
 
     if ~(isnumeric(PSC) || islogical(PSC))
@@ -4572,9 +4824,16 @@ function redrawROIsForCurrentSlice()
     if isempty(ROI), applyTimecourseAxisMode(); return; end
     for k = 1:numel(ROI)
         r = ROI(k);
+        markerLabel=sprintf('%d',r.id);
+        audit=getappdata(fig,'AutomaticROISelections');
+        for ai=1:numel(audit)
+            if audit{ai}.roiId==r.id && audit{ai}.slice==state.z && isfield(audit{ai},'role')
+                markerLabel=sprintf('%d %s',r.id,audit{ai}.role); break;
+            end
+        end
         roiHandles(end+1) = rectangle(ax,'Position',[r.x1 r.y1 r.x2-r.x1+1 r.y2-r.y1+1], ...
             'EdgeColor',r.color,'LineWidth',2); %#ok<AGROW>
-        roiTextHandles(end+1) = text(ax,r.x1,max(1,r.y1-2),sprintf('%d',r.id), ...
+        roiTextHandles(end+1) = text(ax,r.x1,max(1,r.y1-2),markerLabel, ...
             'Color',r.color,'FontWeight','bold','FontSize',12,'Interpreter','none', ...
             'VerticalAlignment','bottom','BackgroundColor',[0 0 0],'Margin',1); %#ok<AGROW>
         tc = computeRoiPSC_atSlice(state.z, r.x1, r.x2, r.y1, r.y2);
