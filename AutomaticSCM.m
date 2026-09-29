@@ -82,6 +82,7 @@ end
 
 function R=searchROI(A,TR,cfg,mask)
 % Search raw, exactly rebased PSC; display alpha/smoothing never participates.
+assert(isscalar(TR)&&isfinite(TR)&&TR>0,'deConfUSIon:Protocol','Invalid TR.');
 n=double(cfg.size); z=double(cfg.slice); T=size(A,ndims(A)); t=(0:T-1)*TR;
 assert(isscalar(n)&&isfinite(n)&&n>=1&&n==round(n),'deConfUSIon:SearchSize','ROI size is an integer side length in pixels.');
 sz=size(A); nz=1; if ndims(A)==4, nz=sz(3); end
@@ -91,22 +92,46 @@ assert(isequal(size(mask),sz(1:2)),'deConfUSIon:SearchMask','Mask dimensions do 
 % SCM rounds endpoints to the nearest acquired frame (inclusive). Strict
 % timestamp containment can select only one frame in a 60 s window at
 % TR=33.5 s even though the displayed SCM averages three frames.
-b=scmWindow(cfg.baselineSec,TR,T); s=scmWindow(cfg.signalSec,TR,T);
-[B,nb]=average(b); [S,ns]=average(s);
-valid=logical(mask)&isfinite(B)&isfinite(S)&(100+B)>sqrt(eps('single'))&nb==numel(b)&ns==numel(s);
-M=100*(S-B)./(100+B); M(~valid)=0;
-score=boxSum(M,n)/(n*n); count=boxSum(double(valid),n);
-score(count~=n*n)=-Inf;
-[value,index]=max(score(:));
-assert(isfinite(value),'deConfUSIon:SearchCoverage','No complete ROI fits inside the mask with finite data throughout both intervals.');
-[y,x]=ind2sub(size(score),index);
+b=scmWindow(cfg.baselineSec,TR,T);
+duration=0; if isfield(cfg,'plateauSec'), duration=cfg.plateauSec; end
+[starts,width]=scmSearchWindows(cfg.signalSec,duration,TR,T);
+[B,nb]=average(b);
+baseValid=logical(mask)&isfinite(B)&(100+B)>sqrt(eps('single'))&nb==numel(b);
+value=-Inf; index=1; bestStart=starts(1);
+[S,ns,total]=average(starts(1)+(0:width-1));
+for wi=1:numel(starts)
+    first=starts(wi);
+    if wi>1
+        [old,oldGood]=frame(first-1); [new,newGood]=frame(first+width-1);
+        total=total-old+new; ns=ns-double(oldGood)+double(newGood); S=total./ns;
+    end
+    valid=baseValid&isfinite(S)&ns==width;
+    M=100*(S-B)./(100+B); M(~valid)=0;
+    score=boxSum(M,n)/(n*n); count=boxSum(double(valid),n);
+    score(count~=n*n)=-Inf;
+    [v,ii]=max(score(:));
+    if v>value, value=v; index=ii; bestStart=first; end
+    if isfield(cfg,'progress'), cfg.progress(wi/numel(starts)); end
+end
+assert(isfinite(value),'deConfUSIon:SearchCoverage','No complete ROI fits inside the mask with finite data throughout baseline and an eligible signal window.');
+[y,x]=ind2sub(size(score),index); s=bestStart+(0:width-1);
+selectedSec=cfg.signalSec; if duration>0, selectedSec=t(s([1 end])); end
 R=struct('boundsXY',[x x+n-1 y y+n-1],'slice',z,'size',n,'meanPSC',value, ...
-    'baselineSec',cfg.baselineSec,'signalSec',cfg.signalSec,'method','maximum mean rebased PSC; current slice; full square support', ...
-    'selection','exploratory: ROI selected on the measured response');
+    'baselineSec',cfg.baselineSec,'signalSec',selectedSec,'method','maximum mean rebased PSC; full square support', ...
+    'selection','exploratory: ROI and optional plateau selected on the measured response');
+R.searchIntervalSec=cfg.signalSec; R.plateauSec=duration; R.windowsTested=numel(starts);
 R.baselineFrames=b; R.signalFrames=s;
 R.baselineSampleSec=t(b); R.signalSampleSec=t(s);
+R.actualWindowSpanSec=t(s(end))-t(s(1));
 R.windowRule='SCM nearest-frame endpoints, inclusive; no interpolated samples';
-    function [mu,count]=average(idx)
+if duration>0
+    R.windowRule='Frame-aligned sliding windows entirely within search range; span rounded up to at least requested duration; endpoints inclusive';
+end
+    function [v,good]=frame(ii)
+        if ndims(A)==3, v=double(A(:,:,ii)); else, v=double(A(:,:,z,ii)); end
+        good=isfinite(v); v(~good)=0;
+    end
+    function [mu,count,total]=average(idx)
         total=zeros(sz(1:2)); count=total;
         chunk=max(1,floor(16*1024^2/(8*prod(sz(1:2)))));
         for start=1:chunk:numel(idx)

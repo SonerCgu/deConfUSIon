@@ -16,6 +16,19 @@ function vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_COMMAND(cfg)
 %       - the callback returns RF data unchanged
 %       - scheduling side effects are handled inside the object
 % 6) Reduces log spam by default.
+% V18: V17 stable B-mode retained; final rendered B-mode frame can be saved after STOP.
+% 7) Imaging modes: Doppler, B-Mode Live, High-Res 2D and High-Res 3D.
+% 8) V7 B-Mode uses the COMPANY LIVE control (not the B-mode snapshot button).
+%    It starts once, stays running until Trigger Controller STOP, and stops once.
+% 9) Doppler preset (5 frames, 16 blocks, no accessories) keeps the final
+%    Doppler image/volume and injects ONLY CData into the company's own display.
+%    Company CLim/gamma/colormap/colorbar settings are preserved and refreshed.
+% 10) Anatomy saving remains opt-in and numbered: low_res_anatomy_1, _2, ...
+% 11) High-resolution anatomy viewer defaults to the supplied company transform
+%     with per-slice caxis-auto behavior, avoiding black 3D slices.
+%    High-res modes preserve frame-synchronized StimBox/PulsePal callbacks.
+%    B-Mode Live can save the final rendered frame after STOP; frame-synchronized accessories are blocked
+%    because the supplied company files do not expose a B-mode frame callback.
 %
 % IMPORTANT
 % -------------------------------------------------------------------------
@@ -34,6 +47,13 @@ function vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_COMMAND(cfg)
     cfg = localApplyBackwardCompatibility(cfg);
     localValidateConfig(cfg);
     [SCAN, FS] = localResolveScannerAndFileService(cfg);
+
+    % B-Mode is a live preview path, not a frame-indexed saved acquisition.
+    % Run it before opening StimBox / PulsePal / motor hardware.
+    if strcmpi(localGetImagingMode(cfg), 'bmode_live')
+        vfUSI_OpenfUS_UIBridge('bmode_live', SCAN, cfg);
+        return;
+    end
 
     port = [];
     pp = [];
@@ -451,8 +471,16 @@ for iTrial = 1:cfg.n_trials
 
             localGuiMotor(cfg, 1, nMotorPositionsThisRun, actualMotorAbsMM, 0);
         end
-        runMsg = sprintf('Running acquisition %d/%d | Trial %d/%d', ...
-            acqCounter, totalAcqCount, iTrial, cfg.n_trials);
+        scanTrialWord='Scan';
+        try
+            if isfield(cfg,'motor') && isstruct(cfg.motor) && logical(cfg.motor.enable) && ...
+                    isfield(cfg.motor,'mode') && strcmpi(cfg.motor.mode,'stepped')
+                scanTrialWord='Trial';
+            end
+        catch
+        end
+        runMsg = sprintf('Running acquisition %d/%d | %s %d/%d', ...
+            acqCounter, totalAcqCount, scanTrialWord, iTrial, cfg.n_trials);
 
         if cfg.motor.enable
             runMsg = sprintf('%s | Stable motor %d/%d | abs %.3f mm', ...
@@ -463,7 +491,7 @@ for iTrial = 1:cfg.n_trials
         localGuiLog(cfg, runMsg);
 
         fprintf('----- Acquisition %02d / %02d -----\n', acqCounter, totalAcqCount);
-        fprintf('----- Trial %02d / %02d -----\n', iTrial, cfg.n_trials);
+        fprintf('----- %s %02d / %02d -----\n', scanTrialWord, iTrial, cfg.n_trials);
 
         if cfg.motor.enable
             fprintf('----- Stable motor position %02d / %02d: requested %.3f mm, actual %.3f mm -----\n', ...
@@ -552,97 +580,56 @@ end
         end
 
    try
-    acqTic = tic;
     acqStartDatenum = now;
 
-    % -------------------------------------------------------------
-    % IMPORTANT:
-    % If no frame-synchronized stimulation is needed, do NOT pass
-    % processRF. This keeps acquisition identical to the stable
-    % collaborator/plain scanner version.
-    %
-    % Motor is already handled before SCAN.doppler, so motor does not
-    % need processRF either.
-    % -------------------------------------------------------------
-useProcessRF = false;
+    [I, md, actualFrames, acqElapsedSec, requestedDtSec, actualMeanDtSec] = ...
+        localRunSelectedAcquisition(SCAN, pp, cfg, nFramesThisAcq);
 
-% Need processRF for real frame-synchronized StimBox triggering.
-if isfield(cfg, 'stimbox') && isstruct(cfg.stimbox) && logical(cfg.stimbox.enable)
-    useProcessRF = true;
-end
+    acqEndDatenum = now;
 
-% Need processRF for real frame-synchronized PulsePal triggering.
-if isfield(cfg, 'pulsepal') && isstruct(cfg.pulsepal) && logical(cfg.pulsepal.enable)
-    useProcessRF = true;
-end
-
-% Also use processRF when the GUI wants live frame/time updates,
-% even if no stimulation device is enabled.
-if isfield(cfg, 'gui') && isstruct(cfg.gui) && ...
-        isfield(cfg.gui, 'forceProcessRFForLiveFrames') && ...
-        logical(cfg.gui.forceProcessRFForLiveFrames) && ...
-        isfield(cfg.gui, 'frameFcn')
-    useProcessRF = true;
-end
-% Continuous motor mode needs processRF because motor movements are frame-based.
-if isContinuousMotor
-    useProcessRF = true;
-end
-
-if useProcessRF
-    if logical(cfg.stimbox.enable) || logical(cfg.pulsepal.enable)
-        localGuiLog(cfg, 'Using processRF callback for stimulation + live GUI frame/time updates.');
-    else
-        localGuiLog(cfg, 'Using processRF callback for live GUI frame/time updates only.');
+    % V5 low-resolution anatomy preset:
+    % The company GUI's live/single-image display is effectively the latest
+    % completed Doppler image. Averaging the five quick images (V4) can blur
+    % fine anatomy if the animal/probe moves even slightly. Therefore keep
+    % the LAST frame/volume from the 5 x 16 preset, display that exact static
+    % anatomy in the company GUI, and ask about saving later.
+    if localIsLowResAnatomyPreset(cfg)
+        try
+            vendorNativeDisplay = isstruct(md) && isfield(md,'vendor_native_display') && ...
+                logical(md.vendor_native_display);
+            suppressLegacyDisplay = isstruct(md) && isfield(md,'suppress_legacy_display_override') && ...
+                logical(md.suppress_legacy_display_override);
+            if vendorNativeDisplay || suppressLegacyDisplay
+                % The company callback has already produced the correct image
+                % in its own axes. Do not touch CData, CLim, colormap, gamma,
+                % colorbar or run our legacy preview transform again.
+                md.low_res_anatomy_saved_size = size(I);
+                md.low_res_anatomy_source_frames = nFramesThisAcq;
+                md.low_res_anatomy_method = 'native_company_display_capture';
+                localGuiLog(cfg, 'Low-res anatomy is already displayed by the native company Doppler pipeline; no display override applied.');
+            else
+                rawSizeBeforeAnatomyPick = size(I);
+                I = localReduceDopplerToStaticAnatomy(I, cfg);
+                md.low_res_anatomy_source_size = rawSizeBeforeAnatomyPick;
+                md.low_res_anatomy_saved_size = size(I);
+                md.low_res_anatomy_source_frames = nFramesThisAcq;
+                md.low_res_anatomy_method = 'last_frame_or_volume_fallback';
+                localGuiLog(cfg, sprintf( ...
+                    'Low-res anatomy fallback: displaying the last of %d Doppler images/volumes.', ...
+                    nFramesThisAcq));
+                localShowDopplerSingleImagePreview(I, cfg, md);
+            end
+            % Mirror the anatomy into our own GUI.  The native OpenfUS display
+            % remains untouched; these are independent display-only controls.
+            localGuiPreview(cfg,I,'doppler',md);
+        catch MElow
+            localGuiLog(cfg, ['Low-res anatomy display preparation warning: ' MElow.message]);
+        end
     end
-    % Pass the method handle directly, exactly as the OpenfUS reference
-    % script does (SCAN.doppler(..., 'processRF', @pp.newImage)). This
-    % keeps the frame index that echoScan supplies intact and avoids an
-    % extra anonymous-function call on every frame.
-    [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThisAcq, ...
-        'processRF', @pp.newImage);
-else
-    localGuiLog(cfg, 'Using plain SCAN.doppler without processRF callback.');
-
-  [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThisAcq);
-end
-
- acqElapsedSec = toc(acqTic);
-acqEndDatenum = now;
-
-requestedDtSec = localCalcTRSec(cfg.nblocksImage, localGetTRUnit(cfg));
-actualFrames = localGetAcquiredFrameCount(I, nFramesThisAcq);
-actualMeanDtSec = acqElapsedSec / max(1, actualFrames);
-
-    try
-        md.requested_dt_s = requestedDtSec;
-        md.actual_acq_elapsed_s = acqElapsedSec;
-        md.actual_frames_saved = actualFrames;
-        md.actual_mean_dt_s = actualMeanDtSec;
-        md.actual_dt_deviation_s = actualMeanDtSec - requestedDtSec;
-        md.actual_dt_deviation_percent = 100 * (actualMeanDtSec - requestedDtSec) / requestedDtSec;
-    catch
-    end
-
-if requestedDtSec > 0
-    devPct = 100 * (actualMeanDtSec - requestedDtSec) / requestedDtSec;
-
-    localGuiTiming(cfg, requestedDtSec, actualMeanDtSec, devPct, acqElapsedSec, actualFrames);
-
-    if abs(devPct) > 15 || abs(actualMeanDtSec - requestedDtSec) > 0.050
-        localGuiLog(cfg, sprintf( ...
-            'TR WARNING after acquisition: requested %.3f s, actual mean %.3f s (%+.1f%%).', ...
-            requestedDtSec, actualMeanDtSec, devPct));
-    else
-        localGuiLog(cfg, sprintf( ...
-            'Timing QC: requested %.3f s, actual mean %.3f s (%+.1f%%).', ...
-            requestedDtSec, actualMeanDtSec, devPct));
-    end
-end
 
 catch ME
-    localGuiLog(cfg, sprintf('DOPPLER FAILURE: %s', ME.message));
-    fprintf(2, '\n===== DOPPLER FAILURE =====\n');
+    localGuiLog(cfg, sprintf('ACQUISITION FAILURE: %s', ME.message));
+    fprintf(2, '\n===== ACQUISITION FAILURE =====\n');
     fprintf(2, '%s\n', getReport(ME, 'extended', 'hyperlinks', 'on'));
     rethrow(ME);
 end
@@ -682,10 +669,56 @@ end
         % Add acquisition + motor metadata
         % -------------------------------------------------------------
         try
+            % Keep motor acquisition_mode backward compatible, and add a
+            % separate imaging_mode so downstream code can distinguish
+            % Doppler from reconstructed high-resolution images.
             md.acquisition_mode = 'normal';
-
             if cfg.motor.enable
                 md.acquisition_mode = cfg.motor.acquisition_mode;
+            end
+            md.imaging_mode = localGetImagingMode(cfg);
+
+            % High-resolution reconstructions are saved as anatomical
+            % underlays. Keep scanner-native metadata.imageType compatible
+            % with the company format, while storing the anatomy role in the
+            % acquisition sidecar (and filename) for deConfUSIon.
+            if strcmpi(md.imaging_mode, 'highres2d') || strcmpi(md.imaging_mode, 'highres3d')
+                md.image_role = 'anatomy';
+                md.is_anatomy = true;
+                md.anatomy_highres = true;
+                md.anatomy_lowres = false;
+                if strcmpi(md.imaging_mode, 'highres3d')
+                    md.anatomy_dimension = '3D';
+                else
+                    md.anatomy_dimension = '2D';
+                end
+                md.anatomy_loader_hint = [ ...
+                    'Static high-resolution anatomy saved as I + metadata + events; ' ...
+                    'use I directly as anatomical underlay.'];
+            elseif localIsLowResAnatomyPreset(cfg)
+                md.image_role = 'anatomy';
+                md.is_anatomy = true;
+                md.anatomy_highres = false;
+                md.anatomy_lowres = true;
+                if localIs3DProbe(cfg)
+                    md.anatomy_dimension = '3D';
+                else
+                    md.anatomy_dimension = '2D';
+                end
+                md.anatomy_loader_hint = [ ...
+                    'Static low-resolution Doppler anatomy (last of 5 images/volumes; no averaging blur) ' ...
+                    'saved as I + metadata + events.'];
+            else
+                md.image_role = 'functional';
+                md.is_anatomy = false;
+                md.anatomy_highres = false;
+                md.anatomy_lowres = false;
+                md.functional_timeseries = strcmpi(md.imaging_mode, 'functional');
+                if md.functional_timeseries
+                    md.functional_loader_hint = [ ...
+                        'Full fUSI Doppler time series. Keep the final dimension as time; ' ...
+                        'do not collapse to static anatomy.'];
+                end
             end
 
             md.requested_frames_this_file = nFramesThisAcq;
@@ -701,39 +734,82 @@ end
 
             % -------------------------------------------------------------
             % EXPLICIT GEOMETRY
-            %
-            % Never make a loader infer which dimension is which. For a 3D
-            % probe the array is [depth_z, width_x, slice_y, time], e.g.
-            % [80 64 54 2500] = 54 slices and 2500 volumes. A loader written
-            % for 2D data sees [Z X T] and mistakes dim 2 (64) for the slice
-            % count. These geom_* fields state the answer outright.
-            %
-            % The geom_ prefix avoids colliding with any field the scanner
-            % already puts in md.
             % -------------------------------------------------------------
             szI = size(I);
             md.geom_data_size = szI;
-            md.geom_time_dim = numel(szI);
-            md.geom_n_time_frames = szI(end);
+            imagingMode = localGetImagingMode(cfg);
 
-            if numel(szI) >= 4
-                md.geom_dim_order = '[depth_z, width_x, slice_y, time]';
+            if strcmpi(imagingMode, 'highres2d')
+                % highResAcq2D returns one reconstructed static image [Z X].
+                md.geom_dim_order = '[depth_z, width_x]';
+                md.geom_time_dim = NaN;
+                md.geom_n_time_frames = 1;
+                md.geom_slice_dim = NaN;
+                md.geom_n_depth_z = szI(1);
+                md.geom_n_width_x = szI(min(2, numel(szI)));
+                md.geom_n_slices = 1;
+                md.highres_source_frames = actualFrames;
+
+            elseif strcmpi(imagingMode, 'highres3d')
+                % highResAcq3D returns one reconstructed static volume [Z X Y].
+                md.geom_dim_order = '[depth_z, width_x, slice_y]';
+                md.geom_time_dim = NaN;
+                md.geom_n_time_frames = 1;
                 md.geom_slice_dim = 3;
                 md.geom_n_depth_z = szI(1);
-                md.geom_n_width_x = szI(2);
-                md.geom_n_slices  = szI(3);
-            else
-                md.geom_dim_order = '[depth_z, width_x, time]';
-                md.geom_slice_dim = NaN;   % single plane per file
-                md.geom_n_depth_z = szI(1);
-
-                if numel(szI) >= 2
-                    md.geom_n_width_x = szI(2);
+                md.geom_n_width_x = szI(min(2, numel(szI)));
+                if numel(szI) >= 3
+                    md.geom_n_slices = szI(3);
                 else
-                    md.geom_n_width_x = NaN;
+                    md.geom_n_slices = 1;
+                end
+                md.highres_source_frames = actualFrames;
+
+            elseif localIsLowResAnatomyPreset(cfg)
+                % Static low-resolution anatomy made from the 5-frame/16-block
+                % Doppler preset.
+                md.geom_time_dim = NaN;
+                md.geom_n_time_frames = 1;
+                if numel(szI) >= 3 && localIs3DProbe(cfg)
+                    md.geom_dim_order = '[depth_z, width_x, slice_y]';
+                    md.geom_slice_dim = 3;
+                    md.geom_n_depth_z = szI(1);
+                    md.geom_n_width_x = szI(2);
+                    md.geom_n_slices = szI(3);
+                else
+                    md.geom_dim_order = '[depth_z, width_x]';
+                    md.geom_slice_dim = NaN;
+                    md.geom_n_depth_z = szI(1);
+                    if numel(szI) >= 2
+                        md.geom_n_width_x = szI(2);
+                    else
+                        md.geom_n_width_x = NaN;
+                    end
+                    md.geom_n_slices = 1;
                 end
 
-                md.geom_n_slices = 1;
+            else
+                % Standard / explicit functional Doppler time series.
+                md.geom_time_dim = numel(szI);
+                md.geom_n_time_frames = szI(end);
+
+                if numel(szI) >= 4
+                    md.geom_dim_order = '[depth_z, width_x, slice_y, time]';
+                    md.geom_slice_dim = 3;
+                    md.geom_n_depth_z = szI(1);
+                    md.geom_n_width_x = szI(2);
+                    md.geom_n_slices  = szI(3);
+                else
+                    md.geom_dim_order = '[depth_z, width_x, time]';
+                    md.geom_slice_dim = NaN;
+                    md.geom_n_depth_z = szI(1);
+                    if numel(szI) >= 2
+                        md.geom_n_width_x = szI(2);
+                    else
+                        md.geom_n_width_x = NaN;
+                    end
+                    md.geom_n_slices = 1;
+                end
             end
 
             md.acq_start_datenum = acqStartDatenum;
@@ -811,92 +887,120 @@ md.motor_n_positions = nMotorPositionsThisRun;
                 MEmeta.message));
         end
         
-        [nameFile, nameShort] = localMakeSaveName(FS, cfg, sessionTag, motorPositionsAbsMM, motorHomeMM, iTrial);
+        % -------------------------------------------------------------
+        % V13 ANATOMY REVIEW / DEFERRED SAVE
+        % -------------------------------------------------------------
+        % Normal functional/time-series scans still save automatically.
+        % Low-res Doppler anatomy is mirrored into the Trigger Controller and
+        % is saved only when the user presses SAVE LOW-RES.
+        % High-res anatomy opens its dedicated viewer and is saved only when
+        % SAVE ANATOMY is pressed there.  No Yes/No popup is used.
+        imagingModeForSave = localGetImagingMode(cfg);
+        isHighResAnatomy = strcmpi(imagingModeForSave,'highres2d') || ...
+            strcmpi(imagingModeForSave,'highres3d');
+        isLowResAnatomy = localIsLowResAnatomyPreset(cfg);
+        isAnatomyAcq = isLowResAnatomy || isHighResAnatomy;
+        hAnatomyViewer = [];
 
-              if cfg.motor.enable
-            if isSplitMotor
-            [nameFile, nameShort] = localAppendSplitSliceToSaveName( ...
-    nameFile, iTimeIndex, iSliceIndex, nMotorPositionsThisRun, ...
-    requestedMotorAbsMM, motorHomeMM);
-
-            elseif isContinuousMotor
-                [nameFile, nameShort] = localAppendContinuousMotorToSaveName( ...
-                    nameFile, nMotorPositionsThisRun, cfg.motor.frames_per_position, ...
-                    scanMotorPositionsAbsMM(1), scanMotorPositionsAbsMM(end), motorHomeMM);
-
-            else
-          [nameFile, nameShort] = localAppendMotorPositionToSaveName( ...
-    nameFile, cfg, requestedMotorAbsMM, motorHomeMM, iMotor, iTimeIndex);
+        if isHighResAnatomy
+            try
+                if strcmpi(imagingModeForSave,'highres3d')
+                    hAnatomyViewer = vfUSI_HighResAnatomyViewer(I,cfg,'High-Res 3D','',md);
+                else
+                    hAnatomyViewer = vfUSI_HighResAnatomyViewer(I,cfg,'High-Res 2D','',md);
+                end
+                localGuiLog(cfg,'High-res anatomy reconstructed. Review it in the HR viewer and press SAVE ANATOMY there if wanted.');
+            catch MEview
+                localGuiLog(cfg,['High-res viewer warning: ' MEview.message]);
             end
+        elseif isLowResAnatomy
+            localGuiLog(cfg,'Low-res anatomy ready in Trigger Controller. Press SAVE LOW-RES if you want to keep it.');
         end
 
-        [nameFile, nameShort] = localMakeFileNameUnique(nameFile);
+        saveThisAcq = ~isAnatomyAcq;
 
-infoI = whos('I');
-localGuiLog(cfg, sprintf('Saving I: class=%s | size=%s | %.2f MB', ...
-    infoI.class, mat2str(size(I)), infoI.bytes/1024/1024));
+        nameFile = '';
+        nameShort = '';
 
+        if saveThisAcq
+            [nameFile, nameShort] = localMakeSaveName(FS, cfg, sessionTag, ...
+                motorPositionsAbsMM, motorHomeMM, iTrial);
 
-% In split motor mode, writing a txt file after every tiny slice file
-% adds avoidable delay between slices. The MAT already contains md.
-% Write txt only for the first split file and the last split file.
-if isSplitMotor
-    localFastSaveMat(nameFile, I, md, cfg);
-else
-    localReliableSaveMat(nameFile, I, md, cfg);
-end
+            if cfg.motor.enable
+                if isSplitMotor
+                    [nameFile, nameShort] = localAppendSplitSliceToSaveName( ...
+                        nameFile, iTimeIndex, iSliceIndex, nMotorPositionsThisRun, ...
+                        requestedMotorAbsMM, motorHomeMM);
+                elseif isContinuousMotor
+                    [nameFile, nameShort] = localAppendContinuousMotorToSaveName( ...
+                        nameFile, nMotorPositionsThisRun, cfg.motor.frames_per_position, ...
+                        scanMotorPositionsAbsMM(1), scanMotorPositionsAbsMM(end), motorHomeMM);
+                else
+                    [nameFile, nameShort] = localAppendMotorPositionToSaveName( ...
+                        nameFile, cfg, requestedMotorAbsMM, motorHomeMM, iMotor, iTimeIndex);
+                end
+            end
 
-% IMPORTANT:
-% In split motor mode, do NOT write TXT during acquisition.
-% This prevents slow delay between slice files / trials.
-if ~isSplitMotor
-    localWriteScanInfoText(nameFile, cfg, iTrial, md);
-end
+            [nameFile, nameShort] = localMakeFileNameUnique(nameFile);
+            infoI = whos('I');
+            localGuiLog(cfg, sprintf('Saving I: class=%s | size=%s | %.2f MB', ...
+                infoI.class, mat2str(size(I)), infoI.bytes/1024/1024));
 
-% Keep lightweight split info in memory for one final summary TXT.
-if isSplitMotor
-    splitLastNameFile = nameFile;
-    splitLastMd = md;
-    splitLastTrial = iTrial;
-
-    splitSessionRows{end+1} = sprintf( ...
-        'File=%s | Trial=%d | T=%03d | Slice=%03d/%03d | Frames=%d | ReqAbs=%.3f | ActAbs=%.3f', ...
-        nameShort, iTrial, iTimeIndex, iSliceIndex, nMotorPositionsThisRun, ...
-        nFramesThisAcq, requestedMotorAbsMM, actualMotorAbsMM); %#ok<AGROW>
-end
-        journalTxt = localMakeJournalText(nameShort, cfg, motorPositionsAbsMM, motorHomeMM, iTrial);
-        if isfield(cfg, 'output_session_name') && ~isempty(cfg.output_session_name)
-    journalTxt = sprintf('%s | OutputSession=%s', journalTxt, cfg.output_session_name);
-end
-        if cfg.motor.enable
             if isSplitMotor
-            journalTxt = sprintf('%s | MotorMode=SPLIT | T=%03d | Slice=%d/%d | FramesThisFile=%d | ReqAbs=%.3f mm | ActAbs=%.3f mm | MotorNotMovingDuringAcq=1', ...
-    journalTxt, iTimeIndex, iSliceIndex, nMotorPositionsThisRun, nFramesThisAcq, requestedMotorAbsMM, actualMotorAbsMM);
-
-            elseif isContinuousMotor
-                journalTxt = sprintf('%s | MotorMode=CONTINUOUS | Slices=%d | FramesPerSlice=%d | FramesThisFile=%d | MotorMovesDuringAcq=1', ...
-                    journalTxt, nMotorPositionsThisRun, round(cfg.motor.frames_per_position), nFramesThisAcq);
-
+                localFastSaveMat(nameFile, I, md, cfg);
             else
-                journalTxt = sprintf('%s | MotorMode=UNKNOWN | FramesThisFile=%d', ...
-                    journalTxt, nFramesThisAcq);
+                localReliableSaveMat(nameFile, I, md, cfg);
+            end
+
+            if ~isSplitMotor
+                localWriteScanInfoText(nameFile, cfg, iTrial, md);
+            end
+
+            if isSplitMotor
+                splitLastNameFile = nameFile;
+                splitLastMd = md;
+                splitLastTrial = iTrial;
+                splitSessionRows{end+1} = sprintf( ...
+                    'File=%s | Trial=%d | T=%03d | Slice=%03d/%03d | Frames=%d | ReqAbs=%.3f | ActAbs=%.3f', ...
+                    nameShort, iTrial, iTimeIndex, iSliceIndex, nMotorPositionsThisRun, ...
+                    nFramesThisAcq, requestedMotorAbsMM, actualMotorAbsMM); %#ok<AGROW>
+            end
+
+            journalTxt = localMakeJournalText(nameShort, cfg, motorPositionsAbsMM, motorHomeMM, iTrial);
+            if isfield(cfg, 'output_session_name') && ~isempty(cfg.output_session_name)
+                journalTxt = sprintf('%s | OutputSession=%s', journalTxt, cfg.output_session_name);
+            end
+            if cfg.motor.enable
+                if isSplitMotor
+                    journalTxt = sprintf('%s | MotorMode=SPLIT | T=%03d | Slice=%d/%d | FramesThisFile=%d | ReqAbs=%.3f mm | ActAbs=%.3f mm | MotorNotMovingDuringAcq=1', ...
+                        journalTxt, iTimeIndex, iSliceIndex, nMotorPositionsThisRun, ...
+                        nFramesThisAcq, requestedMotorAbsMM, actualMotorAbsMM);
+                elseif isContinuousMotor
+                    journalTxt = sprintf('%s | MotorMode=CONTINUOUS | Slices=%d | FramesPerSlice=%d | FramesThisFile=%d | MotorMovesDuringAcq=1', ...
+                        journalTxt, nMotorPositionsThisRun, round(cfg.motor.frames_per_position), nFramesThisAcq);
+                else
+                    journalTxt = sprintf('%s | MotorMode=UNKNOWN | FramesThisFile=%d', ...
+                        journalTxt, nFramesThisAcq);
+                end
+            end
+
+            if ~isSplitMotor
+                try
+                    FS.writeJournal(journalTxt);
+                catch MEj
+                    localGuiLog(cfg, sprintf('Journal write warning: %s', MEj.message));
+                end
+            end
+
+            localGuiLog(cfg, sprintf('Saved file: %s', nameFile));
+            localGuiLog(cfg, sprintf('Saved folder: %s', fileparts(nameFile)));
+        else
+            if isHighResAnatomy
+                localGuiLog(cfg,'High-res anatomy not auto-saved. Viewer remains open; use SAVE ANATOMY when ready.');
+            elseif isLowResAnatomy
+                localGuiLog(cfg,'Low-res anatomy not auto-saved. Use SAVE LOW-RES in the Trigger Controller when wanted.');
             end
         end
-
-% In split motor mode, do not write journal during acquisition.
-% Journal/file-system writing can delay the next slice/trial.
-writeJournalNow = ~isSplitMotor;
-
-if writeJournalNow
-    try
-        FS.writeJournal(journalTxt);
-    catch MEj
-        localGuiLog(cfg, sprintf('Journal write warning: %s', MEj.message));
-    end
-end
-
-        localGuiLog(cfg, sprintf('Saved file: %s', nameFile));
-        localGuiLog(cfg, sprintf('Saved folder: %s', fileparts(nameFile)));
 
         fprintf('Elapsed time: %.1f seconds\n', toc(tTrial));
 
@@ -1035,44 +1139,137 @@ function rfOut = localProcessRFBridge(pp, rfIn)
 end
 
 function [I, md, actualFrames, acqElapsedSec, requestedDtSec, actualMeanDtSec] = ...
-    localRunDopplerAcquisition(SCAN, pp, cfg, nFramesThis)
+    localRunSelectedAcquisition(SCAN, pp, cfg, nFramesThis)
 
     nFramesThis = max(1, round(nFramesThis));
-
     localSetObjPropIfExists(pp, 'total_frames', nFramesThis);
 
-    try
-        pp.prepareTrial();
-    catch
+    imagingMode = localGetImagingMode(cfg);
+    useProcessRF = localShouldUseProcessRF(cfg);
+    processRFCallback = [];
+    if useProcessRF
+        processRFCallback = @pp.newImage;
     end
 
-    acqTic = tic;
-    useProcessRF = localShouldUseProcessRF(cfg);
+    fullTic = tic;
 
     try
-        if useProcessRF
-            localGuiLog(cfg, 'Using processRF callback.');
+        switch imagingMode
+            case 'doppler'
+                % V7 low-resolution anatomy uses the COMPANY'S OWN Doppler
+                % callback/display path whenever the quick 5 x 16 anatomy
+                % preset is selected with accessories off. This is the only
+                % reliable way to get exactly the same filtering, scaling,
+                % gamma, colormap and colorbar as the company GUI. We then
+                % capture the already-rendered scalar CData for optional save.
+                if localIsLowResAnatomyPreset(cfg) && ~useProcessRF && ...
+                        ~(isfield(cfg,'motor') && isstruct(cfg.motor) && logical(cfg.motor.enable))
+                    localGuiLog(cfg, 'Low-res anatomy V16: using native company Doppler callback/display path and mirroring the rendered native display into Trigger Controller.');
+                    [I, md] = vfUSI_OpenfUS_UIBridge('doppler', SCAN, cfg, nFramesThis);
+                    acqElapsedSec = toc(fullTic);
+                    actualFrames = nFramesThis;
+                elseif useProcessRF
+                    localGuiLog(cfg, 'Doppler: using processRF callback.');
+                    [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThis, ...
+                        'processRF', processRFCallback);
+                    acqElapsedSec = toc(fullTic);
+                    actualFrames = localGetAcquiredFrameCount(I, nFramesThis);
+                else
+                    localGuiLog(cfg, 'Doppler: using plain SCAN.doppler.');
+                    [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThis);
+                    acqElapsedSec = toc(fullTic);
+                    actualFrames = localGetAcquiredFrameCount(I, nFramesThis);
+                end
 
-            [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThis, ...
-                'processRF', @pp.newImage);
-        else
-            localGuiLog(cfg, 'Using plain SCAN.doppler without processRF callback.');
 
-            [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThis);
+            case 'functional'
+                % Explicit long functional fUSI time series. This is the
+                % original normal Doppler movie path: no company single-image
+                % anatomy callback and no static reduction. The full I array
+                % is returned and therefore auto-saved by the normal pipeline.
+                if useProcessRF
+                    localGuiLog(cfg, sprintf( ...
+                        'Functional fUSI: acquiring %d frames x %d blocks/image with live progress/TR callback.', ...
+                        nFramesThis, cfg.nblocksImage));
+                    [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThis, ...
+                        'processRF', processRFCallback);
+                else
+                    localGuiLog(cfg, sprintf( ...
+                        'Functional fUSI: acquiring %d frames x %d blocks/image using plain SCAN.doppler.', ...
+                        nFramesThis, cfg.nblocksImage));
+                    [I, md] = SCAN.doppler(cfg.nblocksImage, nFramesThis);
+                end
+                acqElapsedSec = toc(fullTic);
+                actualFrames = localGetAcquiredFrameCount(I, nFramesThis);
+
+            case 'highres2d'
+                if exist('highResAcq2D', 'file') ~= 2
+                    error(['highResAcq2D.m was not found on the MATLAB path. ' ...
+                           'Place the updated helper in the acquisition folder.']);
+                end
+
+                localGuiLog(cfg, sprintf( ...
+                    'High-Res 2D: %d source frames, fixed nblocksImage=10.', nFramesThis));
+                if nFramesThis < 50
+                    localGuiLog(cfg, sprintf('HR2D WARNING: only %d source frames requested; company demo recommends 100.',nFramesThis));
+                end
+                % V13 returns the high-resolution path to the vendor architecture: the
+                % supplied company HR helpers create a fresh echoScan object. Reusing the
+                % normal Doppler SCAN can leave HR beamforming state partially inherited
+                % and was a plausible cause of the all-black reconstruction.
+                [I, ~, md] = highResAcq2D(nFramesThis, [], processRFCallback);
+
+                fullElapsed = toc(fullTic);
+                acqElapsedSec = localGetHighResDopplerElapsed(md, fullElapsed);
+                actualFrames = localGetHighResFrameCount(md, nFramesThis);
+                try
+                    md.highres_total_elapsed_s = fullElapsed;
+                catch
+                end
+                localLogHighResMetadataMode(cfg, md);
+
+            case 'highres3d'
+                if exist('highResAcq3D', 'file') ~= 2
+                    error(['highResAcq3D.m was not found on the MATLAB path. ' ...
+                           'Place the updated helper in the acquisition folder.']);
+                end
+
+                localGuiLog(cfg, sprintf( ...
+                    'High-Res 3D: %d source volumes, fixed nblocksImage=17.', nFramesThis));
+                if nFramesThis < 50
+                    localGuiLog(cfg, sprintf('HR3D WARNING: only %d source volumes requested; company demo recommends 100.',nFramesThis));
+                end
+                % Vendor-faithful V13 path: highResAcq3D creates its own echoScan object,
+                % matching the supplied company helper before switching to paramMatrixHR.
+                % The normal Doppler/B-mode SCAN remains untouched.
+                [I, md] = highResAcq3D(nFramesThis, [], processRFCallback);
+
+                fullElapsed = toc(fullTic);
+                acqElapsedSec = localGetHighResDopplerElapsed(md, fullElapsed);
+                actualFrames = localGetHighResFrameCount(md, nFramesThis);
+                try
+                    md.highres_total_elapsed_s = fullElapsed;
+                catch
+                end
+                localLogHighResMetadataMode(cfg, md);
+
+            otherwise
+                error('Unsupported imaging mode: %s', imagingMode);
         end
 
     catch ME
-        localGuiLog(cfg, sprintf('DOPPLER FAILURE: %s', ME.message));
-        fprintf(2, '\n===== DOPPLER FAILURE =====\n');
-        fprintf(2, '%s\n', getReport(ME, 'extended', 'hyperlinks', 'on'));
+        localGuiLog(cfg, sprintf('%s acquisition failed: %s', imagingMode, ME.message));
         rethrow(ME);
     end
 
-    acqElapsedSec = toc(acqTic);
-
     requestedDtSec = localCalcTRSec(cfg.nblocksImage, localGetTRUnit(cfg));
-    actualFrames = localGetAcquiredFrameCount(I, nFramesThis);
-    actualMeanDtSec = acqElapsedSec / max(1, actualFrames);
+    isVendorNativeDisplay = isstruct(md) && isfield(md,'vendor_native_display') && ...
+        logical(md.vendor_native_display);
+    if isVendorNativeDisplay
+        actualMeanDtSec = NaN;
+    else
+        actualMeanDtSec = acqElapsedSec / max(1, actualFrames);
+    end
 
     try
         md.requested_dt_s = requestedDtSec;
@@ -1085,9 +1282,8 @@ function [I, md, actualFrames, acqElapsedSec, requestedDtSec, actualMeanDtSec] =
     catch
     end
 
-    if requestedDtSec > 0
+    if requestedDtSec > 0 && ~isVendorNativeDisplay && isfinite(actualMeanDtSec)
         devPct = 100 * (actualMeanDtSec - requestedDtSec) / requestedDtSec;
-
         localGuiTiming(cfg, requestedDtSec, actualMeanDtSec, ...
             devPct, acqElapsedSec, actualFrames);
 
@@ -1100,6 +1296,1826 @@ function [I, md, actualFrames, acqElapsedSec, requestedDtSec, actualMeanDtSec] =
                 'Timing QC: requested %.3f s, actual mean %.3f s (%+.1f%%).', ...
                 requestedDtSec, actualMeanDtSec, devPct));
         end
+    end
+end
+
+function n = localGetHighResFrameCount(md, fallbackN)
+    n = fallbackN;
+    try
+        if isstruct(md) && isfield(md, 'time') && isnumeric(md.time) && ~isempty(md.time)
+            n = numel(md.time);
+        elseif isstruct(md) && isfield(md, 'highres_nframes_used') && ...
+                isnumeric(md.highres_nframes_used) && isscalar(md.highres_nframes_used)
+            n = md.highres_nframes_used;
+        end
+    catch
+        n = fallbackN;
+    end
+    if isempty(n) || ~isfinite(n) || n < 1
+        n = fallbackN;
+    end
+    n = max(1, round(n));
+end
+
+function t = localGetHighResDopplerElapsed(md, fallbackT)
+    t = fallbackT;
+    try
+        if isstruct(md) && isfield(md, 'highres_doppler_elapsed_s') && ...
+                isnumeric(md.highres_doppler_elapsed_s) && ...
+                isscalar(md.highres_doppler_elapsed_s) && ...
+                isfinite(md.highres_doppler_elapsed_s) && md.highres_doppler_elapsed_s > 0
+            t = md.highres_doppler_elapsed_s;
+        end
+    catch
+        t = fallbackT;
+    end
+end
+
+function [I, md] = localRunVendorDopplerAnatomy(SCAN, cfg, nFramesThis)
+    % V7 NATIVE COMPANY DOPPLER ANATOMY
+    % -------------------------------------------------------------
+    % Do not redraw SCAN.doppler output ourselves. The company GUI applies
+    % additional display/processing steps that are not exposed in the supplied
+    % scripts/P-code. For the quick 5 x 16 anatomy preset we therefore invoke
+    % the company's own Doppler control and capture the scalar CData AFTER the
+    % company has displayed it. This guarantees that the user sees the exact
+    % company image, colormap, CLim, gamma and colorbar.
+
+    [hDoppler, hVendorFig, whyFound] = localFindVendorGraphicsControl('doppler', false, []);
+    if isempty(hDoppler) || ~ishandle(hDoppler)
+        localLogVendorGraphicsCandidates(cfg, 'doppler');
+        error(['Could not identify the native company Doppler control. ' ...
+               'V7 will not substitute a differently processed low-res image.']);
+    end
+
+    [axBefore, ~] = localFindVendorDisplayAxes();
+    sigBefore = localVendorAxesSignature(axBefore);
+
+    localGuiLog(cfg, sprintf('Native company Doppler control found (%s | type=%s | figure="%s").', ...
+        whyFound, localAnyToText(localSafeGet(hDoppler,'Type')), localGetFigureName(hVendorFig)));
+    localGuiLog(cfg, 'Starting native company Doppler acquisition. Display settings are not modified.');
+
+    localInvokeVendorGraphicsControl(hDoppler, true);
+    drawnow;
+
+    % Some company callbacks return only after acquisition; others schedule
+    % their final display update asynchronously. Poll briefly for a changed
+    % image without touching the display itself.
+    tWait = tic;
+    axNow = [];
+    while toc(tWait) < 12
+        [axNow, ~] = localFindVendorDisplayAxes();
+        sigNow = localVendorAxesSignature(axNow);
+        if localVendorSignatureChanged(sigBefore, sigNow)
+            if ~isempty(axNow) && ishandle(axNow)
+                break;
+            end
+        elseif ~sigBefore.valid && sigNow.valid && toc(tWait) > 0.25
+            break;
+        end
+        drawnow;
+        pause(0.05);
+    end
+
+    if isempty(axNow) || ~ishandle(axNow)
+        [axNow, ~] = localFindVendorDisplayAxes();
+    end
+    [I, cap] = localCaptureVendorDisplayedImage(axNow);
+    if isempty(I)
+        error('Company Doppler callback completed, but no displayed image CData could be captured.');
+    end
+
+    md = localBuildVendorCaptureMetadata(SCAN, I, nFramesThis);
+    md.vendor_native_display = true;
+    md.vendor_native_control_reason = whyFound;
+    md.vendor_capture_source = cap.source;
+    md.vendor_capture_original_class = cap.original_class;
+    md.vendor_capture_original_size = cap.original_size;
+    md.vendor_capture_was_rgb = cap.was_rgb;
+    md.vendor_capture_axes_clim = cap.clim;
+    md.vendor_capture_colormap = cap.colormap;
+    md.vendor_capture_note = [ ...
+        'I is the scalar image captured from the native company Doppler display after acquisition. ' ...
+        'The company GUI itself remains the authoritative visual display.'];
+
+    localGuiLog(cfg, sprintf('Native company Doppler displayed and captured for optional save: size=%s class=%s.', ...
+        mat2str(size(I)), class(I)));
+end
+
+function md = localBuildVendorCaptureMetadata(SCAN, I, nFramesThis)
+    md = struct();
+    md.imageDim = ndims(I);
+    if ismatrix(I), md.imageDim = 2; end
+    md.imageSize = size(I);
+    md.imageType = 'doppler';
+    md.time = 1:max(1,round(nFramesThis));
+    md.t0 = clock;
+    md.tag = struct();
+    md.voxelSize = NaN(1,md.imageDim);
+    md.origen = zeros(1,md.imageDim);
+    try
+        P = SCAN.parameters;
+        if isfield(P,'bf') && isstruct(P.bf)
+            rawVS = [localStructNumeric(P.bf,'dz') localStructNumeric(P.bf,'dx') localStructNumeric(P.bf,'dy')];
+            rawOrg = [localStructNumeric(P.bf,'z0') localStructNumeric(P.bf,'x0') localStructNumeric(P.bf,'y0')];
+            n = min(md.imageDim,numel(rawVS));
+            md.voxelSize(1:n) = rawVS(1:n);
+            md.origen(1:n) = rawOrg(1:n);
+        end
+    catch
+    end
+end
+
+function v = localStructNumeric(s, name)
+    v = NaN;
+    try
+        if isfield(s,name)
+            x = s.(name);
+            if isnumeric(x) && isscalar(x) && isfinite(x), v = double(x); end
+        end
+    catch
+    end
+end
+
+function sig = localVendorAxesSignature(ax)
+    sig = struct('valid',false,'sz',[],'a',NaN,'b',NaN,'c',NaN);
+    try
+        if isempty(ax) || ~ishandle(ax), return; end
+        imgs = findall(ax,'Type','image');
+        if isempty(imgs), return; end
+        best = []; bestN = -1;
+        for k=1:numel(imgs)
+            cd = get(imgs(k),'CData');
+            if isnumeric(cd) && numel(cd)>bestN
+                best=cd; bestN=numel(cd);
+            end
+        end
+        if isempty(best), return; end
+        x=double(best(:)); x=x(isfinite(x));
+        if isempty(x), return; end
+        sig.valid=true; sig.sz=size(best);
+        sig.a=x(1); sig.b=x(max(1,round(numel(x)/2))); sig.c=x(end);
+    catch
+    end
+end
+
+function tf = localVendorSignatureChanged(a,b)
+    tf = false;
+    try
+        if ~a.valid && b.valid, tf=true; return; end
+        if ~(a.valid && b.valid), return; end
+        if ~isequal(a.sz,b.sz), tf=true; return; end
+        tf = ~(isequaln(a.a,b.a) && isequaln(a.b,b.b) && isequaln(a.c,b.c));
+    catch
+    end
+end
+
+function [I, cap] = localCaptureVendorDisplayedImage(ax)
+    I = [];
+    cap = struct('source','','original_class','','original_size',[], ...
+        'was_rgb',false,'clim',[],'colormap',[]);
+    if isempty(ax) || ~ishandle(ax), return; end
+    try
+        imgs = findall(ax,'Type','image');
+        if isempty(imgs), return; end
+        hBest=[]; bestN=-1;
+        for k=1:numel(imgs)
+            cd=get(imgs(k),'CData');
+            if isnumeric(cd) && numel(cd)>bestN
+                hBest=imgs(k); bestN=numel(cd);
+            end
+        end
+        if isempty(hBest), return; end
+        cd=get(hBest,'CData');
+        cap.source='company_axes_CData';
+        cap.original_class=class(cd);
+        cap.original_size=size(cd);
+        cap.clim=get(ax,'CLim');
+        try
+            hf=ancestor(ax,'figure'); cap.colormap=colormap(hf);
+        catch
+        end
+        if ndims(cd)==3 && size(cd,3)==3
+            cap.was_rgb=true;
+            d=double(cd);
+            I=0.2989360213*d(:,:,1)+0.5870430745*d(:,:,2)+0.1140209043*d(:,:,3);
+        else
+            I=cd;
+        end
+    catch
+        I=[];
+    end
+end
+
+function localRunBModeLive(SCAN, cfg) %#ok<INUSD>
+    % V7 native B-mode discovery includes classic uicontrols, hidden toolbar
+    % tools, toggle tools and menus. V6 looked only at uicontrols and therefore
+    % could miss the actual LIVE/FREEZE tool used by protected OpenfUS builds.
+    % No color/gamma/CLim property is changed here.
+
+    localGuiStatus(cfg, 'B-Mode LIVE - press STOP to end', 'notready');
+    localGuiLog(cfg, 'B-Mode Live V7: locating native B-mode + LIVE/FREEZE graphics controls (including toolbar/menu tools).');
+
+    [hBMode,hVendorFig,whyB] = localFindVendorGraphicsControl('bmode', false, []);
+    [hLive,hLiveFig,whyLive] = localFindVendorGraphicsControl('bmode', true, []);
+
+    if isempty(hLive) || ~ishandle(hLive)
+        % If there is no combined B-mode+live control, search for a generic
+        % Live/Run/Continuous toggle in the same company figure.
+        if ~isempty(hBMode) && ishandle(hBMode)
+            [hLive,hLiveFig,whyLive] = localFindVendorGraphicsControl('live', false, hVendorFig);
+        end
+    end
+
+    % A B-mode toggle tool itself can be the live/freeze state even if its
+    % label contains only "B-MODE". Accept it only for stateful controls;
+    % never treat a plain pushbutton snapshot as continuous live.
+    if (isempty(hLive) || ~ishandle(hLive)) && ~isempty(hBMode) && ishandle(hBMode)
+        typ=lower(localAnyToText(localSafeGet(hBMode,'Type')));
+        sty=lower(localAnyToText(localSafeGet(hBMode,'Style')));
+        if strcmp(typ,'uitoggletool') || strcmp(sty,'togglebutton') || strcmp(sty,'radiobutton')
+            hLive=hBMode; hLiveFig=hVendorFig; whyLive=['stateful B-mode control: ' whyB];
+        end
+    end
+
+    if isempty(hLive) || ~ishandle(hLive)
+        localLogVendorGraphicsCandidates(cfg, 'bmode');
+        error([ ...
+            'Could not identify a stateful native B-Mode LIVE/FREEZE control. ' ...
+            'The protected company GUI does not expose a callable continuous control under the properties V7 can inspect. ' ...
+            'No snapshot loop was started and no display setting was changed.']);
+    end
+
+    % If a separate B-mode selector exists, select/initialize it once first.
+    if ~isempty(hBMode) && ishandle(hBMode) && hBMode~=hLive
+        localGuiLog(cfg,sprintf('Selecting native B-mode once (%s).',whyB));
+        localInvokeVendorGraphicsControl(hBMode,true);
+        drawnow;
+    end
+
+    localGuiLog(cfg,sprintf('Starting native LIVE once (%s | type=%s | figure="%s").', ...
+        whyLive,localAnyToText(localSafeGet(hLive,'Type')),localGetFigureName(hLiveFig)));
+
+    % A native live callback may block until FREEZE/STOP. Start a small MATLAB
+    % timer BEFORE invoking it so the Trigger Controller STOP button can still
+    % call the company STOP/FREEZE control while the native callback is active.
+    stopTimer=[];
+    try
+        stopTimer=timer('ExecutionMode','fixedSpacing','Period',0.10, ...
+            'BusyMode','drop','UserData',struct('fired',false), ...
+            'TimerFcn',@(tm,evt)localBModeStopTimer(tm,cfg,hLive,hLiveFig));
+        start(stopTimer);
+    catch MEtimer
+        localGuiLog(cfg,['B-Mode stop-timer warning: ' MEtimer.message]);
+    end
+    timerCleanup=onCleanup(@()localDeleteTimerSafe(stopTimer)); %#ok<NASGU>
+
+    localInvokeVendorGraphicsControl(hLive,true);
+    drawnow;
+
+    while ~localStopRequested(cfg)
+        if ~ishandle(hLive), break; end
+        drawnow;
+        pause(0.03);
+    end
+
+    % If the timer already fired the company STOP control, do NOT invoke the
+    % toggle again here (that could accidentally restart live mode).
+    alreadyStopped=localTimerAlreadyFired(stopTimer);
+    if ~alreadyStopped
+        [hStop,~,whyStop] = localFindVendorGraphicsControl('stop',false,hLiveFig);
+        try
+            if ~isempty(hStop) && ishandle(hStop) && hStop~=hLive
+                localGuiLog(cfg,['Stopping native B-mode using ' whyStop '.']);
+                localInvokeVendorGraphicsControl(hStop,true);
+            else
+                localGuiLog(cfg,'Stopping native B-mode by switching the LIVE toggle OFF once.');
+                localInvokeVendorGraphicsControl(hLive,false);
+            end
+        catch MEoff
+            localGuiLog(cfg,['B-Mode stop warning: ' MEoff.message]);
+        end
+    end
+
+    localGuiStatus(cfg,'B-Mode Live stopped.','ready');
+    localGuiLog(cfg,'B-Mode Live stopped. Company display settings were never modified.');
+end
+
+function localBModeStopTimer(tm,cfg,hLive,hLiveFig)
+    try
+        ud=get(tm,'UserData');
+        if isstruct(ud) && isfield(ud,'fired') && ud.fired, return; end
+        if ~localStopRequested(cfg), return; end
+        if ~isstruct(ud), ud=struct(); end
+        ud.fired=true; set(tm,'UserData',ud);
+        [hStop,~,~]=localFindVendorGraphicsControl('stop',false,hLiveFig);
+        if ~isempty(hStop) && ishandle(hStop) && hStop~=hLive
+            localInvokeVendorGraphicsControl(hStop,true);
+        elseif ~isempty(hLive) && ishandle(hLive)
+            localInvokeVendorGraphicsControl(hLive,false);
+        end
+        try, stop(tm); catch, end
+    catch
+    end
+end
+
+function tf=localTimerAlreadyFired(tm)
+    tf=false;
+    try
+        if isempty(tm) || ~isvalid(tm), return; end
+        ud=get(tm,'UserData');
+        tf=isstruct(ud) && isfield(ud,'fired') && logical(ud.fired);
+    catch
+        tf=false;
+    end
+end
+
+function localDeleteTimerSafe(tm)
+    try
+        if isempty(tm), return; end
+        try, stop(tm); catch, end
+        try, delete(tm); catch, end
+    catch
+    end
+end
+
+function [hBest,hBestFig,why] = localFindVendorGraphicsControl(mode, requireCombinedLive, restrictFig)
+    hBest=[]; hBestFig=[]; why=''; bestScore=-Inf;
+    oldHidden='off';
+    try, oldHidden=get(0,'ShowHiddenHandles'); set(0,'ShowHiddenHandles','on'); catch, end
+    cleanupHidden=onCleanup(@()localRestoreHiddenHandles(oldHidden)); %#ok<NASGU>
+    if nargin<2, requireCombinedLive=false; end
+    if nargin<3, restrictFig=[]; end
+    if ~isempty(restrictFig) && ishandle(restrictFig)
+        figs=restrictFig;
+    else
+        try, figs=findall(0,'Type','figure'); catch, figs=[]; end
+    end
+    for iFig=1:numel(figs)
+        hf=figs(iFig);
+        if localIsOurControllerFigure(hf), continue; end
+        fName=lower(localGetFigureName(hf));
+        figBonus=0; if ~isempty(strfind(fName,'openfus')), figBonus=40; end
+        try, objs=findall(hf); catch, objs=[]; end
+        for k=1:numel(objs)
+            h=objs(k);
+            typ=lower(localAnyToText(localSafeGet(h,'Type')));
+            if ~any(strcmp(typ,{'uicontrol','uipushtool','uitoggletool','uimenu'})), continue; end
+            [key,cbtxt]=localGraphicsControlText(h);
+            compact=regexprep(lower(key),'[^a-z0-9]','');
+            score=-Inf; desc='';
+            switch lower(mode)
+                case 'doppler'
+                    if isempty(strfind(compact,'doppler')), continue; end
+                    if ~isempty(strfind(compact,'save')) || ~isempty(strfind(compact,'color')) || ...
+                            ~isempty(strfind(compact,'gamma')) || ~isempty(strfind(compact,'gain'))
+                        continue;
+                    end
+                    score=220+figBonus; desc='native company Doppler control';
+                case 'bmode'
+                    hasB=~isempty(strfind(compact,'bmode')) || ...
+                        (~isempty(strfind(compact,'b')) && ~isempty(strfind(compact,'mode')));
+                    if ~hasB, continue; end
+                    hasLive=~isempty(strfind(compact,'live')) || ~isempty(strfind(compact,'continuous')) || ...
+                        ~isempty(strfind(compact,'freeze')) || ~isempty(strfind(compact,'run'));
+                    if requireCombinedLive && ~hasLive, continue; end
+                    score=220+figBonus+80*hasLive; desc='native company B-mode control';
+                case 'live'
+                    hasLive=~isempty(strfind(compact,'live')) || ~isempty(strfind(compact,'continuous')) || ...
+                        ~isempty(strfind(compact,'freeze')) || ~isempty(strfind(compact,'run')) || ...
+                        ~isempty(strfind(compact,'start'));
+                    if ~hasLive, continue; end
+                    bad=~isempty(strfind(compact,'doppler')) || ~isempty(strfind(compact,'motor')) || ...
+                        ~isempty(strfind(compact,'save')) || ~isempty(strfind(compact,'record'));
+                    if bad, continue; end
+                    score=160+figBonus; desc='generic native LIVE/CONTINUOUS/FREEZE control';
+                case 'stop'
+                    hasStop=~isempty(strfind(compact,'stop')) || ~isempty(strfind(compact,'freeze')) || ...
+                        ~isempty(strfind(compact,'off'));
+                    if ~hasStop, continue; end
+                    bad=~isempty(strfind(compact,'motor')) || ~isempty(strfind(compact,'pulsepal')) || ...
+                        ~isempty(strfind(compact,'stimbox'));
+                    if bad, continue; end
+                    score=150+figBonus; desc='native STOP/FREEZE control';
+                otherwise
+                    continue;
+            end
+            if strcmp(typ,'uitoggletool'), score=score+55; end
+            sty=lower(localAnyToText(localSafeGet(h,'Style')));
+            if strcmp(sty,'togglebutton') || strcmp(sty,'radiobutton'), score=score+45; end
+            if ~isempty(cbtxt), score=score+20; end
+            if score>bestScore
+                bestScore=score; hBest=h; hBestFig=hf;
+                why=sprintf('%s; key="%s"',desc,strtrim(key));
+            end
+        end
+    end
+end
+
+function [key,cbtxt] = localGraphicsControlText(h)
+    vals={};
+    props={'String','Label','Tag','TooltipString','Tooltip'};
+    for i=1:numel(props)
+        try, vals{end+1}=localAnyToText(get(h,props{i})); catch, end %#ok<AGROW>
+    end
+    cbtxt='';
+    cbprops={'Callback','ClickedCallback','OnCallback','OffCallback','MenuSelectedFcn','ButtonDownFcn'};
+    for i=1:numel(cbprops)
+        try
+            c=get(h,cbprops{i}); t=localCallbackToText(c);
+            if ~isempty(t), vals{end+1}=t; cbtxt=[cbtxt ' ' t]; end %#ok<AGROW>
+        catch
+        end
+    end
+    key=strjoin(vals,' ');
+end
+
+function localInvokeVendorGraphicsControl(h, turnOn)
+    if isempty(h) || ~ishandle(h), error('Invalid native graphics control handle.'); end
+    typ=lower(localAnyToText(localSafeGet(h,'Type')));
+    sty=lower(localAnyToText(localSafeGet(h,'Style')));
+    cb=[];
+    if strcmp(typ,'uitoggletool')
+        if turnOn
+            try, set(h,'State','on'); catch, end
+            try, cb=get(h,'OnCallback'); catch, end
+        else
+            try, set(h,'State','off'); catch, end
+            try, cb=get(h,'OffCallback'); catch, end
+        end
+        if isempty(cb), try, cb=get(h,'ClickedCallback'); catch, end, end
+    elseif strcmp(typ,'uipushtool')
+        try, cb=get(h,'ClickedCallback'); catch, end
+    elseif strcmp(typ,'uimenu')
+        try, cb=get(h,'MenuSelectedFcn'); catch, end
+        if isempty(cb), try, cb=get(h,'Callback'); catch, end, end
+    elseif strcmp(typ,'uicontrol')
+        if strcmp(sty,'togglebutton') || strcmp(sty,'radiobutton') || strcmp(sty,'checkbox')
+            try, set(h,'Value',double(logical(turnOn))); catch, end
+        end
+        try, cb=get(h,'Callback'); catch, end
+    end
+    if isempty(cb), try, cb=get(h,'ButtonDownFcn'); catch, end, end
+    if isempty(cb), error('Detected native control has no callable callback.'); end
+    localExecuteGraphicsCallback(cb,h);
+end
+
+function localExecuteGraphicsCallback(cb,h)
+    if isa(cb,'function_handle')
+        feval(cb,h,[]); return;
+    end
+    if iscell(cb) && ~isempty(cb)
+        f=cb{1}; extra=cb(2:end);
+        if isa(f,'function_handle'), feval(f,h,[],extra{:}); return; end
+        if ischar(f), feval(f,h,[],extra{:}); return; end
+    end
+    if ischar(cb) && ~isempty(strtrim(cb))
+        eval(cb); return;
+    end
+    error('Unsupported native callback type: %s',class(cb));
+end
+
+function localLogVendorGraphicsCandidates(cfg, focus)
+    try
+        oldHidden=get(0,'ShowHiddenHandles'); set(0,'ShowHiddenHandles','on');
+        c=onCleanup(@()localRestoreHiddenHandles(oldHidden)); %#ok<NASGU>
+        figs=findall(0,'Type','figure');
+        n=0;
+        for i=1:numel(figs)
+            hf=figs(i); if localIsOurControllerFigure(hf), continue; end
+            objs=findall(hf);
+            for k=1:numel(objs)
+                h=objs(k); typ=lower(localAnyToText(localSafeGet(h,'Type')));
+                if ~any(strcmp(typ,{'uicontrol','uipushtool','uitoggletool','uimenu'})), continue; end
+                [key,~]=localGraphicsControlText(h);
+                lk=lower(key);
+                if isempty(strfind(lk,lower(focus))) && ...
+                        isempty(strfind(lk,'live')) && isempty(strfind(lk,'freeze')) && ...
+                        isempty(strfind(lk,'continuous')) && isempty(strfind(lk,'doppler')) && ...
+                        isempty(strfind(lk,'bmode'))
+                    continue;
+                end
+                n=n+1;
+                localGuiLog(cfg,sprintf('OpenfUS control candidate %d: type=%s | figure="%s" | %s', ...
+                    n,typ,localGetFigureName(hf),strtrim(key)));
+                if n>=30, return; end
+            end
+        end
+        if n==0, localGuiLog(cfg,'No matching native OpenfUS control candidates were exposed as MATLAB graphics handles.'); end
+    catch ME
+        localGuiLog(cfg,['Native control diagnostic warning: ' ME.message]);
+    end
+end
+
+function localRestoreHiddenHandles(v)
+    try, set(0,'ShowHiddenHandles',v); catch, end
+end
+
+function [hBest, hBestFig, why] = localFindVendorBModeLiveControl()
+    hBest = []; hBestFig = []; why = ''; bestScore = -Inf;
+    try, figs = findall(0,'Type','figure'); catch, figs = []; end
+    for iFig = 1:numel(figs)
+        hFig = figs(iFig);
+        if localIsOurControllerFigure(hFig), continue; end
+        fName = lower(localGetFigureName(hFig));
+        figBonus = 0; if ~isempty(strfind(fName,'openfus')), figBonus = 40; end
+        try, ctrls = findall(hFig,'Type','uicontrol'); catch, ctrls = []; end
+        for k = 1:numel(ctrls)
+            h = ctrls(k);
+            style = lower(localAnyToText(localSafeGet(h,'Style')));
+            if isempty(strfind(style,'button')) && ~strcmp(style,'popupmenu'), continue; end
+            s = localAnyToText(localSafeGet(h,'String'));
+            t = localAnyToText(localSafeGet(h,'Tag'));
+            tip = localAnyToText(localSafeGet(h,'TooltipString'));
+            cb = localCallbackToText(localSafeGet(h,'Callback'));
+            key = lower([s ' ' t ' ' tip ' ' cb]);
+            compact = regexprep(key,'[^a-z0-9]','');
+            hasB = ~isempty(strfind(compact,'bmode'));
+            hasLive = ~isempty(strfind(compact,'live')) || ~isempty(strfind(compact,'continuous'));
+            if ~(hasB && hasLive), continue; end
+            score = figBonus + 200;
+            if strcmp(style,'togglebutton') || strcmp(style,'radiobutton'), score = score + 35; end
+            if ~isempty(strfind(lower(cb),'live')), score = score + 40; end
+            if score > bestScore
+                bestScore = score; hBest = h; hBestFig = hFig;
+                why = 'control contains both B-mode and Live/Continuous';
+            end
+        end
+    end
+end
+
+function [hBest, why] = localFindVendorGenericLiveControl(hFig, hExclude)
+    hBest = []; why = ''; bestScore = -Inf;
+    if isempty(hFig) || ~ishandle(hFig), return; end
+    try, ctrls = findall(hFig,'Type','uicontrol'); catch, ctrls = []; end
+    for k = 1:numel(ctrls)
+        h = ctrls(k);
+        if ~isempty(hExclude) && ishandle(hExclude) && h == hExclude, continue; end
+        style = lower(localAnyToText(localSafeGet(h,'Style')));
+        if isempty(strfind(style,'button')), continue; end
+        s = localAnyToText(localSafeGet(h,'String'));
+        t = localAnyToText(localSafeGet(h,'Tag'));
+        tip = localAnyToText(localSafeGet(h,'TooltipString'));
+        cb = localCallbackToText(localSafeGet(h,'Callback'));
+        key = lower([s ' ' t ' ' tip ' ' cb]);
+        compact = regexprep(key,'[^a-z0-9]','');
+        hasLive = ~isempty(strfind(compact,'live')) || ~isempty(strfind(compact,'continuous'));
+        if ~hasLive, continue; end
+        % Do not mistake other subsystems for B-mode live.
+        bad = ~isempty(strfind(compact,'doppler')) || ~isempty(strfind(compact,'motor')) || ...
+              ~isempty(strfind(compact,'pulsepal')) || ~isempty(strfind(compact,'stimbox')) || ...
+              ~isempty(strfind(compact,'save')) || ~isempty(strfind(compact,'record'));
+        if bad, continue; end
+        score = 120;
+        if strcmp(style,'togglebutton') || strcmp(style,'radiobutton'), score = score + 30; end
+        if ~isempty(strfind(lower(cb),'live')), score = score + 30; end
+        if score > bestScore
+            bestScore = score; hBest = h; why = 'generic company Live/Continuous control in the B-mode figure';
+        end
+    end
+end
+
+function hStop = localFindVendorLiveStopControl(hFig, hLive)
+    hStop = []; bestScore = -Inf;
+    if isempty(hFig) || ~ishandle(hFig), return; end
+    try, ctrls = findall(hFig,'Type','uicontrol'); catch, ctrls = []; end
+    for k = 1:numel(ctrls)
+        h = ctrls(k);
+        if ~isempty(hLive) && ishandle(hLive) && h == hLive, continue; end
+        style = lower(localAnyToText(localSafeGet(h,'Style')));
+        if isempty(strfind(style,'button')), continue; end
+        key = lower([localAnyToText(localSafeGet(h,'String')) ' ' ...
+            localAnyToText(localSafeGet(h,'Tag')) ' ' ...
+            localAnyToText(localSafeGet(h,'TooltipString')) ' ' ...
+            localCallbackToText(localSafeGet(h,'Callback'))]);
+        compact = regexprep(key,'[^a-z0-9]','');
+        hasStop = ~isempty(strfind(compact,'stop')) || ~isempty(strfind(compact,'liveoff'));
+        if ~hasStop, continue; end
+        bad = ~isempty(strfind(compact,'motor')) || ~isempty(strfind(compact,'stim')) || ...
+              ~isempty(strfind(compact,'pulsepal'));
+        if bad, continue; end
+        score = 100; if ~isempty(strfind(compact,'live')), score = score + 50; end
+        if score > bestScore, bestScore = score; hStop = h; end
+    end
+end
+
+function localLogVendorLiveCandidates(cfg)
+    try, figs = findall(0,'Type','figure'); catch, figs = []; end
+    for iFig = 1:numel(figs)
+        hFig = figs(iFig);
+        if localIsOurControllerFigure(hFig), continue; end
+        nm = localGetFigureName(hFig);
+        if isempty(strfind(lower(nm),'openfus')), continue; end
+        try, ctrls = findall(hFig,'Type','uicontrol'); catch, ctrls = []; end
+        for k = 1:numel(ctrls)
+            style = lower(localAnyToText(localSafeGet(ctrls(k),'Style')));
+            if isempty(strfind(style,'button')), continue; end
+            s = localAnyToText(localSafeGet(ctrls(k),'String'));
+            t = localAnyToText(localSafeGet(ctrls(k),'Tag'));
+            cb = localCallbackToText(localSafeGet(ctrls(k),'Callback'));
+            key = lower([s ' ' t ' ' cb]);
+            if ~isempty(strfind(key,'live')) || ~isempty(strfind(key,'bmode')) || ~isempty(strfind(key,'stop'))
+                localGuiLog(cfg, sprintf('OpenfUS control candidate: style=%s | String="%s" | Tag="%s" | Callback="%s"', ...
+                    style, s, t, cb));
+            end
+        end
+    end
+end
+
+function [hBest, hBestFig, why] = localFindVendorBModeControl()
+    hBest = [];
+    hBestFig = [];
+    why = '';
+    bestScore = -Inf;
+
+    try
+        figs = findall(0, 'Type', 'figure');
+    catch
+        figs = [];
+    end
+
+    for iFig = 1:numel(figs)
+        hFig = figs(iFig);
+
+        if localIsOurControllerFigure(hFig)
+            continue;
+        end
+
+        figName = lower(localGetFigureName(hFig));
+        figBonus = 0;
+        if ~isempty(strfind(figName, 'openfus'))
+            figBonus = 25;
+        end
+
+        try
+            ctrls = findall(hFig, 'Type', 'uicontrol');
+        catch
+            ctrls = [];
+        end
+
+        for iCtrl = 1:numel(ctrls)
+            h = ctrls(iCtrl);
+
+            try
+                style = lower(get(h, 'Style'));
+            catch
+                style = '';
+            end
+
+            if isempty(strfind(style, 'button'))
+                continue;
+            end
+
+            s = localAnyToText(localSafeGet(h, 'String'));
+            t = localAnyToText(localSafeGet(h, 'Tag'));
+            tip = localAnyToText(localSafeGet(h, 'TooltipString'));
+            cbTxt = localCallbackToText(localSafeGet(h, 'Callback'));
+
+            key = lower([s ' ' t ' ' tip ' ' cbTxt]);
+            compact = regexprep(key, '[^a-z0-9]', '');
+
+            score = figBonus;
+            reason = '';
+
+            if ~isempty(strfind(lower(cbTxt), 'bmode'))
+                score = score + 150;
+                reason = 'callback contains bmode';
+            end
+
+            if ~isempty(strfind(compact, 'bmode'))
+                score = score + 100;
+                if isempty(reason)
+                    reason = 'label/tag contains bmode';
+                end
+            end
+
+            if ~isempty(strfind(compact, 'bmodebutton'))
+                score = score + 100;
+                reason = 'native bmodeButton callback';
+            end
+
+            if score > bestScore && score >= 100
+                bestScore = score;
+                hBest = h;
+                hBestFig = hFig;
+                why = reason;
+            end
+        end
+    end
+end
+
+function localInvokeControlCallback(h)
+    if isempty(h) || ~ishandle(h)
+        error('Invalid native GUI control handle.');
+    end
+
+    try
+        hFig = ancestor(h, 'figure');
+        if ~isempty(hFig) && ishandle(hFig)
+            figure(hFig);
+        end
+    catch
+    end
+
+    cb = get(h, 'Callback');
+
+    if isa(cb, 'function_handle')
+        feval(cb, h, []);
+        return;
+    end
+
+    if iscell(cb) && ~isempty(cb)
+        f = cb{1};
+        extra = cb(2:end);
+        if isa(f, 'function_handle')
+            feval(f, h, [], extra{:});
+        elseif ischar(f)
+            feval(f, h, [], extra{:});
+        else
+            error('Unsupported cell callback type: %s', class(f));
+        end
+        return;
+    end
+
+    if ischar(cb) && ~isempty(strtrim(cb))
+        % Old GUIDE-style string callback.
+        eval(cb);
+        return;
+    end
+
+    error('The detected B-mode control has no callable Callback.');
+end
+
+function txt = localCallbackToText(cb)
+    txt = '';
+    try
+        if isa(cb, 'function_handle')
+            txt = func2str(cb);
+        elseif ischar(cb)
+            txt = cb;
+        elseif iscell(cb) && ~isempty(cb)
+            if isa(cb{1}, 'function_handle')
+                txt = func2str(cb{1});
+            elseif ischar(cb{1})
+                txt = cb{1};
+            end
+        end
+    catch
+        txt = '';
+    end
+end
+
+function v = localSafeGet(h, prop)
+    v = '';
+    try
+        v = get(h, prop);
+    catch
+    end
+end
+
+function txt = localAnyToText(v)
+    txt = '';
+    try
+        if ischar(v)
+            txt = v;
+        elseif iscell(v)
+            parts = cell(size(v));
+            for k = 1:numel(v)
+                if ischar(v{k})
+                    parts{k} = v{k};
+                elseif isnumeric(v{k}) && isscalar(v{k})
+                    parts{k} = num2str(v{k});
+                else
+                    parts{k} = '';
+                end
+            end
+            txt = strjoin(parts, ' ');
+        elseif isnumeric(v) && isscalar(v)
+            txt = num2str(v);
+        end
+    catch
+        txt = '';
+    end
+end
+
+function tf = localIsOurControllerFigure(hFig)
+    tf = false;
+    try
+        nm = lower(localGetFigureName(hFig));
+        tg = lower(localAnyToText(get(hFig, 'Tag')));
+        tf = ~isempty(strfind(nm, 'trigger controller')) || ...
+             ~isempty(strfind(tg, 'vfusi_')) || ...
+             ~isempty(strfind(nm, 'high-res')) || ...
+             ~isempty(strfind(nm, 'doppler single image'));
+    catch
+        tf = false;
+    end
+end
+
+function nm = localGetFigureName(hFig)
+    nm = '';
+    try
+        x = get(hFig, 'Name');
+        if ischar(x)
+            nm = x;
+        end
+    catch
+    end
+end
+
+function tf = localIsInputCountError(ME)
+    tf = false;
+    try
+        msg = lower(ME.message);
+        id = lower(ME.identifier);
+        tf = ~isempty(strfind(msg, 'not enough input')) || ...
+             ~isempty(strfind(msg, 'too many input')) || ...
+             ~isempty(strfind(msg, 'insufficient number of input')) || ...
+             ~isempty(strfind(id, 'notenoughinputs')) || ...
+             ~isempty(strfind(id, 'maxrhs')) || ...
+             ~isempty(strfind(id, 'minrhs'));
+    catch
+        tf = false;
+    end
+end
+
+function localShowDopplerSingleImagePreview(I, cfg, md) %#ok<INUSD>
+    % V7 LOW-RES DOPPLER DISPLAY - COMPANY STYLE PRESERVATION
+    % ------------------------------------------------------------------
+    % The controller must NOT choose a colormap, gamma, CLim or colorbar.
+    % Those belong to the already-open company GUI. V5 could saturate the
+    % image (often appearing all yellow) because raw Doppler CData was placed
+    % into axes whose manual company CLim expected a different display range.
+    %
+    % V7 therefore:
+    %   - changes only the native image object's CData;
+    %   - leaves company CLim/colormap/colorbar/YDir/aspect untouched;
+    %   - maps the new raw image into the previous company CData domain when
+    %     a native reference image exists (or into the existing CLim domain);
+    %   - re-fires gamma/color/contrast callbacks at their CURRENT values,
+    %     so the company's own display transfer is reapplied without changing
+    %     any user setting.
+
+    try
+        if isempty(I) || ~isnumeric(I), return; end
+        [img, ~] = localBuildDopplerPreviewImage(I, cfg);
+        if isempty(img), return; end
+
+        [ax, hVendorFig] = localFindVendorDisplayAxes();
+        if isempty(ax) || ~ishandle(ax)
+            localGuiLog(cfg, 'Doppler display ERROR: main company OpenfUS image axes not found.');
+            return;
+        end
+
+        oldCData = []; hTarget = [];
+        try
+            hImgs = findall(ax,'Type','image');
+            if ~isempty(hImgs)
+                hTarget = hImgs(1);
+                oldCData = get(hTarget,'CData');
+            end
+        catch
+        end
+
+        imgDisp = localMapDopplerToVendorDisplayDomain(img, oldCData, ax);
+
+        if ~isempty(hTarget) && ishandle(hTarget)
+            % CData only. Do not change CDataMapping, axes limits, CLim, map,
+            % colorbar, title, aspect ratio or direction.
+            set(hTarget,'CData',imgDisp,'Visible','on');
+        else
+            % Empty-but-valid company acquisition axes. Create only the CData
+            % object and inherit the axes/figure display settings already set
+            % by OpenfUS. Do NOT call imagesc/colormap/caxis/axis/colorbar.
+            image('Parent',ax,'CData',imgDisp,'CDataMapping','scaled','Visible','on');
+        end
+
+        % Reapply the company's CURRENT gamma/color/contrast callbacks without
+        % changing any values. This is what makes an inserted image obey the
+        % same UI settings that a company-acquired image uses.
+        nRefreshed = localRefreshVendorDisplayControls(hVendorFig);
+        drawnow;
+        try, figure(hVendorFig); catch, end
+
+        localGuiLog(cfg, sprintf( ...
+            'Doppler displayed in company GUI with native CLim/gamma/colormap/colorbar preserved (%d display callbacks refreshed).', ...
+            nRefreshed));
+    catch MEprev
+        localGuiLog(cfg, ['Doppler display warning: ' MEprev.message]);
+    end
+end
+
+function out = localMapDopplerToVendorDisplayDomain(img, oldCData, ax)
+    x = double(img);
+    if ~isreal(x), x = abs(x); end
+    x(~isfinite(x)) = 0;
+    out = x;
+
+    [newLo,newHi] = localRobustRange(x);
+    if ~(isfinite(newLo) && isfinite(newHi) && newHi > newLo), return; end
+
+    targetLo = NaN; targetHi = NaN;
+    try
+        if isnumeric(oldCData) && ismatrix(oldCData) && ~isempty(oldCData)
+            od = double(oldCData);
+            if ~isreal(od), od = abs(od); end
+            od = od(isfinite(od));
+            if ~isempty(od)
+                [a,b] = localRobustRange(od);
+                if isfinite(a) && isfinite(b) && b > a
+                    targetLo = a; targetHi = b;
+                end
+            end
+        end
+    catch
+    end
+
+    if ~(isfinite(targetLo) && isfinite(targetHi) && targetHi > targetLo)
+        try
+            cl = get(ax,'CLim');
+            if numel(cl)==2 && all(isfinite(cl)) && cl(2)>cl(1)
+                targetLo = cl(1); targetHi = cl(2);
+            end
+        catch
+        end
+    end
+
+    if isfinite(targetLo) && isfinite(targetHi) && targetHi > targetLo
+        out = (x-newLo) ./ (newHi-newLo);
+        out(out<0)=0; out(out>1)=1;
+        out = targetLo + out.*(targetHi-targetLo);
+    end
+end
+
+function [lo,hi] = localRobustRange(x)
+    x = double(x(:)); x = x(isfinite(x));
+    if isempty(x), lo=NaN; hi=NaN; return; end
+    if numel(x) > 150000
+        idx = round(linspace(1,numel(x),150000)); x = x(idx);
+    end
+    x = sort(x); n = numel(x);
+    iLo = max(1,min(n,round(0.005*(n-1)+1)));
+    iHi = max(1,min(n,round(0.995*(n-1)+1)));
+    lo = x(iLo); hi = x(iHi);
+    if ~(isfinite(hi) && hi>lo), lo=x(1); hi=x(end); end
+end
+
+function n = localRefreshVendorDisplayControls(hFig)
+    n = 0;
+    if isempty(hFig) || ~ishandle(hFig), return; end
+    try, ctrls = findall(hFig,'Type','uicontrol'); catch, ctrls = []; end
+    % Apply transfer/range first and colormap last, always at CURRENT values.
+    groups = {'gamma','contrast','clim','caxis','minimum','maximum','min','max','colormap','colourmap','color'};
+    used = {};
+    for g = 1:numel(groups)
+        token = groups{g};
+        for k = 1:numel(ctrls)
+            h = ctrls(k);
+            alreadyUsed = false;
+            for iu = 1:numel(used)
+                if isequal(used{iu}, h), alreadyUsed = true; break; end
+            end
+            if alreadyUsed, continue; end
+            style = lower(localAnyToText(localSafeGet(h,'Style')));
+            if ~(strcmp(style,'slider') || strcmp(style,'edit') || strcmp(style,'popupmenu')), continue; end
+            cb = localSafeGet(h,'Callback');
+            cbTxt = localCallbackToText(cb);
+            if isempty(cbTxt), continue; end
+            key = lower([localAnyToText(localSafeGet(h,'String')) ' ' ...
+                localAnyToText(localSafeGet(h,'Tag')) ' ' ...
+                localAnyToText(localSafeGet(h,'TooltipString')) ' ' cbTxt]);
+            compact = regexprep(key,'[^a-z0-9]','');
+            if isempty(strfind(compact,token)), continue; end
+            % Avoid unrelated acquisition parameters that happen to contain min/max.
+            if (~isempty(strfind(compact,'frame')) || ~isempty(strfind(compact,'motor')) || ...
+                    ~isempty(strfind(compact,'pulse')) || ~isempty(strfind(compact,'stim')))
+                continue;
+            end
+            try
+                localInvokeControlCallback(h);
+                used{end+1}=h; %#ok<AGROW>
+                n=n+1;
+            catch
+            end
+        end
+    end
+end
+
+function [img, titleTxt] = localBuildDopplerPreviewImage(I, cfg)
+    img = [];
+    titleTxt = 'Doppler / Low-Res Anatomy';
+
+    sz = size(I);
+    nD = ndims(I);
+    probe3D = localIs3DProbe(cfg);
+
+    if probe3D && nD >= 4
+        % If an unreduced stack reaches this helper, use the final volume.
+        vol = squeeze(I(:,:,:,end));
+        midSlice = max(1, round(size(vol,3)/2));
+        img = squeeze(vol(:,:,midSlice));
+        titleTxt = sprintf('Low-res anatomy - final Doppler volume, slice %d/%d', ...
+            midSlice, size(vol,3));
+    elseif probe3D && nD == 3 && size(I,3) > 1
+        midSlice = max(1, round(size(I,3)/2));
+        img = squeeze(I(:,:,midSlice));
+        titleTxt = sprintf('Low-res anatomy - slice %d/%d', midSlice, size(I,3));
+    elseif ~probe3D && nD >= 3 && size(I,3) > 1
+        img = squeeze(I(:,:,end));
+        titleTxt = sprintf('Low-res anatomy - final Doppler image (%d acquired)', sz(3));
+    else
+        img = squeeze(I);
+        titleTxt = 'Low-res anatomy - Doppler';
+    end
+end
+
+function tf = localIsLowResAnatomyPreset(cfg)
+    % The automatic Doppler quick-anatomy preset is exactly the combination
+    % requested in the GUI: 5 images and nblocksImage=16, with no accessory
+    % stimulation or motor movement. The explicit 'functional' mode can use
+    % the same 16 blocks but is NEVER treated as low-res anatomy.
+    tf = false;
+    try
+        tf = strcmpi(localGetImagingMode(cfg), 'doppler') && ...
+            isfield(cfg, 'n_frames') && round(cfg.n_frames) == 5 && ...
+            isfield(cfg, 'nblocksImage') && round(cfg.nblocksImage) == 16 && ...
+            ~(isfield(cfg,'stimbox') && isstruct(cfg.stimbox) && ...
+              isfield(cfg.stimbox,'enable') && logical(cfg.stimbox.enable)) && ...
+            ~(isfield(cfg,'pulsepal') && isstruct(cfg.pulsepal) && ...
+              isfield(cfg.pulsepal,'enable') && logical(cfg.pulsepal.enable)) && ...
+            ~(isfield(cfg,'motor') && isstruct(cfg.motor) && ...
+              isfield(cfg.motor,'enable') && logical(cfg.motor.enable));
+    catch
+        tf = false;
+    end
+end
+
+function Istatic = localReduceDopplerToStaticAnatomy(I, cfg)
+    %#ok<INUSD>
+    % Keep the last completed Doppler image/volume. This is closer to what
+    % the native OpenfUS live/single-image window leaves on screen and avoids
+    % motion blur introduced by averaging the five quick anatomy frames.
+    Istatic = I;
+    if isempty(I) || ~isnumeric(I)
+        return;
+    end
+
+    nD = ndims(I);
+    if localIs3DProbe(cfg) && nD >= 4 && size(I,4) > 1
+        Istatic = squeeze(I(:,:,:,end));
+    elseif ~localIs3DProbe(cfg) && nD >= 3 && size(I,3) > 1
+        Istatic = squeeze(I(:,:,end));
+    else
+        Istatic = squeeze(I);
+    end
+end
+
+function [axBest, figBest] = localFindVendorDisplayAxes()
+    % V5: choose the large acquisition axes, NOT the OpenfUS logo/banner.
+    axBest = [];
+    figBest = [];
+    bestScore = -Inf;
+
+    try
+        figs = findall(0, 'Type', 'figure');
+    catch
+        figs = [];
+    end
+
+    for iFig = 1:numel(figs)
+        hFig = figs(iFig);
+        if localIsOurControllerFigure(hFig)
+            continue;
+        end
+
+        figName = lower(localGetFigureName(hFig));
+        figScore = 0;
+        if ~isempty(strfind(figName, 'openfus'))
+            figScore = figScore + 120;
+        end
+
+        % Vendor controls are better evidence than a pre-existing image.
+        try
+            ctrls = findall(hFig, 'Type', 'uicontrol');
+            if numel(ctrls) >= 5
+                figScore = figScore + 25;
+            end
+            for k = 1:numel(ctrls)
+                cbTxt = lower(localCallbackToText(localSafeGet(ctrls(k), 'Callback')));
+                key = lower([localAnyToText(localSafeGet(ctrls(k), 'String')) ' ' ...
+                    localAnyToText(localSafeGet(ctrls(k), 'Tag')) ' ' cbTxt]);
+                if ~isempty(strfind(key, 'bmode')) || ~isempty(strfind(key, 'doppler'))
+                    figScore = figScore + 80;
+                    break;
+                end
+            end
+        catch
+        end
+
+        try
+            axesList = findall(hFig, 'Type', 'axes');
+        catch
+            axesList = [];
+        end
+
+        for iAx = 1:numel(axesList)
+            ax = axesList(iAx);
+            tagAx = '';
+            try, tagAx = lower(localAnyToText(get(ax, 'Tag'))); catch, end
+            if ~isempty(strfind(tagAx, 'colorbar')) || ~isempty(strfind(tagAx, 'legend')) || ...
+                    ~isempty(strfind(tagAx, 'logo')) || ~isempty(strfind(tagAx, 'banner'))
+                continue;
+            end
+
+            w = 0; h = 0; areaPx = 0;
+            try
+                pp = getpixelposition(ax, true);
+                w = max(0, pp(3));
+                h = max(0, pp(4));
+                areaPx = w*h;
+            catch
+            end
+            if areaPx <= 0
+                continue;
+            end
+
+            ratio = w / max(h,1);
+            score = figScore + 18*log10(max(1,areaPx));
+
+            % Main imaging axes are usually reasonably square/portrait.
+            % The supplied OpenfUS logo is ~450x150 (ratio ~3), so strongly
+            % penalize wide banner-like axes instead of rewarding them merely
+            % because they already contain an image.
+            if ratio > 2.3 || ratio < 0.30
+                score = score - 90;
+            end
+            if h < 180
+                score = score - 55;
+            end
+            if areaPx < 30000
+                score = score - 30;
+            end
+
+            try
+                hImgs = findall(ax, 'Type', 'image');
+                for ii = 1:numel(hImgs)
+                    cd = get(hImgs(ii), 'CData');
+                    if isnumeric(cd) && ndims(cd) >= 2
+                        rr = size(cd,1); cc = size(cd,2);
+                        if (rr <= 220 && cc >= 350 && cc/ max(rr,1) > 2.2)
+                            score = score - 120; % likely OpenfUS logo/banner
+                        else
+                            score = score + 5;   % tiny bonus only
+                        end
+                    end
+                end
+            catch
+            end
+
+            if score > bestScore
+                bestScore = score;
+                axBest = ax;
+                figBest = hFig;
+            end
+        end
+    end
+
+    if bestScore < 50
+        axBest = [];
+        figBest = [];
+    end
+end
+
+function h = localShowHighResPreview(I, cfg, labelTxt, sourceFile)
+    % V7 high-resolution anatomy viewer.
+    % ------------------------------------------------------------------
+    % DISPLAY ONLY: the saved matrix I is never altered by these controls.
+    %
+    % Neutral/default appearance follows the supplied company HR2D demo:
+    %       sqrt(sqrt(sqrt(Ihq)))  -> 1/8-power dynamic-range compression
+    %       gray colormap          -> MATLAB caxis auto equivalent
+    %
+    % V5 adds optional display-only controls inspired by deConfUSIon-style
+    % viewing: black/white level, gain, gamma, logarithmic compression and
+    % unsharp-mask sharpness. All are neutral on opening, so RESET COMPANY
+    % always returns to the vendor-demo appearance.
+
+    h = [];
+    try
+        if isempty(I) || ~isnumeric(I)
+            return;
+        end
+        if nargin < 3 || isempty(labelTxt)
+            labelTxt = 'High-Res';
+        end
+        if nargin < 4
+            sourceFile = '';
+        end
+
+        vol = squeeze(I);
+        is3D = ndims(vol) >= 3 && size(vol,3) > 1;
+        if is3D
+            nSlices = size(vol,3);
+            midSlice = max(1, round((nSlices+1)/2));
+        else
+            nSlices = 1;
+            midSlice = 1;
+        end
+
+        [companyMin, companyMax] = localHighResCompanyLimits(vol);
+
+        tagTxt = ['vfUSI_' strrep(labelTxt,' ','_') '_Viewer'];
+        old = findobj(0, 'Type', 'figure', 'Tag', tagTxt);
+        if isempty(old) || ~ishandle(old(1))
+            h = figure( ...
+                'Name', ['OpenfUS - ' labelTxt ' Anatomy Viewer'], ...
+                'NumberTitle', 'off', ...
+                'Tag', tagTxt, ...
+                'Color', [0.05 0.05 0.06], ...
+                'Position', [90 45 1320 845]);
+        else
+            h = old(1);
+            figure(h);
+            clf(h);
+        end
+
+        ax = axes('Parent', h, ...
+            'Units', 'normalized', ...
+            'Position', [0.045 0.145 0.64 0.80], ...
+            'Color', 'k');
+
+        p = uipanel(h, 'Units', 'normalized', ...
+            'Position', [0.710 0.055 0.275 0.89], ...
+            'Title', 'Display (saved data stays unchanged)', ...
+            'FontSize', 11, 'FontWeight', 'bold', ...
+            'ForegroundColor', 'w', ...
+            'BackgroundColor', [0.09 0.09 0.10]);
+
+        y = 0.925;
+        hBlackTxt = localViewerSliderLabel(p, 'Black level', '0 %', y);
+        sBlack = localViewerSlider(p, 0, 0.90, 0, y-0.045);
+        y = y - 0.105;
+        hWhiteTxt = localViewerSliderLabel(p, 'White level', '100 %', y);
+        sWhite = localViewerSlider(p, 0.10, 1.00, 1.00, y-0.045);
+        y = y - 0.105;
+        hGainTxt = localViewerSliderLabel(p, 'Gain', '1.00 x', y);
+        sGain = localViewerSlider(p, 0.25, 4.00, 1.00, y-0.045);
+        y = y - 0.105;
+        hGammaTxt = localViewerSliderLabel(p, 'Gamma', '1.00', y);
+        sGamma = localViewerSlider(p, 0.25, 3.00, 1.00, y-0.045);
+        y = y - 0.105;
+        hLogTxt = localViewerSliderLabel(p, 'Log compression', 'Off', y);
+        sLog = localViewerSlider(p, 0, 1, 0, y-0.045);
+        y = y - 0.105;
+        hSharpTxt = localViewerSliderLabel(p, 'Sharpness', 'Off', y);
+        sSharp = localViewerSlider(p, 0, 2, 0, y-0.045);
+
+        uicontrol(p, 'Style', 'text', 'Units', 'normalized', ...
+            'Position', [0.08 0.275 0.32 0.035], 'String', 'Colormap', ...
+            'HorizontalAlignment', 'left', 'FontSize', 9, ...
+            'ForegroundColor', 'w', 'BackgroundColor', [0.09 0.09 0.10]);
+        pMap = uicontrol(p, 'Style', 'popupmenu', 'Units', 'normalized', ...
+            'Position', [0.40 0.270 0.52 0.045], ...
+            'String', {'Gray','Hot'}, 'Value', 1, 'FontSize', 10, ...
+            'BackgroundColor', 'w');
+
+        uicontrol(p, 'Style', 'text', 'Units', 'normalized', ...
+            'Position', [0.08 0.220 0.25 0.035], 'String', 'Grid rows', ...
+            'HorizontalAlignment', 'left', 'FontSize', 9, ...
+            'ForegroundColor', 'w', 'BackgroundColor', [0.09 0.09 0.10]);
+        pRows = uicontrol(p, 'Style', 'popupmenu', 'Units', 'normalized', ...
+            'Position', [0.30 0.215 0.18 0.045], ...
+            'String', arrayfun(@num2str,1:8,'UniformOutput',false), ...
+            'Value', 4, 'BackgroundColor', 'w');
+        uicontrol(p, 'Style', 'text', 'Units', 'normalized', ...
+            'Position', [0.52 0.220 0.22 0.035], 'String', 'Grid cols', ...
+            'HorizontalAlignment', 'left', 'FontSize', 9, ...
+            'ForegroundColor', 'w', 'BackgroundColor', [0.09 0.09 0.10]);
+        pCols = uicontrol(p, 'Style', 'popupmenu', 'Units', 'normalized', ...
+            'Position', [0.74 0.215 0.18 0.045], ...
+            'String', arrayfun(@num2str,1:8,'UniformOutput',false), ...
+            'Value', 4, 'BackgroundColor', 'w');
+
+        bReset = uicontrol(p, 'Style', 'pushbutton', 'Units', 'normalized', ...
+            'Position', [0.08 0.145 0.84 0.052], ...
+            'String', 'RESET COMPANY DEFAULT', ...
+            'FontSize', 9, 'FontWeight', 'bold');
+        bGrid = uicontrol(p, 'Style', 'pushbutton', 'Units', 'normalized', ...
+            'Position', [0.08 0.085 0.40 0.050], ...
+            'String', 'GRID', 'FontSize', 10, 'FontWeight', 'bold');
+        bSave = uicontrol(p, 'Style', 'pushbutton', 'Units', 'normalized', ...
+            'Position', [0.52 0.085 0.40 0.050], ...
+            'String', 'SAVE VIEW', 'FontSize', 10, 'FontWeight', 'bold');
+        hInfo = uicontrol(p, 'Style', 'text', 'Units', 'normalized', ...
+            'Position', [0.08 0.010 0.84 0.065], 'String', '', ...
+            'HorizontalAlignment', 'left', 'FontSize', 8.5, ...
+            'ForegroundColor', [0.88 0.88 0.90], ...
+            'BackgroundColor', [0.09 0.09 0.10]);
+
+        hSlider = uicontrol(h, 'Style', 'slider', 'Units', 'normalized', ...
+            'Position', [0.075 0.070 0.50 0.045], ...
+            'Min', 1, 'Max', max(1,nSlices), 'Value', midSlice);
+        hSliceTxt = uicontrol(h, 'Style', 'text', 'Units', 'normalized', ...
+            'Position', [0.585 0.064 0.10 0.055], ...
+            'String', sprintf('%d / %d', midSlice, nSlices), ...
+            'FontSize', 12, 'FontWeight', 'bold', ...
+            'ForegroundColor', 'w', 'BackgroundColor', [0.05 0.05 0.06]);
+        hHint = uicontrol(h, 'Style', 'text', 'Units', 'normalized', ...
+            'Position', [0.045 0.012 0.64 0.038], ...
+            'String', 'Default = company demo (1/8-power, gray, per-slice auto). Wheel/arrows change 3D slice.', ...
+            'FontSize', 9, 'HorizontalAlignment', 'left', ...
+            'ForegroundColor', [0.78 0.80 0.84], 'BackgroundColor', [0.05 0.05 0.06]); %#ok<NASGU>
+
+        if is3D && nSlices > 1
+            set(hSlider, 'SliderStep', [1/(nSlices-1), min(10/(nSlices-1),1)]);
+        else
+            set(hSlider, 'Enable', 'off', 'Visible', 'off');
+            set(hSliceTxt, 'String', '2D');
+        end
+
+        V = struct();
+        V.volume = vol;
+        V.ax = ax;
+        V.slider = hSlider;
+        V.sliceText = hSliceTxt;
+        V.label = labelTxt;
+        V.currentSlice = midSlice;
+        V.nSlices = nSlices;
+        V.is3D = is3D;
+        V.companyMin = companyMin;
+        V.companyMax = companyMax;
+        V.blackLevel = 0;
+        V.whiteLevel = 1;
+        V.gain = 1;
+        V.gamma = 1;
+        V.logStrength = 0;
+        V.sharpness = 0;
+        V.colormapName = 'gray';
+        V.gridRows = 4;
+        V.gridCols = 4;
+        V.sBlack = sBlack; V.sWhite = sWhite; V.sGain = sGain;
+        V.sGamma = sGamma; V.sLog = sLog; V.sSharp = sSharp;
+        V.hBlackTxt = hBlackTxt; V.hWhiteTxt = hWhiteTxt;
+        V.hGainTxt = hGainTxt; V.hGammaTxt = hGammaTxt;
+        V.hLogTxt = hLogTxt; V.hSharpTxt = hSharpTxt;
+        V.pMap = pMap; V.pRows = pRows; V.pCols = pCols;
+        V.infoText = hInfo;
+        V.savedFile = sourceFile;
+        V.logFcn = [];
+        try
+            if isfield(cfg,'gui') && isstruct(cfg.gui) && isfield(cfg.gui,'logFcn')
+                V.logFcn = cfg.gui.logFcn;
+            end
+        catch
+        end
+        setappdata(h, 'vfUSI_HRViewer', V);
+
+        % Immediate diagnostics distinguish a display problem from an empty
+        % reconstruction. These values are only logged; data are not changed.
+        try
+            rawv = double(vol(:));
+            rawv = rawv(isfinite(rawv));
+            if isempty(rawv)
+                localViewerLog(V, 'HR data diagnostic: no finite voxels.');
+            else
+                localViewerLog(V, sprintf('HR data diagnostic: raw min=%g max=%g absmax=%g size=%s.', ...
+                    min(rawv), max(rawv), max(abs(rawv)), mat2str(size(vol))));
+            end
+        catch MEstat
+            localViewerLog(V, ['HR data diagnostic warning: ' MEstat.message]);
+        end
+
+        allSliders = [sBlack sWhite sGain sGamma sLog sSharp];
+        for ii = 1:numel(allSliders)
+            set(allSliders(ii), 'Callback', @(src,evt)localHighResControlsChanged(h));
+        end
+        set(pMap, 'Callback', @(src,evt)localHighResControlsChanged(h));
+        set(pRows, 'Callback', @(src,evt)localHighResControlsChanged(h));
+        set(pCols, 'Callback', @(src,evt)localHighResControlsChanged(h));
+        set(bReset, 'Callback', @(src,evt)localHighResResetCompany(h));
+        set(bGrid, 'Callback', @(src,evt)localHighResShowGrid(h));
+        set(bSave, 'Callback', @(src,evt)localHighResSaveView(h));
+        set(hSlider, 'Callback', @(src,evt)localHighResSliderChanged(h));
+        set(h, 'WindowScrollWheelFcn', @(src,evt)localHighResScroll(h, evt));
+        set(h, 'KeyPressFcn', @(src,evt)localHighResKeyPress(h, evt));
+
+        localHighResUpdateViewer(h, midSlice);
+        localViewerLog(V, sprintf('%s anatomy viewer opened: reconstructed size %s.', ...
+            labelTxt, mat2str(size(vol))));
+    catch MEprev
+        localGuiLog(cfg, [labelTxt ' viewer warning: ' MEprev.message]);
+        h = [];
+    end
+end
+
+function hTxt = localViewerSliderLabel(parent, labelTxt, valueTxt, y)
+    hTxt = uicontrol(parent, 'Style', 'text', 'Units', 'normalized', ...
+        'Position', [0.08 y 0.84 0.035], ...
+        'String', [labelTxt '   ' valueTxt], ...
+        'HorizontalAlignment', 'left', 'FontSize', 9.5, ...
+        'ForegroundColor', 'w', 'BackgroundColor', [0.09 0.09 0.10]);
+end
+
+function h = localViewerSlider(parent, mn, mx, val, y)
+    h = uicontrol(parent, 'Style', 'slider', 'Units', 'normalized', ...
+        'Position', [0.08 y 0.84 0.035], 'Min', mn, 'Max', mx, 'Value', val);
+end
+
+function localHighResSliderChanged(hFig)
+    try
+        V = getappdata(hFig, 'vfUSI_HRViewer');
+        localHighResUpdateViewer(hFig, round(get(V.slider, 'Value')));
+    catch
+    end
+end
+
+function localHighResScroll(hFig, evt)
+    try
+        V = getappdata(hFig, 'vfUSI_HRViewer');
+        if ~V.is3D, return; end
+        step = 1;
+        try, step = evt.VerticalScrollCount; catch, end
+        localHighResUpdateViewer(hFig, V.currentSlice + step);
+    catch
+    end
+end
+
+function localHighResKeyPress(hFig, evt)
+    try
+        V = getappdata(hFig, 'vfUSI_HRViewer');
+        if ~V.is3D, return; end
+        key = lower(evt.Key);
+        if strcmp(key,'rightarrow') || strcmp(key,'uparrow')
+            idx = V.currentSlice + 1;
+        elseif strcmp(key,'leftarrow') || strcmp(key,'downarrow')
+            idx = V.currentSlice - 1;
+        elseif strcmp(key,'home')
+            idx = 1;
+        elseif strcmp(key,'end')
+            idx = V.nSlices;
+        else
+            return;
+        end
+        localHighResUpdateViewer(hFig, idx);
+    catch
+    end
+end
+
+function localHighResControlsChanged(hFig)
+    try
+        V = getappdata(hFig, 'vfUSI_HRViewer');
+        V.blackLevel = get(V.sBlack, 'Value');
+        V.whiteLevel = get(V.sWhite, 'Value');
+        if V.whiteLevel <= V.blackLevel + 0.01
+            V.whiteLevel = min(1, V.blackLevel + 0.01);
+            set(V.sWhite, 'Value', V.whiteLevel);
+        end
+        V.gain = get(V.sGain, 'Value');
+        V.gamma = get(V.sGamma, 'Value');
+        V.logStrength = get(V.sLog, 'Value');
+        V.sharpness = get(V.sSharp, 'Value');
+
+        maps = get(V.pMap, 'String');
+        V.colormapName = lower(maps{get(V.pMap,'Value')});
+        V.gridRows = get(V.pRows, 'Value');
+        V.gridCols = get(V.pCols, 'Value');
+
+        set(V.hBlackTxt, 'String', sprintf('Black level   %.0f %%', 100*V.blackLevel));
+        set(V.hWhiteTxt, 'String', sprintf('White level   %.0f %%', 100*V.whiteLevel));
+        set(V.hGainTxt, 'String', sprintf('Gain   %.2f x', V.gain));
+        set(V.hGammaTxt, 'String', sprintf('Gamma   %.2f', V.gamma));
+        if V.logStrength < 0.01
+            set(V.hLogTxt, 'String', 'Log compression   Off');
+        else
+            set(V.hLogTxt, 'String', sprintf('Log compression   %.0f %%',100*V.logStrength));
+        end
+        if V.sharpness < 0.01
+            set(V.hSharpTxt, 'String', 'Sharpness   Off');
+        else
+            set(V.hSharpTxt, 'String', sprintf('Sharpness   %.2f',V.sharpness));
+        end
+
+        setappdata(hFig, 'vfUSI_HRViewer', V);
+        localHighResUpdateViewer(hFig, V.currentSlice);
+    catch ME
+        try
+            V = getappdata(hFig, 'vfUSI_HRViewer');
+            localViewerLog(V, ['Display control error: ' ME.message]);
+        catch
+        end
+    end
+end
+
+function localHighResResetCompany(hFig)
+    try
+        V = getappdata(hFig, 'vfUSI_HRViewer');
+        V.blackLevel = 0; V.whiteLevel = 1; V.gain = 1; V.gamma = 1;
+        V.logStrength = 0; V.sharpness = 0; V.colormapName = 'gray';
+        set(V.sBlack,'Value',0); set(V.sWhite,'Value',1);
+        set(V.sGain,'Value',1); set(V.sGamma,'Value',1);
+        set(V.sLog,'Value',0); set(V.sSharp,'Value',0);
+        set(V.pMap,'Value',1);
+        set(V.hBlackTxt,'String','Black level   0 %');
+        set(V.hWhiteTxt,'String','White level   100 %');
+        set(V.hGainTxt,'String','Gain   1.00 x');
+        set(V.hGammaTxt,'String','Gamma   1.00');
+        set(V.hLogTxt,'String','Log compression   Off');
+        set(V.hSharpTxt,'String','Sharpness   Off');
+        setappdata(hFig,'vfUSI_HRViewer',V);
+        localHighResUpdateViewer(hFig,V.currentSlice);
+        localViewerLog(V,'Display reset to supplied company HR demo default.');
+    catch
+    end
+end
+
+function localHighResUpdateViewer(hFig, idx)
+    V = getappdata(hFig, 'vfUSI_HRViewer');
+    idx = max(1, min(V.nSlices, round(idx)));
+    V.currentSlice = idx;
+
+    if V.is3D
+        img = squeeze(V.volume(:,:,idx));
+    else
+        img = squeeze(V.volume);
+    end
+    imgDisp = localHighResDisplayTransform(img, V);
+
+    hImgs = findall(V.ax, 'Type', 'image');
+    if isempty(hImgs)
+        imagesc(V.ax, imgDisp, [0 1]);
+        axis(V.ax, 'image'); axis(V.ax, 'tight');
+        colorbar('peer', V.ax);
+    else
+        set(hImgs(1), 'CData', imgDisp);
+        set(V.ax, 'CLim', [0 1]);
+    end
+
+    if strcmpi(V.colormapName, 'hot')
+        colormap(V.ax, hot(256));
+    else
+        colormap(V.ax, gray(256));
+    end
+
+    if V.is3D
+        title(V.ax, sprintf('%s anatomy - slice %d / %d', V.label, idx, V.nSlices), ...
+            'Interpreter','none','Color','w');
+        set(V.slider,'Value',idx);
+        set(V.sliceText,'String',sprintf('%d / %d',idx,V.nSlices));
+    else
+        title(V.ax,[V.label ' anatomy'],'Interpreter','none','Color','w');
+    end
+    set(V.ax,'XColor','w','YColor','w','Color','k');
+
+    if isempty(V.savedFile)
+        fileTxt = 'Not saved yet';
+    else
+        [~,base,ext] = fileparts(V.savedFile);
+        fileTxt = [base ext];
+    end
+    set(V.infoText,'String',sprintf('Slices %d | Grid %dx%d | %s', ...
+        V.nSlices,V.gridRows,V.gridCols,fileTxt));
+    setappdata(hFig,'vfUSI_HRViewer',V);
+    drawnow;
+end
+
+function localHighResShowGrid(hViewer)
+    try
+        localHighResControlsChanged(hViewer);
+        V = getappdata(hViewer,'vfUSI_HRViewer');
+        if ~V.is3D
+            localViewerLog(V,'GRID is only needed for 3D anatomy.');
+            return;
+        end
+        nWanted = max(1,V.gridRows*V.gridCols);
+        idxList = unique(round(linspace(1,V.nSlices,min(nWanted,V.nSlices))));
+        tagGrid = [get(hViewer,'Tag') '_Grid'];
+        old = findobj(0,'Type','figure','Tag',tagGrid);
+        if isempty(old) || ~ishandle(old(1))
+            hGridFig = figure('Name',['OpenfUS - ' V.label ' Anatomy Grid'], ...
+                'NumberTitle','off','Tag',tagGrid,'Color','k','Position',[60 40 1350 900]);
+        else
+            hGridFig = old(1); figure(hGridFig); clf(hGridFig);
+        end
+        for k = 1:numel(idxList)
+            figure(hGridFig);
+            ax = subplot(V.gridRows,V.gridCols,k);
+            img = squeeze(V.volume(:,:,idxList(k)));
+            imagesc(ax,localHighResDisplayTransform(img,V),[0 1]);
+            axis(ax,'image'); axis(ax,'off');
+            title(ax,sprintf('%d/%d',idxList(k),V.nSlices),'Color','w','FontSize',8);
+        end
+        if strcmpi(V.colormapName,'hot'), colormap(hGridFig,hot(256)); else, colormap(hGridFig,gray(256)); end
+        drawnow;
+    catch ME
+        try, V=getappdata(hViewer,'vfUSI_HRViewer'); localViewerLog(V,['Grid warning: ' ME.message]); catch, end
+    end
+end
+
+function localHighResSaveView(hViewer)
+    try
+        localHighResControlsChanged(hViewer);
+        V = getappdata(hViewer,'vfUSI_HRViewer');
+        if isempty(V.savedFile)
+            localViewerLog(V,'SAVE VIEW unavailable because this anatomy was not saved.');
+            return;
+        end
+        [folderPath,baseName,~] = fileparts(V.savedFile);
+        display_settings = struct(); %#ok<NASGU>
+        display_settings.company_default_transform = 'sqrt(sqrt(sqrt(abs(I))))';
+        display_settings.black_level = V.blackLevel;
+        display_settings.white_level = V.whiteLevel;
+        display_settings.gain = V.gain;
+        display_settings.gamma = V.gamma;
+        display_settings.log_strength = V.logStrength;
+        display_settings.sharpness = V.sharpness;
+        display_settings.colormap = V.colormapName;
+        display_settings.current_slice = V.currentSlice;
+        display_settings.grid_rows = V.gridRows;
+        display_settings.grid_cols = V.gridCols;
+        display_settings.source_anatomy_file = V.savedFile;
+        display_settings.saved_at = datestr(now,'yyyy-mm-dd HH:MM:SS');
+        settingsFile = fullfile(folderPath,[baseName '_display.mat']);
+        previewFile = fullfile(folderPath,[baseName '_preview.png']);
+        save(settingsFile,'display_settings','-v7');
+        try
+            print(hViewer,previewFile,'-dpng','-r150');
+        catch
+            try
+                saveas(hViewer,previewFile);
+            catch
+            end
+        end
+        localViewerLog(V,sprintf('Saved viewer settings: %s | preview: %s',settingsFile,previewFile));
+    catch ME
+        try, V=getappdata(hViewer,'vfUSI_HRViewer'); localViewerLog(V,['SAVE VIEW failed: ' ME.message]); catch, end
+    end
+end
+
+function localHighResAttachSavedFile(hViewer, nameFile)
+    try
+        if isempty(hViewer) || ~ishandle(hViewer), return; end
+        V = getappdata(hViewer,'vfUSI_HRViewer');
+        V.savedFile = nameFile;
+        setappdata(hViewer,'vfUSI_HRViewer',V);
+        localHighResUpdateViewer(hViewer,V.currentSlice);
+        localViewerLog(V,['Anatomy saved as ' nameFile]);
+    catch
+    end
+end
+
+function out = localHighResDisplayTransform(img, V)
+    % V7 company-like per-displayed-image default with signed/complex rescue.
+    % The supplied HR2D demo applies sqrt(sqrt(sqrt(Ihq))) and then
+    % caxis('auto') to THAT image. V5 instead used one global min/max for an
+    % entire HR3D volume; a few bright slices/outliers could therefore make
+    % the currently viewed slice almost completely black.
+    %
+    % V7 computes the company auto range separately for each displayed slice
+    % (and separately for each grid tile), then applies the optional sliders.
+    x = localHighResCompanyTransform(img);
+    [mn,mx] = localHighResCompanyLimits(img);
+    den = mx-mn;
+    if ~isfinite(den) || den<=0, den=1; end
+    out = (x-mn)./den;
+    out(out<0)=0; out(out>1)=1;
+
+    lo = V.blackLevel; hi = V.whiteLevel;
+    if hi <= lo + 1e-6, hi = lo + 1e-6; end
+    out = (out-lo)./(hi-lo);
+    out(out<0)=0; out(out>1)=1;
+
+    out = out .* V.gain;
+    out(out<0)=0; out(out>1)=1;
+    g = V.gamma; if ~isfinite(g) || g<=0, g=1; end
+    out = out .^(1./g);
+
+    ls = V.logStrength;
+    if isfinite(ls) && ls > 0.001
+        a = 1 + 99*ls;
+        out = log1p(a*out) ./ log1p(a);
+    end
+
+    sh = V.sharpness;
+    if isfinite(sh) && sh > 0.001 && ismatrix(out)
+        ker = [1 2 1; 2 4 2; 1 2 1] / 16;
+        blur = conv2(out,ker,'same');
+        out = out + sh.*(out-blur);
+        out(out<0)=0; out(out>1)=1;
+    end
+end
+
+function x = localHighResCompanyTransform(img)
+    % Display magnitude is intentionally used for robustness. For normal
+    % company HR2D data (which are already non-negative) abs() is a no-op.
+    % For HR3D reconstructions containing signed/complex values it prevents
+    % an otherwise completely black display while leaving saved I untouched.
+    x = abs(double(img));
+    x(~isfinite(x)) = 0;
+    % Exact dynamic-range compression shown in the supplied company HR2D demo.
+    x = sqrt(sqrt(sqrt(x)));
+end
+
+function [mn,mx] = localHighResCompanyLimits(data)
+    x = localHighResCompanyTransform(data);
+    x = x(:); x = x(isfinite(x));
+    if isempty(x), mn=0; mx=1; return; end
+    if numel(x) > 500000
+        idx = round(linspace(1,numel(x),500000));
+        x = x(idx);
+    end
+
+    % Start with the company-style automatic full range.
+    mn = min(x); mx = max(x);
+    if ~isfinite(mn), mn=0; end
+    if ~isfinite(mx) || mx<=mn, mx=mn+1; return; end
+
+    % Adaptive rescue for sparse HR3D outliers. If >99 %% of pixels would
+    % occupy the bottom 1 %% of the full range, the mathematically correct
+    % caxis-auto view is visually almost black. In that pathological case
+    % use robust percentiles for DISPLAY ONLY. Ordinary vendor HR data stay
+    % on the exact min/max path above.
+    try
+        y = (x-mn) ./ max(eps,mx-mn);
+        if mean(y < 0.01) > 0.99
+            xs = sort(x);
+            n = numel(xs);
+            iLo = max(1, round(0.002*n));
+            iHi = min(n, max(iLo+1, round(0.998*n)));
+            mn2 = xs(iLo); mx2 = xs(iHi);
+            if isfinite(mn2) && isfinite(mx2) && mx2 > mn2
+                mn = mn2; mx = mx2;
+            end
+        end
+    catch
+    end
+end
+
+function localViewerLog(V, msg)
+    try
+        if isfield(V,'logFcn') && ~isempty(V.logFcn) && isa(V.logFcn,'function_handle')
+            V.logFcn(msg);
+        else
+            fprintf('[HR Viewer] %s\n', msg);
+        end
+    catch
+        try
+            fprintf('[HR Viewer] %s\n', msg);
+        catch
+        end
+    end
+end
+
+function localLogHighResMetadataMode(cfg, md)
+    try
+        if isstruct(md) && isfield(md, 'highres_metadata_source')
+            localGuiLog(cfg, ['High-res metadata source: ' localSafeText(md.highres_metadata_source)]);
+        end
+    catch
+    end
+    % V13: always surface the actual HR signal diagnostics in the main Live
+    % Log.  If recon absmax is zero, the black HR viewer is not a slider/GUI
+    % problem and should not be disguised with artificial display scaling.
+    try
+        sf=NaN;sa=NaN;ra=NaN;rn=NaN;rp='unknown';
+        if isfield(md,'highres_nframes_used'),sf=double(md.highres_nframes_used);end
+        if isfield(md,'highres_spec_absmax'),sa=double(md.highres_spec_absmax);end
+        if isfield(md,'highres_recon_absmax'),ra=double(md.highres_recon_absmax);end
+        if isfield(md,'highres_recon_nonzero_fraction'),rn=100*double(md.highres_recon_nonzero_fraction);end
+        if isfield(md,'highres_reconstruction_path'),rp=localSafeText(md.highres_reconstruction_path);end
+        localGuiLog(cfg,sprintf('HR diagnostic: source=%g | spec absmax=%g | recon absmax=%g | recon nonzero=%.5g%% | %s', ...
+            sf,sa,ra,rn,rp));
+    catch
+    end
+end
+
+function mode = localGetImagingMode(cfg)
+    mode = 'doppler';
+    try
+        if isfield(cfg, 'acquisition_mode') && ischar(cfg.acquisition_mode) && ...
+                ~isempty(strtrim(cfg.acquisition_mode))
+            mode = lower(strtrim(cfg.acquisition_mode));
+        end
+    catch
+        mode = 'doppler';
+    end
+
+    mode = strrep(mode, '-', '');
+    mode = strrep(mode, '_', '');
+    mode = strrep(mode, ' ', '');
+
+    switch mode
+        case {'doppler','normal'}
+            mode = 'doppler';
+        case {'functional','functionalfusi','functionaltime','functionaltimeseries','timeseries','fusitime'}
+            mode = 'functional';
+        case {'bmode','bmodelive','livebmode'}
+            mode = 'bmode_live';
+        case {'highres2d','hr2d','highresolution2d'}
+            mode = 'highres2d';
+        case {'highres3d','hr3d','highresolution3d'}
+            mode = 'highres3d';
+        otherwise
+            % Keep unknown string so validation can report it clearly.
     end
 end
 
@@ -1127,6 +3143,12 @@ function cfg = localApplyDefaults(cfg)
         cfg.nblocksImage = 16;
     end
 
+    if ~isfield(cfg, 'acquisition_mode') || isempty(cfg.acquisition_mode) || ...
+            ~ischar(cfg.acquisition_mode)
+        cfg.acquisition_mode = 'doppler';
+    end
+    cfg.acquisition_mode = localGetImagingMode(cfg);
+
     % ---------------- Probe type ----------------
     % '2D' = linear probe, TR unit 0.02 s per nblocksImage
     % '3D' = volumetric probe, TR unit 0.03 s per nblocksImage
@@ -1145,6 +3167,17 @@ function cfg = localApplyDefaults(cfg)
     if ~isfield(cfg, 'tr_unit_s') || isempty(cfg.tr_unit_s) || ...
             ~isnumeric(cfg.tr_unit_s) || ~isfinite(cfg.tr_unit_s) || cfg.tr_unit_s <= 0
         cfg.tr_unit_s = defaultTRUnit;
+    end
+
+    % Company high-resolution helpers use fixed sequence settings.
+    if strcmpi(cfg.acquisition_mode, 'highres2d')
+        cfg.probe_type = '2D';
+        cfg.tr_unit_s = 0.02;
+        cfg.nblocksImage = 10;
+    elseif strcmpi(cfg.acquisition_mode, 'highres3d')
+        cfg.probe_type = '3D';
+        cfg.tr_unit_s = 0.03;
+        cfg.nblocksImage = 17;
     end
 
     if ~isfield(cfg, 'n_trials') || isempty(cfg.n_trials)
@@ -1471,6 +3504,27 @@ function localValidateConfig(cfg)
 
     if ~ischar(cfg.xp_name) || isempty(cfg.xp_name)
         error('cfg.xp_name must be a non-empty char array.');
+    end
+
+    imagingMode = localGetImagingMode(cfg);
+    validImagingModes = {'doppler','functional','bmode_live','highres2d','highres3d'};
+    if ~any(strcmpi(imagingMode, validImagingModes))
+        error('cfg.acquisition_mode is invalid: %s', cfg.acquisition_mode);
+    end
+
+    if strcmpi(imagingMode, 'bmode_live')
+        if logical(cfg.stimbox.enable) || logical(cfg.pulsepal.enable) || logical(cfg.motor.enable)
+            error(['B-Mode Live is currently preview-only. Disable StimBox, PulsePal and Motor. ' ...
+                   'The supplied company files do not expose a B-mode per-frame callback, ' ...
+                   'so frame-synchronized TTL cannot be guaranteed safely.']);
+        end
+    end
+
+    if (strcmpi(imagingMode, 'highres2d') || strcmpi(imagingMode, 'highres3d')) && ...
+            logical(cfg.motor.enable)
+        error(['High-resolution mode + step motor is intentionally disabled in this patch. ' ...
+               'The HR demo defines n_frames per reconstructed image, while split-motor mode ' ...
+               'defines n_frames across slice blocks; mixing them would change acquisition semantics.']);
     end
 
     if ~isscalar(cfg.n_frames) || ~isnumeric(cfg.n_frames) || cfg.n_frames < 1
@@ -2073,17 +4127,82 @@ end
 
 deviceSuffix = localBuildDeviceSuffix(cfg);
 
-% Scan index is counted inside the folder where files are saved.
-scanIdx = localGetNextScanIndex(saveFolder, cfg.xp_name, sessionTag);
+% V5 anatomy numbering. Anatomy is saved only after the user confirms it.
+% Use simple persistent names that are easy to identify in deConfUSIon:
+%   low_res_anatomy_1.mat, low_res_anatomy_2.mat, ...
+%   high_res_anatomy_1.mat, high_res_anatomy_2.mat, ...
+% 2D/3D is stored in metadata rather than cluttering the filename.
+imagingMode = localGetImagingMode(cfg);
 
+if localIsLowResAnatomyPreset(cfg)
+    anatomyIdx = localGetNextAnatomyIndex(saveFolder, 'low_res_anatomy');
+    nameShort = sprintf('low_res_anatomy_%d.mat', anatomyIdx);
+elseif strcmpi(imagingMode, 'highres2d') || strcmpi(imagingMode, 'highres3d')
+    anatomyIdx = localGetNextAnatomyIndex(saveFolder, 'high_res_anatomy');
+    nameShort = sprintf('high_res_anatomy_%d.mat', anatomyIdx);
+else
+    % Scan index is counted inside the folder where files are saved.
+    scanIdx = localGetNextScanIndex(saveFolder, cfg.xp_name, sessionTag);
     if isempty(deviceSuffix)
         nameShort = sprintf('%s_scan%d.mat', cfg.xp_name, scanIdx);
     else
         nameShort = sprintf('%s_scan%d%s.mat', cfg.xp_name, scanIdx, deviceSuffix);
     end
+end
 
 nameFile = fullfile(saveFolder, nameShort);
 end
+function idx = localGetNextAnatomyIndex(folderPath, prefix)
+    idx = 1;
+    try
+        d = dir(fullfile(folderPath, [prefix '_*.mat']));
+        nums = [];
+        expr = ['^' regexptranslate('escape',prefix) '_(\d+)\.mat$'];
+        for ii = 1:numel(d)
+            tok = regexp(d(ii).name, expr, 'tokens', 'once');
+            if ~isempty(tok)
+                n = str2double(tok{1});
+                if isfinite(n), nums(end+1) = n; end %#ok<AGROW>
+            end
+        end
+        if ~isempty(nums), idx = max(nums)+1; end
+    catch
+        idx = 1;
+    end
+end
+
+function tf = localAskSaveAnatomy(cfg, imagingMode)
+    tf = false;
+    if nargin < 2, imagingMode = 'anatomy'; end
+    if strcmpi(imagingMode,'doppler')
+        kind = 'low-resolution Doppler anatomy';
+    elseif strcmpi(imagingMode,'highres3d')
+        kind = 'high-resolution 3D anatomy';
+    elseif strcmpi(imagingMode,'highres2d')
+        kind = 'high-resolution 2D anatomy';
+    else
+        kind = 'anatomy';
+    end
+
+    localGuiStatus(cfg, ['Review ' kind ' - save?'], 'notready');
+    localGuiLog(cfg, ['Anatomy displayed. Waiting for Yes/No save decision: ' kind '.']);
+
+    answer = '';
+    try
+        answer = questdlg(sprintf('Save this %s?', kind), ...
+            'Save anatomy?', 'Yes', 'No', 'Yes');
+    catch
+        % Desktop-less fallback. Default to NO rather than saving unwanted data.
+        answer = 'No';
+    end
+    tf = strcmpi(answer,'Yes');
+    if tf
+        localGuiLog(cfg,'Save anatomy: YES.');
+    else
+        localGuiLog(cfg,'Save anatomy: NO.');
+    end
+end
+
 function [nameFileOut, nameShortOut] = localMakeFileNameUnique(nameFileIn)
     [folderPath, baseName, ext] = fileparts(nameFileIn);
 
@@ -2161,11 +4280,11 @@ function [metadataOut, eventsOut] = localBuildCompanyVars(md)
     % Fields this toolbox adds. Everything else is treated as scanner-native,
     % so a future scanner field is preserved automatically.
     dropExact = { ...
-        'acquisition_mode', 'probe_type', 'tr_unit_s', 'nblocksImage', ...
+        'acquisition_mode', 'imaging_mode', 'probe_type', 'tr_unit_s', 'nblocksImage', ...
         'data_size', 'data_ndims', 'is_volumetric', ...
-        'timeIndex', 'sliceIndex'};
+        'timeIndex', 'sliceIndex', 'image_role', 'is_anatomy'};
 
-    dropPrefix = {'geom_', 'motor_', 'acq_', 'actual_', 'requested_', 'metadata_'};
+    dropPrefix = {'geom_', 'motor_', 'acq_', 'actual_', 'requested_', 'metadata_', 'highres_', 'anatomy_', 'vendor_'};
 
     metadataOut = struct();
 
@@ -2498,6 +4617,13 @@ end
 function suffix = localBuildDeviceSuffix(cfg)
     parts = {};
 
+    imagingMode = localGetImagingMode(cfg);
+    if strcmpi(imagingMode, 'highres2d')
+        parts{end+1} = 'anatomy_HR2D'; %#ok<AGROW>
+    elseif strcmpi(imagingMode, 'highres3d')
+        parts{end+1} = 'anatomy_HR3D'; %#ok<AGROW>
+    end
+
     if isfield(cfg, 'stimbox') && isstruct(cfg.stimbox) && isfield(cfg.stimbox, 'enable') && logical(cfg.stimbox.enable)
         parts{end+1} = 'SB'; %#ok<AGROW>
     end
@@ -2576,9 +4702,10 @@ function txt = localMakeJournalText(nameShort, cfg, motorPositionsAbsMM, motorHo
     motorTag = localMotorTag(cfg, motorPositionsAbsMM, motorHomeMM);
     deviceSuffix = localBuildDeviceSuffix(cfg);
 
-    txt = sprintf('* %s (Trial=%d, Frames=%d, Devices=%s, MotorMode=%s, MotorTag=%s, StimBox=%d, PulsePal=%d, Motor=%d)', ...
+    txt = sprintf('* %s (Trial=%d, ImagingMode=%s, Frames=%d, Devices=%s, MotorMode=%s, MotorTag=%s, StimBox=%d, PulsePal=%d, Motor=%d)', ...
         nameShort, ...
         iTrial, ...
+        localGetImagingMode(cfg), ...
         cfg.n_frames, ...
         deviceSuffix, ...
         cfg.motor.mode, ...
@@ -2613,6 +4740,7 @@ function localWriteScanInfoText(nameFile, cfg, iTrial, md)
     fprintf(fid, '[Acquisition]\n');
     fprintf(fid, 'Save owner: %s\n', localSafeText(localGetFieldIfExists(cfg, 'save_owner', 'NA')));
     fprintf(fid, 'Experiment name: %s\n', localSafeText(localGetFieldIfExists(cfg, 'xp_name', 'NA')));
+    fprintf(fid, 'Imaging mode: %s\n', localGetImagingMode(cfg));
     if isfield(cfg, 'output_session_name') && ~isempty(cfg.output_session_name)
     fprintf(fid, 'Output session folder: %s\n', localSafeText(cfg.output_session_name));
 end
@@ -2645,6 +4773,10 @@ if nargin >= 4 && isstruct(md)
     end
     if isfield(md, 'actual_dt_deviation_percent')
         fprintf(fid, 'Actual dt deviation (percent): %s\n', localNumToStr(md.actual_dt_deviation_percent));
+    end
+    if isfield(md, 'highres_total_elapsed_s')
+        fprintf(fid, 'High-res total acquisition + reconstruction time (s): %s\n', ...
+            localNumToStr(md.highres_total_elapsed_s));
     end
 end
     fprintf(fid, '\n[StimBox]\n');
@@ -2875,6 +5007,7 @@ function localPrintSummary(cfg, motorHomeMM, motorPositionsAbsMM, stimboxFrames,
     disp('############################################################');
     disp('Get ready! The fUS acquisition will start shortly.');
     fprintf('- Experiment name: %s\n', cfg.xp_name);
+    fprintf('- Imaging mode: %s\n', localGetImagingMode(cfg));
     fprintf('- Frames per trial: %d\n', cfg.n_frames);
     fprintf('- Number of trials: %d\n', cfg.n_trials);
     fprintf('- nblocksImage: %d\n', cfg.nblocksImage);
@@ -3058,6 +5191,16 @@ function localGuiLog(cfg, msg)
             cfg.gui.logFcn(msg);
         catch
         end
+    end
+end
+
+function localGuiPreview(cfg,I,mode,md)
+    try
+        if isfield(cfg,'gui') && isstruct(cfg.gui) && ...
+                isfield(cfg.gui,'previewFcn') && isa(cfg.gui.previewFcn,'function_handle')
+            cfg.gui.previewFcn(I,mode,md);
+        end
+    catch
     end
 end
 

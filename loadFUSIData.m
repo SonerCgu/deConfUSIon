@@ -63,7 +63,7 @@ if isfield(S,'md') && isstruct(S.md)
     meta.rawMetadata.md = S.md;
 end
 
-        geomFields = {'imageDim','imageSize','voxelSize','imageType','origin','t0'};
+        geomFields = {'imageDim','imageSize','voxelSize','voxelSizeUm','voxelSizeUnit','voxelSizeUnits','spatialUnits','SpaceUnits','imageType','origin','t0'};
         for iF = 1:numel(geomFields)
             f = geomFields{iF};
             if isfield(S,f)

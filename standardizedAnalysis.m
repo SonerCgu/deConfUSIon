@@ -1060,7 +1060,7 @@ for k=1:numel(steps)
     steps(k).run=false; steps(k).pcaAutoApply=0; steps(k).pcaDropPC=NaN;
     steps(k).nsub=2;
     if any(strcmp(steps(k).name,{'SCM GUI','Video GUI','Time-Course Viewer'}))
-        steps(k).base1=0; steps(k).base2=60; steps(k).sig1=120; steps(k).sig2=180;
+        steps(k).base1=30; steps(k).base2=60; steps(k).sig1=120; steps(k).sig2=180;
         steps(k).cmin=-50; steps(k).cmax=50; steps(k).amin=0; steps(k).amax=20;
     end
 end
@@ -1069,7 +1069,7 @@ switch key
     case 'B', names={'Full QC','Imregdemons','Time-Course Viewer','Video GUI','Mask Editor','Registration to Atlas','SCM GUI','Segmentation','Functional Connectivity'};
     case 'C', names={'Full QC','Imregdemons','Time-Course Viewer','SCM GUI','Mask Editor'};
     case 'D', names={'Full QC','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
-    case 'E', names={'Full QC','Imregdemons','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas'};
+    case 'E', names={'PCA / ICA','Imregdemons','Mask Editor','Time-Course Viewer','SCM GUI'};
     case 'F', names={'Full QC','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
     case 'G', names={'Motor','Full QC','Imregdemons','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
 end
@@ -1086,6 +1086,24 @@ for k=1:numel(steps)
     elseif any(strcmp(steps(k).name,{'SCM GUI','Video GUI','Time-Course Viewer'})), steps(k).desc='Edit baseline/event windows for this acquisition; signed PSC display.';
     elseif strcmp(steps(k).name,'Full QC'), steps(k).desc='Inspect timing, motion, valid signal and artifact traces.'; end
 end
+if key=='E'
+    chosen=[];
+    for name=names
+        chosen(end+1)=find(strcmp({steps.name},name{1}),1); %#ok<AGROW>
+    end
+    for k=1:numel(steps), steps(k).run=ismember(k,chosen); end
+    p=chosen(1); steps(p).pcaicaMethod=1; steps(p).pcaDropPC=1; steps(p).pcaAutoApply=1;
+    steps(p).desc='Awake 3D: automatically remove PC1 across all slices.';
+    steps(chosen(2)).nsub=50; steps(chosen(2)).imregMode='standard';
+    steps(chosen(2)).desc='Imregdemons, median n=50; inspect output temporal sampling.';
+    p=chosen(end); steps(p).cmin=0; steps(p).cmax=30; steps(p).amin=5; steps(p).amax=10;
+    steps(p).sig1=240; steps(p).sig2=960;
+    steps(p).awake3DAutoSearch=true;
+    steps(p).desc='Positive 0-30%, blackbody, alpha 5-10, no spatial smoothing; ROI 5, plateau 3 min, search 4-16 min (clipped to scan).';
+    steps=steps([chosen setdiff(1:numel(steps),chosen,'stable')]);
+    for k=1:numel(steps), steps(k).order=k; end
+end
+
 end
 
 function [ok,message]=validatePresetData(S)

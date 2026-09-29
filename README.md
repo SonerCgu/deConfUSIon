@@ -118,6 +118,10 @@ Some export workflows may depend on Windows-specific features, Microsoft PowerPo
 
 9. Use the Time-Course Viewer, Video GUI, and SCM GUI to inspect PSC maps and signal dynamics.
 
+SCM's automatic ROI search supports sliding plateau windows within a time range,
+click-and-drag search bounds, and separate target/control regions on each slice. See the
+[automatic SCM search guide](docs/automatic-scm-search.md) for setup and interpretation.
+
 10. Use masks, segmentation, and atlas registration only after the dataset passes QC.
 
 11. Run Functional Connectivity and Group Analysis only after individual datasets are validated.
