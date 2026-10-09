@@ -1,4 +1,5 @@
 function Transf = coreg_3d(studio, forcedAnatomyFile, startAutomatic)
+deConfUSIon_setup();
 if nargin < 3, startAutomatic=false; end
 if nargin < 2
     forcedAnatomyFile = '';
@@ -89,10 +90,8 @@ if isempty(analysedFolder)
     analysedFolder = inferAnalysedFromRaw(rawFolder);
 end
 
-if isempty(analysedFolder)
-    warning('Could not infer AnalysedData folder. Falling back to RAW folder for Registration.');
-    analysedFolder = rawFolder;
-end
+if isempty(analysedFolder),analysedFolder=fusiModelAnalysisFolder(struct('loadedPath',rawFolder));end
+analysedFolder=fusiAnalysisOutputPath(analysedFolder);
 
 registrationDir = fullfile(analysedFolder,'Registration');
 if ~exist(registrationDir,'dir')
@@ -168,6 +167,13 @@ if useActive
     end
     anatomic=struct('Data',mean(active.I,4,'omitnan'),'arrayOrder','DV-LR-AP');
     if isfield(active,'voxelSize'), anatomic.voxelSize=active.voxelSize; end
+    calibration=active;if isfield(active,'par'),calibration=active.par;end
+    calibration=includeSourceCalibration(calibration,active);
+    calibration.scmSizeYXZ=[size(active.I,1) size(active.I,2) size(active.I,3)];
+    cal=scmSpatialCalibration(calibration);
+    if all(isfinite(cal.spacingUm)),anatomic.VoxelSize=cal.spacingUm;anatomic.calibrationSource=cal.source;end
+    if isfield(active,'nativeColumnOneSide'),anatomic.nativeColumnOneSide=active.nativeColumnOneSide;
+    elseif isfield(calibration,'nativeColumnOneSide'),anatomic.nativeColumnOneSide=calibration.nativeColumnOneSide;end
 elseif endsWithLower(anatomyFile,'.mat')
     S = load(anatomyFile);
     [candNames, candStruct] = detectAnatomyCandidatesFromMat(S);
@@ -240,6 +246,28 @@ end
 
 if ~isfield(anatomic,'VoxelSize') || isempty(anatomic.VoxelSize)
     anatomic.VoxelSize = [1 1 1];
+end
+% Mask Editor references do not always save their scanner header. Inherit
+% verified spacing only when their native grid matches the active animal.
+try
+    active=studio.datasets.(studio.activeDataset);
+    if isfield(active,'I') && isequal(size(anatomic.Data),[size(active.I,1) size(active.I,2) size(active.I,3)])
+        if isequal(double(anatomic.VoxelSize(:)'),[1 1 1])
+            calibration=active;if isfield(active,'par'),calibration=active.par;end
+            calibration=includeSourceCalibration(calibration,active);
+            calibration.scmSizeYXZ=[size(anatomic.Data,1) size(anatomic.Data,2) size(anatomic.Data,3)];cal=scmSpatialCalibration(calibration);
+            if all(isfinite(cal.spacingUm))
+                anatomic.VoxelSize=cal.spacingUm;anatomic.calibrationSource=cal.source;anatomic.arrayOrder='DV-LR-AP';
+            end
+        end
+        if ~isfield(anatomic,'DisplayData') && isfield(studio,'anatomicalReferenceIsDisplayReady') && ...
+                studio.anatomicalReferenceIsDisplayReady && isfield(studio,'anatomicalReference') && ...
+                isequal(size(studio.anatomicalReference),size(anatomic.Data))
+            anatomic.DisplayData=single(studio.anatomicalReference);
+        end
+    end
+catch
+    % Geometry confirmation remains explicit if there is no matched source.
 end
 
 %% ---------------------------------------------------------
@@ -728,9 +756,11 @@ if isempty(voxHint)
 end
 
 preferred = { ...
+    'anatomical_reference_raw', ...
+    'sliceUnderlayRaw', ...
     'brainImage', ...
     'anatomical_reference', ...
-    'anatomical_reference_raw', ...
+    'RawI', ...
     'I', ...
     'Data', ...
     'brainMask', ...
@@ -766,10 +796,13 @@ for i = 1:numel(orderedFields)
     end
     if isstruct(v) && isfield(v,'Data') && ~isempty(v.Data) && isnumeric(v.Data)
         tmp = v;
-        tmp.Data = double(tmp.Data);
+        if ndims(tmp.Data)==4,tmp.Data=mean(single(tmp.Data),4,'omitnan');else,tmp.Data=single(tmp.Data);end
         if ~isfield(tmp,'VoxelSize') || isempty(tmp.VoxelSize)
             tmp.VoxelSize = voxHint;
         end
+        calibration=includeSourceCalibration(tmp,tmp);calibration.scmSizeYXZ=[size(tmp.Data,1) size(tmp.Data,2) size(tmp.Data,3)];
+        cal=scmSpatialCalibration(calibration);
+        if all(isfinite(cal.spacingUm)),tmp.VoxelSize=cal.spacingUm;tmp.calibrationSource=cal.source;tmp.arrayOrder='DV-LR-AP';end
         if ndims(tmp.Data) == 2
             tmp.Data = reshape(tmp.Data, size(tmp.Data,1), size(tmp.Data,2), 1);
         end
@@ -790,13 +823,16 @@ end
 
     if (isnumeric(v) || islogical(v)) && ~isempty(v)
         d = ndims(v);
-        if d == 2 || d == 3
+        if d == 2 || d == 3 || d == 4
             tmp = struct();
-            tmp.Data = double(v);
+            if d==4,tmp.Data=mean(single(v),4,'omitnan');else,tmp.Data=double(v);end
             if d == 2
                 tmp.Data = reshape(tmp.Data, size(tmp.Data,1), size(tmp.Data,2), 1);
             end
             tmp.VoxelSize = voxHint;
+            calibration=S;calibration.scmSizeYXZ=[size(v,1) size(v,2) size(v,3)];
+            cal=scmSpatialCalibration(calibration);
+            if all(isfinite(cal.spacingUm)),tmp.VoxelSize=cal.spacingUm;tmp.calibrationSource=cal.source;end
             candNames{end+1}  = nm; %#ok<AGROW>
             candStruct{end+1} = tmp; %#ok<AGROW>
         end
@@ -806,8 +842,8 @@ end
 % A mask-editor MAT exposes ~15 fields (masks, flags, bundles). Only a few
 % are usable anatomy. If any of those are present, hide the rest.
 if ~isempty(candNames)
-    anatomyPref = {'brainImage','anatomical_reference_raw','anatomical_reference', ...
-                   'sliceUnderlayProcessed','sliceUnderlayRaw','I','Data'};
+    anatomyPref = {'anatomical_reference_raw','sliceUnderlayRaw','brainImage','anatomical_reference', ...
+                   'sliceUnderlayProcessed','I','Data','RawI'};
     keepIdx = [];
     for a = 1:numel(anatomyPref)
         for b = 1:numel(candNames)
@@ -822,6 +858,27 @@ if ~isempty(candNames)
     end
 end
 
+% A saved display is useful for manual review, but the intensity anatomy
+% remains separate for registration. Prepare/flip both with the same geometry.
+if isfield(S,'sliceUnderlayProcessed') && isnumeric(S.sliceUnderlayProcessed)
+    for k=1:numel(candStruct)
+        if isequal(size(candStruct{k}.Data),size(S.sliceUnderlayProcessed))
+            candStruct{k}.DisplayData=single(S.sliceUnderlayProcessed);
+        end
+    end
+end
+
+end
+
+function calibration=includeSourceCalibration(calibration,source)
+if isfield(source,'sourceFile') && ~isempty(source.sourceFile) && isfile(source.sourceFile)
+    try
+        header=load(source.sourceFile,'metadata');
+        if isfield(header,'metadata'),calibration.metadata=header.metadata;end
+    catch
+        % Geometry confirmation remains available if the source was moved.
+    end
+end
 end
 
 

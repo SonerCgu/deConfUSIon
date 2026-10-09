@@ -1,4 +1,4 @@
-function Seg = Segmentation(studio, data, logFcn)
+function Seg = Segmentation(studio, data, logFcn, settings)
 % Segmentation.m
 % HUMoR fUSI Studio atlas-based segmentation / region-time extraction.
 %
@@ -33,6 +33,7 @@ function Seg = Segmentation(studio, data, logFcn)
 %
 % Author/workflow: Soner Caner Cagun HUMoR Studio patch.
 
+deConfUSIon_setup();
 if nargin < 3 || isempty(logFcn)
     logFcn = @(s) fprintf('%s\n',s);
 end
@@ -59,7 +60,15 @@ end
 TR = getTRFromData(data);
 
 % One modern dialog collects all settings.
-cfg = showSegmentationSetupDialog(studio, data, TR, saveRoot, logFcn);
+if nargin<4||isempty(settings)
+    cfg = showSegmentationSetupDialog(studio, data, TR, saveRoot, logFcn);
+else
+    cfg=struct('cancelled',false,'sourceMode','active_i','sourceFile','', ...
+        'atlasMode','manual_label','labelFile','','regionResolution','detailed', ...
+        'reg2DFiles',{{}},'stepMotorFolder','','regionNameFile','', ...
+        'baselineStartSec',30,'baselineEndSec',240,'minVoxels',5,'computePSC',false);
+    keys=fieldnames(settings);for k=1:numel(keys),cfg.(keys{k})=settings.(keys{k});end
+end
 if isempty(cfg) || ~isstruct(cfg) || ~isfield(cfg,'cancelled') || cfg.cancelled
     logMsg(logFcn,'Segmentation cancelled.');
     return;
@@ -68,6 +77,11 @@ end
 % -------------------------------------------------------------------------
 % 1) Load functional source
 % -------------------------------------------------------------------------
+progress=[];showProgress=nargin<4||isempty(settings);
+if isfield(cfg,'showProgress'),showProgress=logical(cfg.showProgress);end
+if showProgress,progress=fusiBaselineProgress('open','Atlas segmentation');end
+progressCleanup=onCleanup(@()fusiBaselineProgress('close',progress)); %#ok<NASGU>
+segmentProgress(progress,.02,'Loading functional data',logFcn);
 [D0, sourceInfo] = loadSegmentationFunctionalSource(cfg, studio, data, logFcn);
 if isempty(D0)
     logMsg(logFcn,'Segmentation cancelled: no functional source.');
@@ -77,6 +91,7 @@ end
 % -------------------------------------------------------------------------
 % 2) Load/create atlas label map
 % -------------------------------------------------------------------------
+segmentProgress(progress,.10,'Loading registered atlas and tissue labels',logFcn);
 % Special step-motor mode: functional slices are warped to 2D atlas space
 % using the saved Reg2D transforms, and region labels are stacked slice-wise.
 if strcmpi(cfg.atlasMode,'step_reg2d')
@@ -150,12 +165,15 @@ try
     validDataMask = isfinite(tmpMean);
 catch
 end
+if isfield(labelInfo,'excludedRegionIDs')
+    excluded=ismember(abs(R),labelInfo.excludedRegionIDs);validDataMask=validDataMask&~excluded;R(excluded)=0;
+end
 
 % -------------------------------------------------------------------------
 % 5) Region extraction
 % -------------------------------------------------------------------------
-logMsg(logFcn,'Extracting left/right/bilateral region time courses...');
-[LeftRaw, RightRaw, BothRaw, region] = extractRegionTimecourses(D4, R, validDataMask, labelInfo, cfg.minVoxels, logFcn);
+segmentProgress(progress,.25,'Extracting left/right/bilateral region time courses',logFcn);
+[LeftRaw, RightRaw, BothRaw, region] = extractRegionTimecourses(D4, R, validDataMask, labelInfo, cfg.minVoxels, logFcn,progress);
 
 % Optional coarse atlas resolution: combine detailed labels into stable
 % anatomical families (cortex, hippocampus, thalamus, ...). The atlas label
@@ -211,6 +229,7 @@ Seg.files.csvBothZ = fullfile(segDir, ['Segmentation_Both_zscore_' ts '.csv']);
 Seg.files.csvBothRaw = fullfile(segDir, ['Segmentation_Both_raw_' ts '.csv']);
 Seg.files.csvRegionTable = fullfile(segDir, ['Segmentation_RegionTable_' ts '.csv']);
 
+segmentProgress(progress,.85,'Saving region timecourses and anatomical metadata',logFcn);
 save(Seg.files.mat, 'Seg', '-v7.3');
 writeRegionTimeCSV(Seg.files.csvBothZ, Seg.Both.z, region, Seg.timeSec, 'zscore');
 writeRegionTimeCSV(Seg.files.csvBothRaw, Seg.Both.raw, region, Seg.timeSec, 'raw');
@@ -228,6 +247,8 @@ end
 logMsg(logFcn,['Segmentation MAT saved: ' Seg.files.mat]);
 logMsg(logFcn,['Segmentation CSV saved: ' Seg.files.csvBothZ]);
 logMsg(logFcn,sprintf('Regions exported: %d | Time points: %d | Duration: %.3f min | TR: %.6g sec', numel(region.labels), T, max(Seg.timeSec(:))/60, TR));
+segmentProgress(progress,1,'Segmentation finished; MAT and CSV files saved',logFcn);
+fusiBaselineProgress('close',progress);
 logMsg(logFcn,'--- Segmentation finished ---');
 
 end
@@ -279,6 +300,7 @@ end
 
 regDir = getRegistrationDir(studio, saveRoot);
 reg2DDir = getRegistration2DDir(studio, saveRoot);
+labelOptions=fusiUnderlayPickerOptions(studio,saveRoot,'','');labelStartDir=labelOptions.startPath;
 
 hasPSC = isfield(data,'PSC') && ~isempty(data.PSC);
 hasAtlasField = dataHasAtlasField(data);
@@ -448,7 +470,7 @@ atlasPanel = uipanel('Parent',dlg, ...
     'BorderType','line');
 
 atlasStrings = { ...
-    'Manual atlas label map from Registration2D  [pre-selected]', ...
+    'Saved Regions_All / Regions_Merged or manual label map', ...
     'Step-motor Reg2D files from Registration2D  [warps slices first]', ...
     'Allen 3D atlas.Regions  [for true 3D atlas-space data]', ...
     'Active dataset atlas / labels field'};
@@ -479,7 +501,7 @@ uicontrol('Parent',atlasPanel,'Style','pushbutton', ...
     'Callback',@onLoadAtlas);
 
 hAtlasStatus = makeText(atlasPanel,[0.040 0.450 0.92 0.180], ...
-    'Manual label map selected. Click LOAD or it will ask on RUN. Start folder = Registration2D.', fgDim, 10.5, 'bold');
+    'Load Regions_All / Regions_Merged from the saved registration, or a matching manual integer label map.', fgDim, 10.5, 'bold');
 
 uicontrol('Parent',atlasPanel,'Style','pushbutton', ...
     'Units','normalized', ...
@@ -540,7 +562,7 @@ makeText(setPanel,[0.040 0.500 0.250 0.110],'Minimum voxels / region',fg,12,'bol
 hMinVox = makeEdit(setPanel,[0.315 0.505 0.100 0.110],'5');
 hRegionResolution = uicontrol('Parent',setPanel,'Style','popupmenu', ...
     'Units','normalized','Position',[0.455 0.505 0.49 0.110], ...
-    'String',{'Detailed atlas regions','Coarse anatomical families'}, ...
+    'String',{'Regions as saved / detailed','Coarse anatomical families','Merged parent regions (e.g. CPu)'}, ...
     'Value',1,'BackgroundColor',panel2,'ForegroundColor',fg, ...
     'FontName','Arial','FontSize',11,'FontWeight','bold', ...
     'Callback',@updateSummary);
@@ -666,7 +688,7 @@ waitfor(dlg);
         v = get(hAtlas,'Value');
         mode = atlasModes{v};
         if strcmpi(mode,'manual_label')
-            set(hAtlasStatus,'String','Manual label map selected. Click LOAD or it will ask on RUN. Start folder = Registration2D.');
+            set(hAtlasStatus,'String','Load Regions_All.mat or Regions_Merged.mat from the saved registration, or a matching integer label map.');
         elseif strcmpi(mode,'step_reg2d')
             set(hAtlasStatus,'String','Step-motor Reg2D selected. It will auto-find CoronalRegistration2D_source*.mat in Registration2D, or use LOAD.');
         elseif strcmpi(mode,'allen_3d')
@@ -717,7 +739,7 @@ waitfor(dlg);
             set(hAtlasStatus,'String',sprintf('Loaded/auto-found %d Reg2D files from Registration2D.', numel(cfg.reg2DFiles)));
         elseif strcmpi(mode,'manual_label')
             [f,p] = uigetfileStart({'*.mat;*.nii;*.nii.gz;*.tif;*.tiff','Atlas label files (*.mat,*.nii,*.nii.gz,*.tif)'}, ...
-                'Load atlas integer label map', reg2DDir);
+                'Load atlas integer labels: Regions_All / Regions_Merged', labelStartDir);
             if isequal(f,0), return; end
             cfg.labelFile = fullfile(p,f);
             set(hAtlasStatus,'String',['Loaded label map: ' shortTxt(f,80)]);
@@ -810,6 +832,8 @@ waitfor(dlg);
         cfg.minVoxels = round(str2double(get(hMinVox,'String')));
         if get(hRegionResolution,'Value') == 2
             cfg.regionResolution = 'coarse';
+        elseif get(hRegionResolution,'Value') == 3
+            cfg.regionResolution = 'merged';
         else
             cfg.regionResolution = 'detailed';
         end
@@ -1010,15 +1034,16 @@ switch lower(cfg.atlasMode)
     case 'manual_label'
         f = cfg.labelFile;
         if isempty(f) || exist(f,'file') ~= 2
-            reg2DDir = getRegistration2DDir(studio, getStructString(studio,'exportPath',pwd));
+            options=fusiUnderlayPickerOptions(studio,getStructString(studio,'exportPath',pwd),'','');
+            reg2DDir=options.startPath;
             [ff,pp] = uigetfileStart({'*.mat;*.nii;*.nii.gz;*.tif;*.tiff','Atlas label files (*.mat,*.nii,*.nii.gz,*.tif)'}, ...
-                'Load atlas INTEGER label map from Registration2D', reg2DDir);
+                'Load atlas INTEGER labels: Regions_All / Regions_Merged', reg2DDir);
             if isequal(ff,0)
                 return;
             end
             f = fullfile(pp,ff);
         end
-        [R,info] = loadLabelMapFile(f);
+        [R,info] = loadLabelMapFile(f,[Y X Z]);
         info.type = 'manual_label';
         info.file = f;
         logMsg(logFcn,['Atlas label source: manual file -> ' f]);
@@ -1044,6 +1069,14 @@ end
 if isempty(R)
     error('No atlas label map could be loaded.');
 end
+if isfield(cfg,'regionResolution')&&strcmpi(cfg.regionResolution,'merged')&& ...
+        isstruct(info.atlasInfoRegions)&&isfield(info.atlasInfoRegions,'name')
+    signs=sign(R);
+    [R,info.atlasInfoRegions,mapping]=fusiAtlasRegionGrouping(struct('Regions',abs(R),'infoRegions',info.atlasInfoRegions),'Parent');
+    R=double(R).*signs;
+    info.regionGrouping='Parent';info.sourceToParent=mapping;
+    [~,info.excludedRegionIDs]=fusiAtlasRegionCatalog(R,info.atlasInfoRegions);
+end
 
 R = squeeze(R);
 if ndims(R) == 2
@@ -1059,7 +1092,7 @@ end
 info.hasSignedHemisphereLabels = any(R(:) < 0);
 end
 
-function [R,info] = loadLabelMapFile(fullFile)
+function [R,info] = loadLabelMapFile(fullFile,targetSize)
 
 R = [];
 info = struct();
@@ -1101,6 +1134,10 @@ end
 
 if strcmpi(ext,'.mat')
     S = load(fullFile);
+    [matched,R,bundleInfo]=fusiAtlasRegionInput(S,targetSize);
+    if matched
+        info=bundleInfo;info.file=fullFile;info.hasSignedHemisphereLabels=false;return;
+    end
 
     if isfield(S,'atlasInfoRegions')
         info.atlasInfoRegions = S.atlasInfoRegions;
@@ -1109,6 +1146,7 @@ if strcmpi(ext,'.mat')
     end
 
     preferred = { ...
+        'atlasRegionLabels3D', ...
         'atlasRegionLabelsLR2D', ...
         'atlasRegionLabels2D', ...
         'regionLabelsLR', ...
@@ -1589,7 +1627,7 @@ end
 %% ========================================================================
 % Region extraction
 %% ========================================================================
-function [LeftRaw, RightRaw, BothRaw, region] = extractRegionTimecourses(D, R, validDataMask, labelInfo, minVoxels, logFcn)
+function [LeftRaw, RightRaw, BothRaw, region] = extractRegionTimecourses(D, R, validDataMask, labelInfo, minVoxels, logFcn,progress)
 
 [Y,X,Z,T] = size(D);
 R = round(double(R));
@@ -1618,6 +1656,9 @@ rightVec = false(numel(Rvec),1);
 hemiNote = '';
 if hasSigned
     hemiNote = 'Left/right from signed 2D labels: negative=left, positive=right.';
+elseif isfield(labelInfo,'leftHemisphereMask')&&isequal(size(labelInfo.leftHemisphereMask,[1 2 3]),[Y X Z])
+    leftVec=labelInfo.leftHemisphereMask(:);rightVec=labelInfo.rightHemisphereMask(:);
+    hemiNote='Left/right from the saved 3D atlas geometry; AP slices are not hemispheres.';
 else
     if Z > 1
         mid = round(Z/2);
@@ -1671,6 +1712,9 @@ for i = 1:nReg
         RightRaw(i,:) = nanmeanLocal(D2(idxRight,:),1);
     end
 
+    if mod(i,max(1,ceil(nReg/100)))==0||i==nReg
+        segmentProgress(progress,.25+.55*i/max(1,nReg),sprintf('Region %d / %d: %d valid voxels',i,nReg,countsBoth(i)),[]);
+    end
     if mod(i,50)==0
         logMsg(logFcn,sprintf('  segmented %d/%d regions...',i,nReg));
     end
@@ -2108,6 +2152,11 @@ try
     end
 catch
 end
+end
+
+function segmentProgress(h,fraction,message,logFcn)
+if ~isempty(logFcn),logMsg(logFcn,message);end
+if ~isempty(h),fusiBaselineProgress('update',h,fraction,message);end
 end
 
 function logMsg(logFcn,msg)

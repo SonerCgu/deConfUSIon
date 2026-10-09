@@ -19,13 +19,20 @@ Reports/
 *.xlsx
 !atlas_tools/rgb2acr.xlsx
 validation/
+.deconfusion-cache/
 maintenance/__pycache__/
+maintenance/latest_organization_backup.txt
+acquisition/sensory/__pycache__/
+sensory_runs/
 
 # MATLAB temporary / autosave files
 *.asv
 *.m~
 
 # Local cleanup backups
+tmp/
+pulsepal_fix_*/
+PulsePal_fixed_scripts_*.zip
 README_backup_*.md
 gitignore_backup_*.txt
 _backup*/

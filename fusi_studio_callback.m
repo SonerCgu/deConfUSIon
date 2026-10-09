@@ -616,6 +616,9 @@ end
     try
         fileLabel = [studio.activeDataset ' | ' underlayLabel];
 
+        par.baselineRawIsPSC=(isfield(data,'inputIsPSC')&&isequal(data.inputIsPSC,true)) || ...
+            (isfield(studio.meta,'inputIsPSC')&&isequal(studio.meta.inputIsPSC,true));
+        par.fusiSequencePowerFile=sequencePowerFile(data,studio,par);
         scmFig = SCM_gui( ...
             PSCsig, bgUnderlay, data.TR, par, baseline, data.nVols, ...
             data.I, data.I, ...
@@ -885,6 +888,9 @@ end
     try
         fileLabel = [studio.activeDataset ' | ' underlayLabel];
 
+        par.videoInputIsPSC=(isfield(data,'inputIsPSC')&&isequal(data.inputIsPSC,true)) || ...
+            (isfield(studio.meta,'inputIsPSC')&&isequal(studio.meta.inputIsPSC,true));
+        par.fusiSequencePowerFile=sequencePowerFile(data,studio,par);
         videoFig = play_fusi_video_final( ...
             Iraw, Iraw, PSCsig, bgUnderlay, ...
             par, initialFPS, maxFPS, ...
@@ -926,6 +932,7 @@ function maskEditorCallback(~,~)
         % Studio/viewer masks or automatically selected underlays.
         sourceFile = fullfile(studio.loadedPath, studio.loadedFile);
         editorStudio = studio;
+        if isfield(data,'par') && isstruct(data.par),editorStudio.maskSpatialMetadata=data.par;end
         maskFields = {'mask','brainMask','underlayMask','overlayMask','signalMask'};
         for kk = 1:numel(maskFields), editorStudio.(maskFields{kk}) = []; end
         if isfield(studio,'maskEditorDraft') && isstruct(studio.maskEditorDraft) && ...
@@ -993,6 +1000,14 @@ end
 %% =========================================================
 %  REFRESH DATASET DROPDOWN
 % =========================================================
+function file=sequencePowerFile(data,studio,par)
+    file='';
+    for name={'lazyFile','savedFile'}
+        if isfield(data,name{1})&&isfile(data.(name{1})),file=data.(name{1});return;end
+    end
+    if strcmp(studio.activeDataset,'raw'),file=par.loadedFile;end
+end
+
 function refreshDatasetDropdown()
     studio = guidata(fig);
     try
@@ -1113,6 +1128,7 @@ function data = getActiveData()
             data.isLazy = false;
             if isfield(oldLazy,'lazyFile')
                 data.lazyFile = oldLazy.lazyFile;
+                data.savedFile = oldLazy.lazyFile;
             end
 
             studio.datasets.(selected) = data;
@@ -1517,6 +1533,7 @@ end
 function setProgramStatus(isReady)
 
     if ~isgraphics(fig,'figure'), return; end
+    if isequal(getappdata(fig,'SegmentationRunning'),true),isReady=false;end
     statusState = guidata(fig);
     if ~isstruct(statusState) || ~isfield(statusState,'statusPanel'), return; end
     statusPanel = statusState.statusPanel;
@@ -1735,10 +1752,15 @@ function tag = makeFilterTag(opts)
         case 'band'
             tag = ['BPF' numTag(opts.FcLow) 'to' numTag(opts.FcHigh) 'Hz' ordTag];
 
+        case 'stop'
+            tag = ['BSF' numTag(opts.FcLow) 'to' numTag(opts.FcHigh) 'Hz' ordTag];
         otherwise
             tag = ['FILT' ordTag];
     end
 
+    if isfield(opts,'method') && ~strcmpi(opts.method,'butter')
+        tag=[tag '_' regexprep(char(opts.method),'[^a-zA-Z0-9]','')];
+    end
     if isfield(opts,'trimStart') && isfield(opts,'trimEnd')
         if opts.trimStart > 0 || opts.trimEnd > 0
             tag = sprintf('%s_trim%s-%ss', ...
@@ -5060,7 +5082,8 @@ end
 % =========================================================
 function onCloseStudio(~,~)
     try
-        DataIO('flushstudio',guidata(fig));
+        closingStudio=fusiRebaseMovedStudioFiles(guidata(fig));guidata(fig,closingStudio);
+        DataIO('flushstudio',closingStudio);
     catch ME
         DataIO('show');
         addLog(['Studio remains open: finish or retry the unsaved result. ' ME.message]);

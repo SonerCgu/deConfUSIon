@@ -1,6 +1,7 @@
 function [FC_reordered, selected_regions, acr_reordered, D] = deConfUSIon_reorder_FC_by_list(FC, atlas, listFile)
 % deConfUSIon_reorder_FC_by_list  JM example wrapper for FC matrices.
 
+deConfUSIon_setup();
 if nargin < 3 || isempty(listFile)
     here = fileparts(mfilename('fullpath'));
     listFile = fullfile(here,'list_selected_regions.txt');

@@ -27,6 +27,7 @@ function [data, meta] = loadFUSIData(dataFile, fallbackTR)
 %   - MATLAB 2017b compatible
 % ------------------------------------------------------------
 
+deConfUSIon_setup();
 if nargin < 2 || isempty(fallbackTR) || ~isfinite(fallbackTR) || fallbackTR <= 0
     fallbackTR = [];
 else
@@ -49,6 +50,10 @@ switch extKey
 
     case '.mat'
         S = localLoadSelected(dataFile);
+        meta.inputIsPSC=isfield(S,'inputIsPSC')&&isequal(S.inputIsPSC,true);
+        if isfield(S,'newData')&&isstruct(S.newData)&&isfield(S.newData,'inputIsPSC')
+            meta.inputIsPSC=meta.inputIsPSC||isequal(S.newData.inputIsPSC,true);
+        end
 
         % -------------------------------------------------
         % RAW METADATA PASS-THROUGH
@@ -94,6 +99,7 @@ end
 
         I = single(I);
         meta.rawMetadata.loadedVarName = pickedVarName;
+        meta.inputIsPSC=meta.inputIsPSC||contains(lower(pickedVarName),'psc');
 % -------------------------------------------------
 % THEO / PYFUS GEOMETRY RECONSTRUCTION
 % Rebuild data using md.size / md.imageSize first,
@@ -311,9 +317,9 @@ end
         ni = niftiinfo(dataFile);
         dimsN = double(ni.ImageSize);
         if numel(dimsN)<4 || dimsN(4)<2
-            error('deConfUSIon:StaticNifti','NIfTI needs an explicit fourth time dimension with at least two samples. Static anatomy must be loaded through registration.');
+            error('deConfUSIon:StaticNifti','Raw dataset import requires a 4D time series. This NIfTI is a spatial summary; select the original functional recording instead.');
         end
-        V = niftiread(ni);
+        [V,ni] = readFMRINifti(dataFile);
         I = single(permute(V,[2 1 3 4]));
         if size(I,3)==1, I=reshape(I,size(I,1),size(I,2),size(I,4)); end
         meta.rawMetadata.nifti = ni;

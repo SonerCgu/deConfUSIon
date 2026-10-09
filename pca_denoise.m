@@ -2,6 +2,7 @@ function [newData, stats] = pca_denoise(dataIn, saveRoot, tag, opts)
 % PCA_DENOISE V12 — integrated all-slice / slice-specific recompute GUI
 % The first PCA/ICA popup only chooses method. This GUI handles slice scope.
 
+deConfUSIon_setup();
 if nargin < 2 || isempty(saveRoot), saveRoot = pwd; end
 if nargin < 3 || isempty(tag), tag = datestr(now,'yyyymmdd_HHMMSS'); end
 if nargin < 4, opts = struct(); end

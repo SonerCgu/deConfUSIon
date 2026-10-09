@@ -29,6 +29,8 @@ classdef moveimage < handle
         T1
         ref
         alfa
+        lastMotionRender = -inf
+        planeSampler = []
         dv
    end
 
@@ -51,6 +53,7 @@ classdef moveimage < handle
             M.a = M.himage.CData;
             M.at = M.himage.CData;
             M.ref = imref2d([size(M.a,1) size(M.a,2)]);
+            if ismatrix(M.a),M.planeSampler=griddedInterpolant(single(M.a),'linear','none');else,M.planeSampler=[];end
 
             M.T0 = eye(3);
             M.T1 = eye(3);
@@ -60,6 +63,7 @@ classdef moveimage < handle
             M.alfa = 0;
             M.flagmove = 0;
 
+            M.safeDisableModes();
             M.armCallbacks();
         end
 
@@ -70,8 +74,8 @@ classdef moveimage < handle
                 catch
                     set(M.himage,'CData',M.at);
                 end
-                M.armCallbacks();
-                drawnow limitrate;
+                % CData replacement preserves the installed callbacks.
+                % The owning editor draws once after updating all planes.
             end
         end
 
@@ -83,6 +87,7 @@ classdef moveimage < handle
 
             M.a = newData;
             M.ref = imref2d([size(M.a,1) size(M.a,2)]);
+            if ismatrix(M.a),M.planeSampler=griddedInterpolant(single(M.a),'linear','none');else,M.planeSampler=[];end
 
             Tall = M.T0;
             if M.flagmove == 1
@@ -129,11 +134,6 @@ classdef moveimage < handle
 
     methods(Access=private)
         function armCallbacks(M)
-            try
-                M.safeDisableModes();
-            catch
-            end
-
             try
                 set(M.himage, ...
                     'HitTest','on', ...
@@ -212,14 +212,20 @@ classdef moveimage < handle
                 M.T1(3,1:2) = M.dv;
             end
 
-            try
-                M.at = imwarp(M.a, affine2d(M.T0 * M.T1), 'OutputView', M.ref);
-            catch
-                M.at = imwarp(double(M.a), affine2d(M.T0 * M.T1), 'OutputView', M.ref);
+            t=now*86400;
+            if t-M.lastMotionRender<.025,return;end
+            M.lastMotionRender=t;
+            if ~isempty(M.planeSampler)
+                [x,y]=meshgrid(1:size(M.a,2),1:size(M.a,1));
+                q=[x(:) y(:) ones(numel(x),1)]/(M.T0*M.T1);
+                M.at=reshape(M.planeSampler(q(:,2),q(:,1)),size(M.a));M.at(~isfinite(M.at))=0;
+            else
+                M.at=imwarp(M.a,affine2d(M.T0*M.T1),'OutputView',M.ref);
             end
 
             M.refresh();
             if ~isempty(M.onPreview), M.onPreview(); end
+            drawnow limitrate nocallbacks;
         end
 
         function mouseUp(M, ~, ~)
@@ -243,7 +249,7 @@ classdef moveimage < handle
             catch
             end
             M.armCallbacks();
-            if ~isempty(M.onCommit), M.onCommit(); end
+            if isempty(M.onCommit),M.setImageData(M.a);else,M.onCommit();end
         end
 
         function clearMotionCallbacks(M)

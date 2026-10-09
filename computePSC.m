@@ -21,6 +21,7 @@ function proc = computePSC(I, TR, par, baseline)
 % - Effective TR is adjusted so total time stays constant
 % ------------------------------------------------------------
 
+deConfUSIon_setup();
 d = ndims(I);
 assert(d==3 || d==4, 'computePSC: I must be [Y X T] or [Y X Z T].');
 assert(isscalar(TR) && isfinite(TR) && TR>0, 'computePSC: TR must be positive scalar.');
@@ -33,16 +34,19 @@ else
 end
 
 Tmax_orig = (nVols - 1) * TR;
+externalBaseline=fusiBaselineReference('isExternal',baseline);
+if externalBaseline, externalMean=fusiBaselineReference('validate',baseline.reference,size(I,1:d-1)); end
 % Validate before allocating/interpolating a potentially multi-GB recording.
-if ~isscalar(baseline.start) || ~isscalar(baseline.end) || ...
+if ~externalBaseline && (~isscalar(baseline.start) || ~isscalar(baseline.end) || ...
         ~isfinite(baseline.start) || ~isfinite(baseline.end) || ...
         baseline.start<0 || baseline.end<=baseline.start || ...
-        baseline.start>Tmax_orig || baseline.end<0
+        baseline.start>Tmax_orig || baseline.end<0)
     error('deConfUSIon:BadBaseline', ...
         'Baseline must overlap 0-%.6g seconds (%d frames, TR %.6g s). Choose a valid window.',Tmax_orig,nVols,TR);
 end
 
 %% 1) Temporal interpolation (integer factor N)
+baselineProgress(par,'Preparing current scan time series...');
 I = single(I);
 N = 1;
 if isfield(par,'interpol') && ~isempty(par.interpol)
@@ -57,6 +61,10 @@ TR_eff  = TR / N;
 Tmax_eff = (nFrames - 1) * TR_eff;
 
 %% 2) Baseline window (sec ? interpolated frames)
+if externalBaseline
+    ab=externalMean;
+    b0=baseline.reference.frames(1);b1=baseline.reference.frames(2);
+else
 b0 = round(baseline.start / TR_eff) + 1;
 b1 = round(baseline.end   / TR_eff) + 1; % inclusive
 
@@ -73,11 +81,13 @@ if d == 3
 else
     ab = deConfUSIon_signal('mean',I1(:,:,:,b0:b1),4);
 end
+end
 
 validBaseline = isfinite(ab) & ab > 0;
 ab(~validBaseline) = NaN;
 
 %% 3) PSC
+baselineProgress(par,'Normalizing current scan against the baseline...');
 if d == 3
     PSC = bsxfun(@rdivide, bsxfun(@minus, I1, ab), ab) * 100;   % [Y X T]
 else
@@ -87,6 +97,7 @@ end
 PSC = single(PSC);
 
 %% 4) LPF (memory-safe, along time)
+baselineProgress(par,'Applying temporal filtering...');
 if isfield(par,'LPF') && ~isempty(par.LPF) && par.LPF > 0
     % NOTE: this assumes par.LPF is already normalized (0..1) as in your pipeline
     try
@@ -129,6 +140,7 @@ if isfield(par,'conectSize') && ~isempty(par.conectSize) && par.conectSize > 0
 end
 
 %% 6) Gaussian spatial smoothing (2D per slice/frame)
+baselineProgress(par,'Applying spatial filtering...');
 if isfield(par,'gaussSize') && ~isempty(par.gaussSize) && par.gaussSize > 0
     sig = 0;
     if isfield(par,'gaussSig') && ~isempty(par.gaussSig)
@@ -150,6 +162,7 @@ if isfield(par,'gaussSize') && ~isempty(par.gaussSize) && par.gaussSize > 0
 end
 
 %% 7) Background (log compressed, preserves Z)
+baselineProgress(par,'Preparing current scan display...');
 if d == 3
     bg = mean(I, 3);            % [Y X]
 else
@@ -177,6 +190,9 @@ proc.Tmax_orig      = Tmax_orig;
 proc.baselineFrames = [b0 b1];
 proc.baselineValidMask = validBaseline;
 proc.baselineWindowSec = ([b0 b1]-1)*TR_eff;
+proc.baselineMean = ab;
+proc.baseline = baseline;
+if externalBaseline, proc.baselineWindowSec=baseline.reference.windowSec; end
 proc.isMatrixProbe  = (d == 4);
 proc.nZ             = nZ;
 
@@ -292,4 +308,8 @@ weights=filter2(kernel,double(valid));
 fullWeights=filter2(kernel,ones(size(in)));
 out=filter2(kernel,values).*fullWeights./weights;
 out(~valid | weights<=0)=NaN;
+end
+
+function baselineProgress(par,message)
+if isfield(par,'baselineProgressFcn'),par.baselineProgressFcn(message);end
 end

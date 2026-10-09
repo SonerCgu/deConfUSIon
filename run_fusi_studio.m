@@ -9,6 +9,7 @@ function run_fusi_studio()
 % A temporary assembled runtime file is created in tempdir because MATLAB
 % nested callbacks must exist in one parsed function scope.
 
+deConfUSIon_setup();
 root = fileparts(mfilename('fullpath'));
 if isempty(root) || exist(root,'dir') ~= 7
     root = pwd;
@@ -20,7 +21,9 @@ cd(root);
 % Complete those writes before replacing the assembled GUI/runtime.
 previousFigure=getappdata(0,'deConfUSIonMainFigure');
 if ~isempty(previousFigure) && isgraphics(previousFigure)
-    DataIO('flushstudio',guidata(previousFigure));
+    previousStudio=fusiRebaseMovedStudioFiles(guidata(previousFigure));
+    guidata(previousFigure,previousStudio);
+    DataIO('flushstudio',previousStudio);
 end
 
 % Old versions staged complete results in tempdir. Only certified complete

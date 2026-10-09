@@ -1,4 +1,5 @@
 function result = AutomaticSCM(PSC,TR,protocol,outDir,fileLabel)
+deConfUSIon_setup();
 if ischar(PSC) && strcmp(PSC,'search')
     result=searchROI(TR,protocol,outDir,fileLabel); return;
 end
@@ -18,8 +19,11 @@ roiSize=double(protocol.roiSizeYX(:)');
 assert(numel(roiSize)==2 && all(isfinite(roiSize)&roiSize>=1&roiSize==round(roiSize)), ...
     'deConfUSIon:Protocol','ROI size must contain two positive integer pixel counts [Y X].');
 t=(0:sz(4)-1)*TR;
-b=window(protocol.baselineSec,t); signal=window(protocol.signalSec,t);
-assert(protocol.baselineSec(2)<protocol.signalSec(1),'deConfUSIon:Protocol', ...
+external=isfield(protocol,'baselineMode')&&strcmp(protocol.baselineMode,'external');
+if external,protocol.baselineSec=protocol.baselineReference.windowSec;end
+if external,b=1;else,b=window(protocol.baselineSec,t);end
+signal=window(protocol.signalSec,t);
+assert(external||protocol.baselineSec(2)<protocol.signalSec(1),'deConfUSIon:Protocol', ...
     'Baseline must precede the signal interval. Use the same prespecified intervals across animals.');
 labels={'Target','Control'}; centers={protocol.targetXYZ,protocol.controlXYZ};
 result=struct('version',1,'protocol',protocol,'source',fileLabel,'TR',TR,'timeSec',t);
@@ -35,7 +39,9 @@ for k=1:2
     else, V=double(reshape(PSC(y,x,z,:),[],sz(4))); end
     % Exact change of baseline for input already represented as percent signal.
     B=deConfUSIon_signal('mean',V(:,b),2); denom=100+B;
-    good=sum(isfinite(V(:,b)),2)>=ceil(.8*numel(b)) & isfinite(denom) & denom>sqrt(eps('single'));
+    if external,B=zeros(size(B));denom=100+B;end
+    good=isfinite(denom)&denom>sqrt(eps('single'));
+    if ~external,good=good&sum(isfinite(V(:,b)),2)>=ceil(.8*numel(b));end
     assert(all(good),'deConfUSIon:ProtocolCoverage','A fixed ROI contains invalid baseline voxels. Review data quality; the ROI will not be silently shrunk.');
     V=100*bsxfun(@rdivide,bsxfun(@minus,V,B),denom);
     % Require all ROI voxels at each frame to keep the spatial support fixed.
@@ -64,6 +70,7 @@ for k=1:2
     fprintf(fid,'# ROI export from SCM_gui: AutomaticSCM fixed protocol\n# FileLabel: %s\n',fileLabel);
     fprintf(fid,'# ROI_LABEL: %s\n# SLICE: %d\n# TR_sec: %.9g\n',r.label,r.centerXYZ(3),TR);
     fprintf(fid,'# PSC_REBASED: 1\n# BaselineWindow: %.9g %.9g sec\n',protocol.baselineSec);
+    if external,fprintf(fid,'# BaselineSource: %s\n',fusiBaselineReference('label',struct('reference',protocol.baselineReference)));end
     fprintf(fid,'# SignalWindow: %.9g %.9g sec\n',protocol.signalSec);
     fprintf(fid,'# x1 x2 y1 y2\n%d %d %d %d\n',r.boundsXY);
     fprintf(fid,'# columns: time_sec\ttime_min\tPSC\n');
@@ -83,20 +90,43 @@ end
 function R=searchROI(A,TR,cfg,mask)
 % Search raw, exactly rebased PSC; display alpha/smoothing never participates.
 assert(isscalar(TR)&&isfinite(TR)&&TR>0,'deConfUSIon:Protocol','Invalid TR.');
-n=double(cfg.size); z=double(cfg.slice); T=size(A,ndims(A)); t=(0:T-1)*TR;
-assert(isscalar(n)&&isfinite(n)&&n>=1&&n==round(n),'deConfUSIon:SearchSize','ROI size is an integer side length in pixels.');
+z=double(cfg.slice); T=size(A,ndims(A)); t=(0:T-1)*TR;
+whole=isfield(cfg,'roiMode')&&strcmp(cfg.roiMode,'region');
+spacing=[NaN NaN NaN];if isfield(cfg,'spacingUm'),spacing=cfg.spacingUm;end
+if whole,geometry=[];else,geometry=scmROI('size',cfg,spacing);end
 sz=size(A); nz=1; if ndims(A)==4, nz=sz(3); end
 assert(isscalar(z)&&z>=1&&z<=nz&&z==round(z),'deConfUSIon:SearchSlice','Invalid slice.');
-assert(n<=min(sz(1:2)),'deConfUSIon:SearchSize','ROI is larger than the image.');
+if ~whole
+ nx=geometry.sizeXY(1);ny=geometry.sizeXY(2);nPixels=nx*ny;
+ assert(nx<=sz(2)&&ny<=sz(1),'deConfUSIon:SearchSize','ROI is larger than the image.');
+end
 assert(isequal(size(mask),sz(1:2)),'deConfUSIon:SearchMask','Mask dimensions do not match the selected slice.');
 % SCM rounds endpoints to the nearest acquired frame (inclusive). Strict
 % timestamp containment can select only one frame in a 60 s window at
 % TR=33.5 s even though the displayed SCM averages three frames.
-b=scmWindow(cfg.baselineSec,TR,T);
+external=isfield(cfg,'baselineMode')&&strcmp(cfg.baselineMode,'external');
+if external,b=1;else,b=scmWindow(cfg.baselineSec,TR,T);end
 duration=0; if isfield(cfg,'plateauSec'), duration=cfg.plateauSec; end
 [starts,width]=scmSearchWindows(cfg.signalSec,duration,TR,T);
 [B,nb]=average(b);
+if external,B=zeros(sz(1:2));nb=ones(sz(1:2));end
 baseValid=logical(mask)&isfinite(B)&(100+B)>sqrt(eps('single'))&nb==numel(b);
+regionCounts=[];
+if whole
+ assert(isfield(cfg,'atlasRegionMask')&&~isempty(cfg.atlasRegionMask),'deConfUSIon:AtlasRegionRequired','Select an atlas region for whole-region analysis.');
+ support=logical(mask)&logical(cfg.atlasRegionMask);nPixels=nnz(support);
+ assert(nPixels>0&&all(baseValid(support)),'deConfUSIon:SearchCoverage','Whole region is empty or contains invalid baseline voxels.');
+else
+ regionEligible=true(sz(1)-ny+1,sz(2)-nx+1);
+end
+if ~whole&&isfield(cfg,'atlasRegionMask')&&~isempty(cfg.atlasRegionMask)
+ assert(isequal(size(cfg.atlasRegionMask),sz(1:2)),'deConfUSIon:AtlasSearchGrid','Atlas region mask must match the image.');
+ coverage=.75;if isfield(cfg,'minAtlasCoverage'),coverage=cfg.minAtlasCoverage;end
+ assert(isscalar(coverage)&&isfinite(coverage)&&coverage>=.75&&coverage<=1, ...
+  'deConfUSIon:AtlasCoverage','Atlas region coverage must be between 75 and 100 percent.');
+ regionCounts=boxSum(double(cfg.atlasRegionMask),[ny nx]);
+ regionEligible=regionCounts>=ceil(coverage*nPixels-1e-9);
+end
 value=-Inf; index=1; bestStart=starts(1);
 [S,ns,total]=average(starts(1)+(0:width-1));
 for wi=1:numel(starts)
@@ -107,25 +137,57 @@ for wi=1:numel(starts)
     end
     valid=baseValid&isfinite(S)&ns==width;
     M=100*(S-B)./(100+B); M(~valid)=0;
-    score=boxSum(M,n)/(n*n); count=boxSum(double(valid),n);
-    score(count~=n*n)=-Inf;
+    if whole
+        score=-Inf;if all(valid(support)),score=mean(M(support));end
+    else
+        score=boxSum(M,[ny nx])/nPixels;count=boxSum(double(valid),[ny nx]);
+        score(count~=nPixels|~regionEligible)=-Inf;
+    end
     [v,ii]=max(score(:));
     if v>value, value=v; index=ii; bestStart=first; end
     if isfield(cfg,'progress'), cfg.progress(wi/numel(starts)); end
 end
 assert(isfinite(value),'deConfUSIon:SearchCoverage','No complete ROI fits inside the mask with finite data throughout baseline and an eligible signal window.');
-[y,x]=ind2sub(size(score),index); s=bestStart+(0:width-1);
+s=bestStart+(0:width-1);
+if whole
+ [yy,xx]=find(support);bounds=[min(xx) max(xx) min(yy) max(yy)];
+else
+ [y,x]=ind2sub(size(score),index);bounds=[x x+nx-1 y y+ny-1];
+end
 selectedSec=cfg.signalSec; if duration>0, selectedSec=t(s([1 end])); end
-R=struct('boundsXY',[x x+n-1 y y+n-1],'slice',z,'size',n,'meanPSC',value, ...
-    'baselineSec',cfg.baselineSec,'signalSec',selectedSec,'method','maximum mean rebased PSC; full square support', ...
+R=struct('boundsXY',bounds,'slice',z,'meanPSC',value, ...
+    'baselineSec',cfg.baselineSec,'signalSec',selectedSec,'method','maximum mean rebased PSC; fixed spatial support', ...
     'selection','exploratory: ROI and optional plateau selected on the measured response');
 R.searchIntervalSec=cfg.signalSec; R.plateauSec=duration; R.windowsTested=numel(starts);
 R.baselineFrames=b; R.signalFrames=s;
+if external,R.baselineMode='external';R.baselineReference=cfg.baselineReference;end
 R.baselineSampleSec=t(b); R.signalSampleSec=t(s);
+if external
+    r=cfg.baselineReference;R.baselineSec=r.windowSec;R.baselineFrames=r.frames(1):r.frames(2);
+    R.baselineSampleSec=(R.baselineFrames-1)*r.TR;
+end
 R.actualWindowSpanSec=t(s(end))-t(s(1));
+R.roiMode='rectangle';R.pixelCount=nPixels;
+if whole
+ R.roiMode='region';R.size=[bounds(2)-bounds(1)+1 bounds(4)-bounds(3)+1];R.sizeXY=R.size;
+ R.roiMaskIndices=find(support)';R.roiMaskSizeYX=sz(1:2);
+ R.atlasCoverageFraction=1;R.minimumAtlasCoverageFraction=1;
+ R.selectedRegionVoxelCount=nnz(cfg.atlasRegionMask);R.selectedRegionIncludedFraction=nPixels/max(1,R.selectedRegionVoxelCount);
+ R.sizeMode='region';R.requestedSizeUm=[NaN NaN];R.sizeXYUm=[NaN NaN];
+ if numel(spacing)>=2&&all(isfinite(spacing(1:2))&spacing(1:2)>0),R.sizeXYUm=R.sizeXY.*spacing([2 1]);end
+else
+ R.size=geometry.sizeXY;if isfield(cfg,'size'),R.size=cfg.size;end
+ R.sizeXY=geometry.sizeXY;R.sizeMode=geometry.sizeMode;
+ R.requestedSizeUm=geometry.requestedSizeUm;R.sizeXYUm=geometry.sizeXYUm;
+ if ~isempty(regionCounts),R.atlasCoverageFraction=regionCounts(index)/nPixels;R.minimumAtlasCoverageFraction=coverage;end
+end
+R.spacingUm=spacing;
 R.windowRule='SCM nearest-frame endpoints, inclusive; no interpolated samples';
 if duration>0
     R.windowRule='Frame-aligned sliding windows entirely within search range; span rounded up to at least requested duration; endpoints inclusive';
+    if abs(duration-diff(cfg.signalSec))<=max(1e-9,TR*1e-6)
+        R.windowRule='Plateau equals search duration: all acquired samples inside requested interval; nominal boundaries need not coincide with samples';
+    end
 end
     function [v,good]=frame(ii)
         if ndims(A)==3, v=double(A(:,:,ii)); else, v=double(A(:,:,z,ii)); end
@@ -152,6 +214,7 @@ ends=max(1,min(T,round(w/TR)+1)); idx=ends(1):ends(2);
 end
 
 function S=boxSum(A,n)
+ny=n(1);nx=n(2);
 C=zeros(size(A)+1); C(2:end,2:end)=cumsum(cumsum(A,1),2);
-S=C(n+1:end,n+1:end)-C(1:end-n,n+1:end)-C(n+1:end,1:end-n)+C(1:end-n,1:end-n);
+S=C(ny+1:end,nx+1:end)-C(1:end-ny,nx+1:end)-C(ny+1:end,1:end-nx)+C(1:end-ny,1:end-nx);
 end

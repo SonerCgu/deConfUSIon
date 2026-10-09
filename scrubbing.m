@@ -8,6 +8,7 @@ function [out, stats] = scrubbing(data, TR, saveRoot, tag, cfgIn)
 % MATLAB 2017b compatible
 % ==========================================================
 
+deConfUSIon_setup();
 if nargin < 4 || isempty(tag)
     tag = datestr(now,'yyyymmdd_HHMMSS');
 end

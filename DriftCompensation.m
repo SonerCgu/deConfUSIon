@@ -9,6 +9,7 @@ function varargout = DriftCompensation(action,varargin)
 % projects; new code should use this short, discoverable module entry point.
 % Preserve the historical numeric-first call signature while exposing the
 % shorter named actions for new code.
+deConfUSIon_setup();
 if nargin==0
     action='run';
 elseif ~(ischar(action) || isstring(action))

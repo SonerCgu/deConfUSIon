@@ -53,12 +53,15 @@ classdef registration_ccf < handle
         funcFiles = {}
         funcLabels = {}
 
-        overlayOpacity = 1.00
-        overlayCmapName = 'red'
+        overlayOpacity = 0.85
+        overlayCmapName = 'hot'
         overlayInvert = false
         overlayWinMin = 0.00
         overlayWinMax = 1.00
+        overlayGain = 1
+        overlayGamma = 1
         showAtlasLines = true
+        showAtlasUnderlay = true
 
         overlayCoronalOnly = false
         atlasStepCor = 1
@@ -74,7 +77,20 @@ classdef registration_ccf < handle
         reviewBundle = []
         reviewMatrix = []
         reviewTarget = ''
+        snapReference = 'vascular'
         lastDragPreview = -inf
+        lastLinesKey = []
+        displayPreset = 'Mask Editor standard'
+        regionMode = 'Detailed'
+        groupedRegions = []
+        groupedRegionInfo = []
+        savedDisplayData = []
+        anchorDraft = []
+        previewTimer = []
+        cutCache = []
+        previewSampler = []
+        atlasCutCache = []
+        livePreview = false
     end
 
     properties (Access=protected)
@@ -111,6 +127,8 @@ classdef registration_ccf < handle
         uiOpacity
         uiWinMin
         uiWinMax
+        uiOverlayGain
+        uiOverlayGamma
         uiInvert
         uiCmapPopup
         uiOverlayStatus
@@ -118,6 +136,8 @@ classdef registration_ccf < handle
         uiScaleCorX
         uiScaleSagY
         uiScaleAxiZ
+        uiScaleStep
+        uiLivePreview
         uiAuto
         uiUndoAuto
         uiApply
@@ -141,7 +161,7 @@ classdef registration_ccf < handle
 
     methods
         function R = registration_ccf(atlas, scananatomy, varargin)
-
+            deConfUSIon_setup();
             initialTransf = [];
             logFcn = [];
             saveDir = '';
@@ -163,6 +183,7 @@ classdef registration_ccf < handle
             if ~isempty(initialTransf) && isstruct(initialTransf) && isfield(initialTransf,'M')
                 R.T0 = initialTransf.M;
                 if isfield(initialTransf,'autoRegistration'), R.autoReport=initialTransf.autoRegistration; end
+                if isfield(initialTransf,'regionGrouping'),R.regionMode=initialTransf.regionGrouping;end
             else
                 R.T0 = eye(4);
             end
@@ -171,10 +192,10 @@ classdef registration_ccf < handle
                 R.logFcn = logFcn;
             end
 
-            if ~isempty(saveDir) && ischar(saveDir) && exist(saveDir,'dir')
-                R.saveDir = saveDir;
+            if ~isempty(saveDir) && (ischar(saveDir)||isstring(saveDir))
+                R.saveDir = fusiAnalysisOutputPath(saveDir);
             else
-                R.saveDir = pwd;
+                R.saveDir = fusiAnalysisOutputPath(pwd);
             end
 
             if ~isempty(funcCandidates) && isstruct(funcCandidates)
@@ -189,6 +210,7 @@ classdef registration_ccf < handle
                 R.funcLabels = R.funcFiles;
             end
 
+            atlas=deConfUSIon_apply_rgb2acr(atlas);
             R.atlas = atlas;
             if isfield(scananatomy,'Geometry'), R.scanGeometry=scananatomy.Geometry; end
             R.log(sprintf('[Atlas GUI] Save directory: %s', R.saveDir));
@@ -222,7 +244,12 @@ classdef registration_ccf < handle
             % Normalize anatomy overlay and bring it into atlas voxel/orientation space
             tmp = AtlasRegistration('prepare',scananatomy,atlas);
             R.RegistrationData=single(tmp.Data);
-            R.ms2 = mapscan(equalizeImages(double(tmp.Data)), gray(256), 'fix');
+            if isfield(scananatomy,'DisplayData') && ~isempty(scananatomy.DisplayData)
+                shown=scananatomy;shown.Data=shown.DisplayData;shown=AtlasRegistration('prepare',shown,atlas);
+                R.savedDisplayData=min(1,max(0,single(shown.Data)));R.displayPreset='Saved Mask Editor';
+            end
+            R.ms2 = mapscan(fusiRegistrationDisplayVolume(tmp.Data,R.displayPreset), gray(256), 'fix');
+            if ~isempty(R.savedDisplayData),R.ms2.setData(R.savedDisplayData);end
             R.ms2.caxis = [0 1];
 
             R.mapHistology = mapscan(atlas.Histology, gray(256), 'index');
@@ -238,10 +265,13 @@ classdef registration_ccf < handle
 
             R.buildGUI();
 
-            R.DataNoScale = R.ms2.D;
+            R.DataNoScale = R.ms2.D;R.previewSampler=griddedInterpolant(single(R.DataNoScale),'linear','none');
 
             R.restartMove();
             R.apply();
+            if ~strcmp(R.regionMode,'Detailed')
+                selector=findobj(R.H.figure1,'Tag','AtlasRegionGrouping');selector.Value=2;R.onRegionGrouping(selector);
+            end
             R.refresh();
         end
 
@@ -267,7 +297,9 @@ classdef registration_ccf < handle
                 'Position',[x0 y0 W Hh]);
 
             R.H.figure1 = f;
+            setappdata(f,'AtlasRegistrationController',R);
             set(f,'CloseRequestFcn',@(src,evt)R.onClose());
+            set(f,'DeleteFcn',@(~,~)R.cancelPreview());
             set(f,'WindowScrollWheelFcn',@(src,evt)R.onScroll(evt));
 
             % open maximised: the six axes are unusable in a small window
@@ -376,7 +408,7 @@ classdef registration_ccf < handle
             % Overlay display panel
             R.uiAuto = uicontrol(ctrlPanel,'Style','pushbutton','Units','normalized', ...
                 'Position',[0.05 0.91 0.57 0.065], ...
-                'String','Automatic 3D registration', ...
+                'String','1. Auto: fit anatomy', ...
                 'Tag','Automatic3DRegistration', ...
                 'BackgroundColor',[0.16 0.60 0.34],'ForegroundColor','w', ...
                 'FontName','Arial','FontSize',13,'FontWeight','bold', ...
@@ -395,56 +427,56 @@ classdef registration_ccf < handle
                 'FontWeight','bold');
 
             uicontrol(ovPanel,'Style','text','Units','normalized', ...
-                'Position',[0.06 0.79 0.26 0.12], ...
+                'Position',[0.06 0.83 0.26 0.12], ...
                 'String','Anatomy opacity', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
             R.uiOpacity = uicontrol(ovPanel,'Style','slider','Units','normalized', ...
                 'Tag','AnatomyOpacity', ...
-                'Position',[0.36 0.82 0.58 0.10], ...
+                'Position',[0.36 0.85 0.58 0.10], ...
                 'Min',0,'Max',1,'Value',R.overlayOpacity, ...
                 'BackgroundColor',panelBG2, ...
                 'Callback',@(src,evt)R.onOverlayChanged());
 
             uicontrol(ovPanel,'Style','text','Units','normalized', ...
-                'Position',[0.06 0.57 0.26 0.12], ...
-                'String','Window min', ...
+                'Position',[0.06 0.64 0.26 0.12], ...
+                'String','Win min', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
             R.uiWinMin = uicontrol(ovPanel,'Style','edit','Units','normalized', ...
-                'Position',[0.36 0.58 0.20 0.12], ...
+                'Tag','AnatomyWindowMin','Position',[0.36 0.65 0.20 0.12], ...
                 'String',num2str(R.overlayWinMin), ...
                 'BackgroundColor',[0.12 0.12 0.12], ...
                 'ForegroundColor',fg, ...
                 'Callback',@(src,evt)R.onOverlayChanged());
 
             uicontrol(ovPanel,'Style','text','Units','normalized', ...
-                'Position',[0.60 0.57 0.20 0.12], ...
-                'String','Window max', ...
+                'Position',[0.60 0.64 0.20 0.12], ...
+                'String','Win max', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
             R.uiWinMax = uicontrol(ovPanel,'Style','edit','Units','normalized', ...
-                'Position',[0.80 0.58 0.14 0.12], ...
+                'Tag','AnatomyWindowMax','Position',[0.80 0.65 0.14 0.12], ...
                 'String',num2str(R.overlayWinMax), ...
                 'BackgroundColor',[0.12 0.12 0.12], ...
                 'ForegroundColor',fg, ...
                 'Callback',@(src,evt)R.onOverlayChanged());
 
             uicontrol(ovPanel,'Style','text','Units','normalized', ...
-                'Position',[0.06 0.34 0.26 0.12], ...
+                'Position',[0.06 0.26 0.26 0.12], ...
                 'String','Colormap', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
-            cmapList = {'red','gray','bone','hot','copper','parula','jet'};
+            cmapList = {'cyan','red','gray','bone','hot','copper','parula','jet'};
             defaultIdx = find(strcmpi(cmapList, R.overlayCmapName), 1);
             if isempty(defaultIdx), defaultIdx = 1; end
 
             R.uiCmapPopup = uicontrol(ovPanel,'Style','popupmenu','Units','normalized', ...
-                'Position',[0.36 0.35 0.32 0.14], ...
+                'Position',[0.36 0.27 0.32 0.14], ...
                 'String',cmapList, ...
                 'Value',defaultIdx, ...
                 'BackgroundColor',[0.15 0.15 0.15], ...
@@ -452,7 +484,7 @@ classdef registration_ccf < handle
                 'Callback',@(src,evt)R.onOverlayChanged());
 
             R.uiInvert = uicontrol(ovPanel,'Style','checkbox','Units','normalized', ...
-                'Position',[0.72 0.34 0.22 0.14], ...
+                'Position',[0.72 0.26 0.22 0.14], ...
                 'String','Invert', ...
                 'Value',0, ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
@@ -463,55 +495,104 @@ classdef registration_ccf < handle
                 'String','', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',[0.7 0.95 0.7], ...
                 'HorizontalAlignment','left','FontSize',9);
+            set(R.uiOverlayStatus,'Visible','off');
+            uicontrol(ovPanel,'Style','text','Units','normalized','Position',[.06 .45 .26 .12], ...
+                'String','Vessel gain','BackgroundColor',panelBG2,'ForegroundColor',fg, ...
+                'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
+            R.uiOverlayGain=uicontrol(ovPanel,'Style','edit','Units','normalized','Position',[.36 .46 .20 .12], ...
+                'String','1','Tag','AnatomyVesselGain','BackgroundColor',[.12 .12 .12],'ForegroundColor',fg, ...
+                'FontSize',11,'TooltipString','Display only. 1 = Mask Editor appearance; try 2-5 for stronger vessels. Any positive gain is allowed.', ...
+                'Callback',@(~,~)R.onOverlayChanged());
+            uicontrol(ovPanel,'Style','text','Units','normalized','Position',[.60 .45 .20 .12], ...
+                'String','Gamma','BackgroundColor',panelBG2,'ForegroundColor',fg, ...
+                'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
+            R.uiOverlayGamma=uicontrol(ovPanel,'Style','edit','Units','normalized','Position',[.80 .46 .14 .12], ...
+                'String','1','Tag','AnatomyGamma','BackgroundColor',[.12 .12 .12],'ForegroundColor',fg, ...
+                'FontSize',11,'TooltipString','Display only. Greater than 1 reveals faint vessels; below 1 suppresses faint background.', ...
+                'Callback',@(~,~)R.onOverlayChanged());
+            uicontrol(ovPanel,'Style','popupmenu','Units','normalized','Position',[.06 .04 .88 .16], ...
+                'String',{'Saved Mask Editor','Mask Editor standard','Vessel detail','Linear power','Log Doppler'}, ...
+                'Value',find(strcmp({'Saved Mask Editor','Mask Editor standard','Vessel detail','Linear power','Log Doppler'},R.displayPreset)), ...
+                'Tag','AtlasDisplayPreset','BackgroundColor',[.12 .12 .12],'ForegroundColor','w', ...
+                'FontSize',12,'TooltipString','Display contrast only. Vessel detail enhances coronal anatomy; linear power preserves intensity relationships.', ...
+                'Callback',@(src,~)R.onDisplayPreset(src));
 
             % Transform panel
             trPanel = uipanel(ctrlPanel, ...
                 'Units','normalized', ...
-                'Position',[0.05 0.47 0.90 0.18], ...
+                'Position',[0.05 0.44 0.90 0.19], ...
                 'BackgroundColor',panelBG2, ...
                 'ForegroundColor',fg, ...
-                'Title','Transform', ...
+                'Title','Resize anatomy (1 = unchanged)', ...
                 'FontSize',11, ...
                 'FontWeight','bold');
 
             uicontrol(trPanel,'Style','text','Units','normalized', ...
-                'Position',[0.05 0.66 0.36 0.16], ...
-                'String','Depth scale', ...
+                'Position',[0.05 0.59 0.30 0.16], ...
+                'String','DV / depth (Y)', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
             R.uiScaleCorX = uicontrol(trPanel,'Style','edit','Units','normalized', ...
-                'Position',[0.30 0.66 0.16 0.18], ...
+                'Position',[0.37 0.59 0.19 0.16], ...
                 'String','1', ...
                 'BackgroundColor',[0.12 0.12 0.12], ...
-                'ForegroundColor',fg);
+                'ForegroundColor',fg,'FontSize',12,'Tag','AtlasScaleDV', ...
+                'TooltipString','Resize the anatomy along depth (DV). 1 = unchanged; 1.1 = 10% larger. Applied immediately.', ...
+                'Callback',@(src,evt)R.onApply());
 
             uicontrol(trPanel,'Style','text','Units','normalized', ...
-                'Position',[0.05 0.40 0.36 0.16], ...
-                'String','AP scale', ...
+                'Position',[0.05 0.39 0.30 0.16], ...
+                'String','AP / length (Z)', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
             R.uiScaleSagY = uicontrol(trPanel,'Style','edit','Units','normalized', ...
-                'Position',[0.30 0.40 0.16 0.18], ...
+                'Position',[0.37 0.39 0.19 0.16], ...
                 'String','1', ...
                 'BackgroundColor',[0.12 0.12 0.12], ...
-                'ForegroundColor',fg);
+                'ForegroundColor',fg,'FontSize',12,'Tag','AtlasScaleAP', ...
+                'TooltipString','Resize anterior/posterior length. 1 = unchanged; applied immediately.', ...
+                'Callback',@(src,evt)R.onApply());
 
             uicontrol(trPanel,'Style','text','Units','normalized', ...
-                'Position',[0.05 0.14 0.36 0.16], ...
-                'String','LR scale', ...
+                'Position',[0.05 0.19 0.30 0.16], ...
+                'String','LR / width (X)', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
             R.uiScaleAxiZ = uicontrol(trPanel,'Style','edit','Units','normalized', ...
-                'Position',[0.30 0.14 0.16 0.18], ...
+                'Position',[0.37 0.19 0.19 0.16], ...
                 'String','1', ...
                 'BackgroundColor',[0.12 0.12 0.12], ...
-                'ForegroundColor',fg);
+                'ForegroundColor',fg,'FontSize',12,'Tag','AtlasScaleLR', ...
+                'TooltipString','Resize left/right width. 1 = unchanged; applied immediately.', ...
+                'Callback',@(src,evt)R.onApply());
+
+            uicontrol(trPanel,'Style','text','Units','normalized','Position',[.05 .80 .30 .14], ...
+                'String','Button step','BackgroundColor',panelBG2,'ForegroundColor',fg, ...
+                'HorizontalAlignment','left','FontSize',12);
+            R.uiScaleStep=uicontrol(trPanel,'Style','popupmenu','Units','normalized', ...
+                'Position',[.37 .80 .55 .15],'String',{'0.01 (1%)','0.05 (5%)','0.10 (10%)'}, ...
+                'Value',1,'Tag','AtlasScaleStep','BackgroundColor',[.12 .12 .12], ...
+                'ForegroundColor',fg,'FontSize',12, ...
+                'TooltipString','Added to or subtracted from the size factor by each -/+ click.');
+            axesNames={'DV','AP','LR'};rowY=[.59 .39 .19];
+            for axisIndex=1:3
+                for direction=[-1 1]
+                    x=.60;if direction>0,x=.78;end
+                    symbol='-';suffix='Minus';if direction>0,symbol='+';suffix='Plus';end
+                    uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
+                        'Position',[x rowY(axisIndex) .14 .16],'String',symbol, ...
+                        'Tag',['AtlasScale' axesNames{axisIndex} suffix], ...
+                        'BackgroundColor',[.18 .35 .25],'ForegroundColor','w','FontSize',14, ...
+                        'FontWeight','bold','TooltipString','Resize this direction and preview immediately.', ...
+                        'Callback',@(~,~)R.onScaleNudge(axisIndex,direction));
+                end
+            end
 
             R.uiUndoAuto = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
-                'Position',[0.56 0.68 0.37 0.18], ...
+                'Position',[0.05 0.01 0.27 0.14], ...
                 'String','Undo auto','Enable','off', ...
                 'BackgroundColor',[0.82 0.60 0.18], ...
                 'ForegroundColor','w', ...
@@ -519,16 +600,16 @@ classdef registration_ccf < handle
                 'Callback',@(src,evt)R.onUndoAuto());
 
             R.uiApply = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
-                'Position',[0.56 0.40 0.37 0.18], ...
-                'String','1. Apply', ...
+                'Position',[0.36 0.01 0.20 0.14], ...
+                'String','Apply', ...
                 'BackgroundColor',[0.20 0.45 0.95], ...
                 'ForegroundColor','w', ...
                 'FontWeight','bold', ...
                 'Callback',@(src,evt)R.onApply());
 
             R.uiSave = uicontrol(trPanel,'Style','pushbutton','Units','normalized', ...
-                'Position',[0.56 0.12 0.37 0.18], ...
-                'String','Save reviewed', ...
+                'Position',[0.60 0.01 0.35 0.14], ...
+                'String','Save transform', ...
                 'BackgroundColor',[0.15 0.70 0.55], ...
                 'ForegroundColor','w', ...
                 'FontWeight','bold', ...
@@ -540,12 +621,12 @@ classdef registration_ccf < handle
                 'BackgroundColor',panelBG2, ...
                 'ForegroundColor',[0.7 0.95 0.7], ...
                 'HorizontalAlignment','left', ...
-                'FontSize',9);
+                'FontSize',11);
 
             % Functional panel
             funcPanel = uipanel(ctrlPanel, ...
                 'Units','normalized', ...
-                'Position',[0.05 0.28 0.90 0.15], ...
+                'Position',[0.05 0.25 0.90 0.12], ...
                 'BackgroundColor',panelBG2, ...
                 'ForegroundColor',fg, ...
                 'Title','Functional preview/register', ...
@@ -595,6 +676,7 @@ classdef registration_ccf < handle
                 'ForegroundColor',[0.7 0.95 0.7], ...
                 'HorizontalAlignment','left', ...
                 'FontSize',9);
+            if isempty(R.funcFiles),set(funcPanel,'Visible','off');end
 
             % Plane and atlas panel
             miscPanel = uipanel(ctrlPanel, ...
@@ -602,13 +684,13 @@ classdef registration_ccf < handle
                 'Position',[0.05 0.10 0.90 0.14], ...
                 'BackgroundColor',panelBG2, ...
                 'ForegroundColor',fg, ...
-                'Title','Planes and atlas', ...
+                'Title','Atlas display', ...
                 'FontSize',11, ...
                 'FontWeight','bold');
 
             uicontrol(miscPanel,'Style','text','Units','normalized', ...
                 'Position',[0.03 0.58 0.16 0.18], ...
-                'String','Cor', ...
+                'String','', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
@@ -620,7 +702,7 @@ classdef registration_ccf < handle
 
             uicontrol(miscPanel,'Style','text','Units','normalized', ...
                 'Position',[0.30 0.58 0.16 0.18], ...
-                'String','Sag', ...
+                'String','', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
@@ -632,7 +714,7 @@ classdef registration_ccf < handle
 
             uicontrol(miscPanel,'Style','text','Units','normalized', ...
                 'Position',[0.56 0.58 0.16 0.18], ...
-                'String','Axi', ...
+                'String','', ...
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'HorizontalAlignment','left','FontSize',10,'FontWeight','bold');
 
@@ -642,6 +724,18 @@ classdef registration_ccf < handle
                 'BackgroundColor',[0.12 0.12 0.12],'ForegroundColor',fg, ...
                 'Callback',@(src,evt)R.onPlaneEdited());
 
+            slicePanel=uipanel(f,'Units','normalized','Position',[.03 .895 .63 .035], ...
+                'BackgroundColor',panelBG2,'ForegroundColor',fg,'BorderType','none','Tag','AtlasSliceControls');
+            editors=[R.uiEditCor R.uiEditAxi R.uiEditSag];
+            names={'Coronal / AP','Axial / depth','Sagittal / LR'};
+            for sliceControl=1:3
+                x=(sliceControl-1)/3;
+                uicontrol(slicePanel,'Style','text','Units','normalized','Position',[x .05 .22 .8], ...
+                    'String',names{sliceControl},'BackgroundColor',panelBG2,'ForegroundColor',fg,'FontSize',12);
+                set(editors(sliceControl),'Parent',slicePanel,'Position',[x+.22 .08 .10 .84], ...
+                    'FontSize',13,'Tag',['AtlasSlice' num2str(sliceControl)], ...
+                    'TooltipString','Enter atlas slice index; scroll over the corresponding image to browse.');
+            end
             R.uiShowLines = uicontrol(miscPanel,'Style','checkbox','Units','normalized', ...
                 'Position',[0.03 0.28 0.30 0.18], ...
                 'String','Atlas lines', ...
@@ -649,6 +743,16 @@ classdef registration_ccf < handle
                 'BackgroundColor',panelBG2,'ForegroundColor',fg, ...
                 'Callback',@(src,evt)R.onShowLines());
 
+            uicontrol(miscPanel,'Style','checkbox','Units','normalized', ...
+                'Position',[.03 .04 .33 .18],'String','Atlas underlay','Value',1, ...
+                'Tag','AtlasShowUnderlay','BackgroundColor',panelBG2,'ForegroundColor',fg,'FontSize',11, ...
+                'TooltipString','Show atlas anatomy beneath the moving overlay. Off: inspect the overlay alone on black; the fixed reference images and transform are unchanged.', ...
+                'Callback',@(src,~)R.onShowAtlasUnderlay(src));
+
+            uicontrol(miscPanel,'Style','popupmenu','Units','normalized','Position',[.03 .63 .92 .25], ...
+                'String',{'Detailed regions','Parent regions (merge CPu / layers)'},'Value',1, ...
+                'Tag','AtlasRegionGrouping','BackgroundColor',panelBG2,'ForegroundColor',fg, ...
+                'FontSize',12,'Callback',@(src,~)R.onRegionGrouping(src));
             atlasModeStrings = {'vascular','histology','regions'};
             R.uiAtlasGroup = uibuttongroup(miscPanel, ...
                 'Units','normalized', ...
@@ -695,7 +799,42 @@ classdef registration_ccf < handle
                 'FontWeight','bold', ...
                 'Callback',@(src,evt)R.onClose());
 
-            % Create images
+            semi=uicontrol(ctrlPanel,'Style','pushbutton','Units','normalized', ...
+                'Position',[.05 .865 .58 .045],'String','2. Match three reference slices', ...
+                'Tag','AtlasSemiAutomatic','BackgroundColor',[.16 .6 .34],'ForegroundColor','w', ...
+                'FontSize',12,'FontWeight','bold','Callback',@(~,~)R.onSemiAutomatic());
+            uicontrol(ctrlPanel,'Style','popupmenu','Units','normalized','Position',[.65 .865 .30 .045], ...
+                'String',{'SNAP: Vascular','SNAP: Histology'},'Tag','AtlasSnapReference','Value',1, ...
+                'BackgroundColor',[.15 .15 .15],'ForegroundColor','w','FontSize',12, ...
+                'TooltipString','Fixed atlas underlay in ITK-SNAP review. This does not change your transform.', ...
+                'Callback',@(src,~)R.onSnapReference(src));
+            % Top actions have their own space above the overlay panel.
+            set(R.uiAuto,'Position',[.05 .925 .60 .06]);
+            snapButton=findobj(ctrlPanel,'Style','pushbutton','String','ITK-SNAP review');
+            set(snapButton,'Position',[.69 .925 .26 .06]);
+            set(ovPanel,'Position',[.05 .655 .90 .205]);
+            uicontrol(ctrlPanel,'Style','pushbutton','Units','normalized','Position',[.05 .805 .58 .05], ...
+                'String','SAVE TRANSFORM NOW','Tag','AtlasSaveTransformAs', ...
+                'BackgroundColor',[.15 .70 .35],'ForegroundColor','w','FontWeight','bold','FontSize',13, ...
+                'Callback',@(~,~)R.onSave());
+            menu=uicontextmenu(R.H.figure1);uimenu(menu,'Label','Save as...','Callback',@(~,~)R.onSaveAs());
+            set(findobj(ctrlPanel,'Tag','AtlasSaveTransformAs'),'UIContextMenu',menu,'TooltipString','Save a timestamped reviewed transform immediately. Right-click for Save as.');
+            uicontrol(ctrlPanel,'Style','pushbutton','Units','normalized','Position',[.65 .805 .30 .05], ...
+                'String','Import SNAP edit','Tag','AtlasImportSnap','BackgroundColor',[.16 .42 .75], ...
+                'ForegroundColor','w','FontWeight','bold','Callback',@(~,~)R.onImportSnap());
+            set(ovPanel,'Position',[.05 .635 .90 .165]);
+            set([R.uiApply R.uiSave],'Visible','off'); % Size edits apply immediately; one clear Save button above.
+            R.uiLivePreview=uicontrol(trPanel,'Style','checkbox','Units','normalized', ...
+                'Position',[.36 .01 .60 .14],'String','Live 3D preview','Value',0,'Tag','AtlasLive3DPreview', ...
+                'BackgroundColor',panelBG2,'ForegroundColor','w','FontSize',12, ...
+                'TooltipString','Optional companion-model updates after manual edits. Leave off for responsive alignment; saving or closing updates the final model.', ...
+                'Callback',@(src,~)R.onLivePreview(src));
+            uicontrol(ctrlPanel,'Style','pushbutton','Units','normalized','Position',[.05 .38 .90 .05], ...
+                'String','3. Refine matched alignment','Tag','AtlasRefineCurrent', ...
+                'BackgroundColor',[.16 .60 .34],'ForegroundColor','w','FontWeight','bold', ...
+                'TooltipString','Keep your position and manual sizing as the starting point; refine the full 3D fit within acquired coverage.', ...
+                'Callback',@(~,~)R.onAutoRegister([],true));
+                        % Create images
             R.im1 = image(zeros(R.ms1.ny, R.ms1.nz, 3), 'Parent', R.H.axes1);
             R.im2 = image(zeros(R.ms1.nx, R.ms1.nz, 3), 'Parent', R.H.axes2);
             R.im3 = image(zeros(R.ms1.ny, R.ms1.nx, 3), 'Parent', R.H.axes3);
@@ -704,7 +843,7 @@ classdef registration_ccf < handle
             R.im4Under = image(zeros(R.ms1.ny, R.ms1.nz, 3), 'Parent', R.H.axes4);
             set(R.im4Under,'HitTest','off','Tag','FixedAtlas');
             hold(R.H.axes4,'on');
-            R.im4 = imagesc(zeros(R.ms2.ny, R.ms2.nz), 'Parent', R.H.axes4);
+            R.im4 = imagesc(zeros(R.ms1.ny, R.ms1.nz), 'Parent', R.H.axes4);
             set(R.im4,'AlphaData',R.overlayOpacity,'HitTest','on','Tag','MovingAnatomy');
             hold(R.H.axes4,'off');
             uistack(R.im4,'top');
@@ -713,7 +852,7 @@ classdef registration_ccf < handle
             R.im5Under = image(zeros(R.ms1.nx, R.ms1.nz, 3), 'Parent', R.H.axes5);
             set(R.im5Under,'HitTest','off');
             hold(R.H.axes5,'on');
-            R.im5 = imagesc(zeros(R.ms2.nx, R.ms2.nz), 'Parent', R.H.axes5);
+            R.im5 = imagesc(zeros(R.ms1.nx, R.ms1.nz), 'Parent', R.H.axes5);
             set(R.im5,'AlphaData',R.overlayOpacity,'HitTest','on');
             hold(R.H.axes5,'off');
             uistack(R.im5,'top');
@@ -722,7 +861,7 @@ classdef registration_ccf < handle
             R.im6Under = image(zeros(R.ms1.ny, R.ms1.nx, 3), 'Parent', R.H.axes6);
             set(R.im6Under,'HitTest','off');
             hold(R.H.axes6,'on');
-            R.im6 = imagesc(zeros(R.ms2.ny, R.ms2.nx), 'Parent', R.H.axes6);
+            R.im6 = imagesc(zeros(R.ms1.ny, R.ms1.nx), 'Parent', R.H.axes6);
             set(R.im6,'AlphaData',R.overlayOpacity,'HitTest','on');
             hold(R.H.axes6,'off');
             uistack(R.im6,'top');
@@ -797,10 +936,8 @@ classdef registration_ccf < handle
         end
 
         function TransfNow = getCurrentTransform(R)
-            TS = eye(4);
-            TS(1,1) = R.scale(1);
-            TS(2,2) = R.scale(2);
-            TS(3,3) = R.scale(3);
+            center=[(size(R.DataNoScale,[2 1 3])+1)/2 1]*R.T0;
+            TS=fusiAtlasSizeMatrix(R.scale,center(1:3));
 
             tot = build3DrotationMatrix(R);
 
@@ -808,27 +945,30 @@ classdef registration_ccf < handle
             TransfNow.M = R.T0 * TS * R.Trot * tot;
             TransfNow.size = size(R.ms1.D);
             TransfNow.scanGeometry = R.scanGeometry;
+            TransfNow.regionGrouping=R.regionMode;
             if ~isempty(TransfNow.scanGeometry)
                 TransfNow.scanGeometry.atlasVoxelSizeUm=double(R.atlas.VoxelSize(:)');
             end
             TransfNow.autoRegistration = R.autoReport;
+            if isfield(R.atlas,'deConfUSIon') && isfield(R.atlas.deConfUSIon,'source_atlas_path')
+                TransfNow.atlasSource=R.atlas.deConfUSIon.source_atlas_path;
+            end
+            TransfNow.atlasVoxelSizeUm=double(R.atlas.VoxelSize(:)');
+            TransfNow.atlasArrayOrder='AP-DV-LR';
         end
 
         function apply(R)
             tot = build3DrotationMatrix(R);
             R.Trot = R.Trot * tot;
 
-            TS = eye(4);
-            TS(1,1) = R.scale(1);
-            TS(2,2) = R.scale(2);
-            TS(3,3) = R.scale(3);
+            center=[(size(R.DataNoScale,[2 1 3])+1)/2 1]*R.T0;
+            TS=fusiAtlasSizeMatrix(R.scale,center(1:3));
 
             R.TF = R.T0 * TS * R.Trot;
 
-            m = affine3d(R.TF);
-            ref = imref3d(size(R.ms1.D));
-
-            R.ms2.setData(imwarp(R.DataNoScale, m, 'OutputView', ref));
+            % Interactive review only needs three planes. Full-volume
+            % resampling belongs to functional export / the 3D model.
+            R.cutCache=[];
 
             safeResetMove(R.r1);
             safeResetMove(R.r2);
@@ -850,6 +990,9 @@ classdef registration_ccf < handle
             set(R.uiEditSag,'String',num2str(z0));
             set(R.uiEditAxi,'String',num2str(y0));
 
+            atlasChanged=isempty(R.atlasCutCache)||~isequal(R.atlasCutCache.map,R.ms1)|| ...
+                ~isequal(R.atlasCutCache.indices,[x0 y0 z0]);
+            if atlasChanged
             [aCor, aSag, aAxi] = R.ms1.cuts();
 
             set(R.im1,'CData',aCor);
@@ -860,15 +1003,21 @@ classdef registration_ccf < handle
             set(R.im5Under,'CData',aSag);
             set(R.im6Under,'CData',permute(aAxi,[2 1 3]));
 
-            oCor = squeeze(R.ms2.D(x0,:,:));
-            oSag = squeeze(R.ms2.D(:,y0,:));
-            oAxi = squeeze(R.ms2.D(:,:,z0))';
-
-            if R.overlayInvert
-                oCor = 1 - oCor;
-                oSag = 1 - oSag;
-                oAxi = 1 - oAxi;
+                R.atlasCutCache=struct('map',R.ms1,'indices',[x0 y0 z0]);
             end
+
+            indices=[x0 y0 z0];
+            if isempty(R.cutCache)
+                [cor,axi,sag]=AtlasRegistration('previewcuts',R.previewSampler,R.TF,size(R.ms1.D),indices);
+                R.cutCache=struct('indices',indices,'planes',{{cor,axi,sag}});
+            elseif ~isequal(R.cutCache.indices,indices)
+                requested=indices~=R.cutCache.indices;
+                [cor,axi,sag]=AtlasRegistration('previewcuts',R.previewSampler,R.TF,size(R.ms1.D),indices,requested);
+                newPlanes={cor,axi,sag};
+                for plane=find(requested),R.cutCache.planes{plane}=newPlanes{plane};end
+                R.cutCache.indices=indices;
+            end
+            raw=R.cutCache.planes;
 
             wmin = R.overlayWinMin;
             wmax = R.overlayWinMax;
@@ -876,9 +1025,10 @@ classdef registration_ccf < handle
                 wmax = wmin + 0.01;
             end
 
-            set(R.H.axes4,'CLim',[wmin wmax]);
-            set(R.H.axes5,'CLim',[wmin wmax]);
-            set(R.H.axes6,'CLim',[wmin wmax]);
+            [oCor,aCorOverlay]=fusiRegistrationOverlayAppearance(raw{1},[wmin wmax],R.overlayGain,R.overlayGamma,R.overlayOpacity,R.overlayInvert);
+            [oSag,aSagOverlay]=fusiRegistrationOverlayAppearance(raw{2},[wmin wmax],R.overlayGain,R.overlayGamma,R.overlayOpacity,R.overlayInvert);
+            [oAxi,aAxiOverlay]=fusiRegistrationOverlayAppearance(raw{3},[wmin wmax],R.overlayGain,R.overlayGamma,R.overlayOpacity,R.overlayInvert);
+            set([R.H.axes4 R.H.axes5 R.H.axes6],'CLim',[0 1]);
 
             if isempty(R.r1) || ~isvalidHandleObj(R.r1)
                 set(R.im4,'CData',oCor);
@@ -898,18 +1048,19 @@ classdef registration_ccf < handle
                 R.r3.setImageData(oAxi);
             end
 
-            set(R.im4,'Visible','on','AlphaData',R.overlayOpacity*single(squeeze(R.ms2.D(x0,:,:))>0));
+            set(R.im4,'Visible','on','AlphaData',aCorOverlay);
 
             if R.overlayCoronalOnly
                 set(R.im5,'Visible','off','AlphaData',0);
                 set(R.im6,'Visible','off','AlphaData',0);
             else
-                set(R.im5,'Visible','on','AlphaData',R.overlayOpacity*single(squeeze(R.ms2.D(:,y0,:))>0));
-                set(R.im6,'Visible','on','AlphaData',R.overlayOpacity*single(squeeze(R.ms2.D(:,:,z0))'>0));
+                set(R.im5,'Visible','on','AlphaData',aSagOverlay);
+                set(R.im6,'Visible','on','AlphaData',aAxiOverlay);
             end
 
-            set([R.im4Under R.im5Under R.im6Under],'AlphaData',1);
+            set([R.im4Under R.im5Under R.im6Under],'AlphaData',double(R.showAtlasUnderlay),'Tag','AtlasReferenceUnderlayImage');
             for imageHandle=[R.im4 R.im5 R.im6], uistack(imageHandle,'top'); end
+            if atlasChanged
             set(R.line1x,'XData',[1 R.ms1.nz],'YData',[y0 y0]);
             set(R.line1y,'XData',[z0 z0],'YData',[1 R.ms1.ny]);
 
@@ -928,17 +1079,36 @@ classdef registration_ccf < handle
             set(R.line6x,'XData',[1 R.ms1.nx],'YData',[y0 y0]);
             set(R.line6y,'XData',[x0 x0],'YData',[1 R.ms1.ny]);
 
-            safeDeleteGraphics(R.hlinesC);
-            safeDeleteGraphics(R.hlinesT);
-            safeDeleteGraphics(R.hlinesS);
-
-            if R.showAtlasLines
-                R.hlinesC = addLines(R.H.axes4, R.linmap.Cor, clampToNumel(R.linmap.Cor, x0));
-                R.hlinesT = addLines(R.H.axes5, R.linmap.Tra, clampToNumel(R.linmap.Tra, y0));
-                R.hlinesS = addLines(R.H.axes6, R.linmap.Sag, clampToNumel(R.linmap.Sag, z0));
             end
 
-            drawnow limitrate;
+            lineIndices=[x0 y0 z0];lineAxes=[R.H.axes4 R.H.axes5 R.H.axes6];
+            lineFields={'hlinesC','hlinesT','hlinesS'};lineMaps={R.linmap.Cor,R.linmap.Tra,R.linmap.Sag};
+            if ~iscell(R.lastLinesKey),R.lastLinesKey=cell(1,3);end
+            for plane=1:3
+                linesKey={lineIndices(plane),R.showAtlasLines,R.regionMode,R.showAtlasUnderlay};
+                if isequal(linesKey,R.lastLinesKey{plane}),continue;end
+                safeDeleteGraphics(R.(lineFields{plane}));R.(lineFields{plane})=gobjects(0);
+                if R.showAtlasLines && R.showAtlasUnderlay
+                    if strcmp(R.regionMode,'Detailed')
+                        R.(lineFields{plane})=addLines(lineAxes(plane),lineMaps{plane},clampToNumel(lineMaps{plane},lineIndices(plane)));
+                    else
+                        switch plane
+                            case 1,L=squeeze(R.groupedRegions(x0,:,:));
+                            case 2,L=squeeze(R.groupedRegions(:,y0,:));
+                            case 3,L=squeeze(R.groupedRegions(:,:,z0))';
+                        end
+                        R.(lineFields{plane})=fusiDrawRegionBoundaries(lineAxes(plane),L);
+                    end
+                end
+                R.lastLinesKey{plane}=linesKey;
+            end
+
+            drawnow limitrate nocallbacks;
+        end
+        function onShowAtlasUnderlay(R,src)
+            R.showAtlasUnderlay=logical(get(src,'Value'));
+            set([R.H.axes4 R.H.axes5 R.H.axes6],'Color','k');
+            R.refresh();
         end
 
         function onOverlayChanged(R)
@@ -956,7 +1126,7 @@ classdef registration_ccf < handle
                 wmax = R.overlayWinMax;
             end
 
-            wmin = max(0, min(1, wmin));
+            wmin = max(0, min(.99, wmin));
             wmax = max(0, min(1, wmax));
             if wmax <= wmin
                 wmax = min(1, wmin + 0.01);
@@ -966,6 +1136,11 @@ classdef registration_ccf < handle
             R.overlayWinMax = wmax;
             set(R.uiWinMin,'String',num2str(R.overlayWinMin));
             set(R.uiWinMax,'String',num2str(R.overlayWinMax));
+            gain=str2double(get(R.uiOverlayGain,'String'));gamma=str2double(get(R.uiOverlayGamma,'String'));
+            if isfinite(gain)&&gain>0,R.overlayGain=gain;end
+            if isfinite(gamma)&&gamma>0,R.overlayGamma=gamma;end
+            set(R.uiOverlayGain,'String',num2str(R.overlayGain));
+            set(R.uiOverlayGamma,'String',num2str(R.overlayGamma));
 
             R.overlayInvert = logical(get(R.uiInvert,'Value'));
 
@@ -981,13 +1156,27 @@ classdef registration_ccf < handle
             R.refresh();
 
             set(R.uiOverlayStatus,'String',sprintf( ...
-                'Opacity %.2f | Win [%.2f %.2f] | %s | Invert %d', ...
-                R.overlayOpacity, R.overlayWinMin, R.overlayWinMax, R.overlayCmapName, double(R.overlayInvert)));
+                'Opacity %.2f | Win [%.2f %.2f] | Gain %.2f | Gamma %.2f | %s', ...
+                R.overlayOpacity, R.overlayWinMin, R.overlayWinMax,R.overlayGain,R.overlayGamma,R.overlayCmapName));
+        end
+
+        function onDisplayPreset(R,src)
+            choices=get(src,'String');R.displayPreset=choices{get(src,'Value')};
+            if strcmp(R.displayPreset,'Saved Mask Editor')
+                if isempty(R.savedDisplayData),R.DataNoScale=fusiRegistrationDisplayVolume(R.RegistrationData,'Mask Editor standard');
+                else,R.DataNoScale=R.savedDisplayData;end
+            else
+                R.DataNoScale=fusiRegistrationDisplayVolume(R.RegistrationData,R.displayPreset);
+            end
+            R.previewSampler=griddedInterpolant(single(R.DataNoScale),'linear','none');
+            R.apply();R.refresh();
         end
 
         function applyOverlayColormap(R)
 
             switch lower(R.overlayCmapName)
+                case 'cyan'
+                    cmap = [zeros(256,1) linspace(.25,1,256)' linspace(.4,1,256)'];
                 case 'red'
                     cmap = [linspace(0,1,256)' zeros(256,1) zeros(256,1)];
                 otherwise
@@ -1024,6 +1213,15 @@ classdef registration_ccf < handle
             R.refresh();
         end
 
+        function onRegionGrouping(R,src)
+            wasRegions=isequal(R.ms1,R.mapRegions);
+            R.regionMode='Detailed';if get(src,'Value')==2,R.regionMode='Parent';end
+            [R.groupedRegions,R.groupedRegionInfo]=fusiAtlasRegionGrouping(R.atlas,R.regionMode);
+            R.mapRegions=mapscan(R.groupedRegions,R.groupedRegionInfo.rgb,'index');
+            if wasRegions,R.ms1=R.mapRegions;R.ms1.x0=R.ms2.x0;R.ms1.y0=R.ms2.y0;R.ms1.z0=R.ms2.z0;end
+            R.lastLinesKey=[];R.refresh();
+        end
+
         function onAtlasMode(R, tag)
             switch lower(tag)
                 case 'vascular'
@@ -1040,6 +1238,8 @@ classdef registration_ccf < handle
             R.ms1.y0 = R.ms2.y0;
             R.ms1.z0 = R.ms2.z0;
 
+            if any(strcmpi(tag,{'histology','vascular'})),R.setSnapReference(tag);end
+
             R.refresh();
         end
 
@@ -1054,33 +1254,45 @@ classdef registration_ccf < handle
             sy = str2double(get(R.uiScaleSagY,'String'));
             sz = str2double(get(R.uiScaleAxiZ,'String'));
 
-            if isnan(sx) || sx <= 0, sx = 1; end
-            if isnan(sy) || sy <= 0, sy = 1; end
-            if isnan(sz) || sz <= 0, sz = 1; end
+            if any(~isfinite([sx sy sz])|[sx sy sz]<=0)
+                set(R.uiSaveStatus,'String','Size factors must be finite and positive (1 = unchanged). Previous alignment preserved.');return;
+            end
 
             R.scale = [sx sy sz];
 
-            set(R.H.figure1,'Pointer','watch');
-            drawnow limitrate;
+            R.cancelPreview();
             R.apply();
             R.refresh();
-            set(R.H.figure1,'Pointer','arrow');
+            R.queuePreview();
 
-            set(R.uiSaveStatus,'String','Applied.');
+            message='Alignment updated. Save or close to update the 3D model.';
+            if R.livePreview,message='Alignment updated. The 3D preview follows after adjustments pause.';end
+            set(R.uiSaveStatus,'String',message);
             R.log('[Atlas GUI] Apply executed.');
         end
 
-        function onAutoRegister(R,cfg)
+        function onAutoRegister(R,cfg,refineCurrent)
+            if nargin<3,refineCurrent=false;end
             if R.autoBusy
                 setappdata(R.H.figure1,'AtlasAutoCancel',true); return;
             end
             if R.autoSetupBusy, return; end
-            if nargin<2
+            if nargin<2 || (isempty(cfg) && refineCurrent)
                 R.autoSetupBusy=true; setupGuard=onCleanup(@()R.finishAutoSetup());
-                cfg=AtlasRegistration('settings',R.H.figure1);
+                current=R.getCurrentTransform();
+                spec=struct('sourceSliceCount',size(R.RegistrationData,1),'useCurrent',refineCurrent || norm(current.M-eye(4),'fro')>1e-8);
+                if ~isempty(R.scanGeometry),spec.sourceSliceCount=R.scanGeometry.originalSize(R.scanGeometry.permutation(1));end
+                if isstruct(R.autoReport) && isfield(R.autoReport,'sliceSelection')
+                    spec.sourceSliceRange=R.autoReport.sliceSelection.sourceSliceRange;
+                elseif isstruct(R.autoReport) && isfield(R.autoReport,'anchors')
+                    sourceSlices=[R.autoReport.anchors.sourceSlice];spec.sourceSliceRange=[min(sourceSlices) max(sourceSlices)];
+                end
+                cfg=AtlasRegistration('settings',R.H.figure1,spec);
                 clear setupGuard;
             end
             if isempty(cfg), return; end
+            if refineCurrent,cfg.useCurrent=true;cfg.searchInitialization=false;end
+            R.cancelPreview();
             previous=R.getCurrentTransform();
             controls=findall(R.H.figure1,'Type','uicontrol');
             enabled=get(controls,'Enable');
@@ -1095,20 +1307,144 @@ classdef registration_ccf < handle
             try
                 if strcmpi(cfg.target,'histology'), fixed=R.mapHistology.D;
                 else, fixed=R.mapVascular.D; end
-                [M,report]=AtlasRegistration('register',fixed,R.RegistrationData,cfg,previous.M);
+                [cfg,seed]=fusiRegistrationConfigureSlices(cfg,R.scanGeometry,size(R.RegistrationData),previous.M,size(fixed));
+                [M,report]=AtlasRegistration('register',fixed,R.RegistrationData,cfg,seed);
                 R.autoUndo=previous;
                 R.installMatrix(M); R.autoReport=report;
-                R.overlayOpacity=.5; set(R.uiOpacity,'Value',.5);
+                R.overlayOpacity=.85; set(R.uiOpacity,'Value',.85);
                 R.onAtlasMode(cfg.target); R.refresh();
-                msg=sprintf('Automatic proposal ready (%s): NMI %.3f -> %.3f. Review all planes, then Save reviewed, or Undo auto.', ...
+                msg=sprintf('Unsaved automatic alignment ready (%s): NMI %.3f -> %.3f. Review all planes, then SAVE TRANSFORM NOW, or Undo auto.', ...
                     report.engine,report.nmiBefore,report.nmiAfter);
                 if ~report.refinementAccepted, msg=[msg ' ' report.refinementNote]; end
-                set(R.uiSaveStatus,'String',msg); R.log(['[Atlas GUI] ' msg]);
-                if strcmpi(cfg.engine,'greedy') && isfield(cfg,'openReview') && cfg.openReview, R.onReviewSnap(); end
+                R.publishPreview();msg=[msg ' Unsaved preview; use SAVE TRANSFORM to keep it.'];
+                set(R.uiSaveStatus,'String',sprintf('Automatic alignment ready (%s). Review all planes, then match reference slices or SAVE TRANSFORM NOW.',report.engine), ...
+                    'TooltipString',msg); R.log(['[Atlas GUI] ' msg]);
+                if (isfield(cfg,'openReview') && cfg.openReview) || ...
+                        (any(strcmpi(cfg.engine,{'greedy','compare'})) && ~isfield(cfg,'openReview'))
+                    reference=cfg.target;
+                    if isfield(cfg,'snapReference') && ~strcmpi(cfg.snapReference,'target'),reference=cfg.snapReference;end
+                    R.onReviewSnap(reference);
+                end
             catch ME
                 R.installMatrix(previous.M); R.autoReport=previous.autoRegistration;
                 set(R.uiSaveStatus,'String',ME.message); R.log(['[Atlas GUI] ' ME.message]);
             end
+        end
+
+        function onSemiAutomatic(R,slices,apSeed,reverseAP)
+            if nargin<3,apSeed=[];end
+            if nargin<4,reverseAP=[];end % Empty asks; logical input is explicit API confirmation.
+            if R.autoBusy || R.autoSetupBusy,return;end
+            R.cancelPreview();
+            n=size(R.RegistrationData,1);ratio=1;flipAP=false;
+            if ~isempty(R.scanGeometry) && isfield(R.scanGeometry,'originalSize')
+                g=R.scanGeometry;axis=g.permutation(1);n=g.originalSize(axis);
+                ratio=g.originalSpacingUm(axis)/R.atlas.VoxelSize(1);
+                flipAP=isfield(g,'flipAxes') && ismember(1,g.flipAxes);
+            end
+            if nargin<2
+                sliceDefaults=R.referenceSliceDefaults();
+                answer=inputdlg({'Choose three scan slices to match manually: first, middle and last usable slices. Each matched scan/atlas pair guides the 3D fit (an anchor). Previous matches reopen if unchanged:', ...
+                    'Optional first/last AP (mm from bregma; anterior +, posterior -), e.g. 2 -3:', ...
+                    'Atlas AP index at bregma (required only for AP seed; this atlas has no saved bregma metadata):'}, ...
+                    'Semi-automatic 3D alignment',1,{strtrim(sprintf('%d ',sliceDefaults)),'',getpref('deConfUSIon','atlasBregmaIndexText','')});
+                if isempty(answer),return;end;slices=sscanf(answer{1},'%f')';
+                if ~isempty(strtrim(answer{2}))
+                    try
+                        apSeed=fusiBregmaAnchors(slices,sscanf(answer{2},'%f')',str2double(answer{3}),R.atlas.VoxelSize(1),size(R.atlas.Histology,1));
+                        setpref('deConfUSIon','atlasBregmaIndexText',answer{3});
+                    catch ME,set(R.uiSaveStatus,'String',ME.message);return;end
+                end
+            end
+            if numel(slices)~=3 || any(~isfinite(slices)) || any(slices~=round(slices)) || ...
+                    slices(1)<1 || slices(3)>n || any(diff(slices)<=0)
+                set(R.uiSaveStatus,'String','Enter three increasing source slices inside the recording.');return;
+            end
+            controls=findall(R.H.figure1,'Type','uicontrol');enabled=get(controls,'Enable');
+            R.autoSetupBusy=true;set(controls,'Enable','off');
+            guard=onCleanup(@()R.finishSemi(controls,enabled)); %#ok<NASGU>
+            previous=R.getCurrentTransform();anchors=struct([]);apReversed=false;previousGeometry=R.scanGeometry;retainedDraft=R.anchorDraft;
+            preparedPositions=1+(slices-1)*ratio;
+            if flipAP,preparedPositions=1+(n-slices)*ratio;end
+            preparedPositions=min(size(R.DataNoScale,1),max(1,preparedPositions));
+            try
+            for k=1:3
+                q=preparedPositions(k);
+                % Actual native AP position is retained even if fractional on the atlas grid.
+                % INTERPN scalar/vector query conventions vary; explicit grid is clearer.
+                [dv,lr]=ndgrid(1:size(R.DataNoScale,2),1:size(R.DataNoScale,3));
+                plane=squeeze(interpn(R.DataNoScale,q*ones(size(dv)),dv,lr,'linear',0));
+                point=[(size(plane,1)+1)/2 q (size(plane,2)+1)/2 1]*previous.M;
+                if ~isempty(anchors),point(2)=anchors(1).atlasSliceIndex+q-preparedPositions(1);end
+                if ~isempty(apSeed),point(2)=apSeed.atlasIndices(k);end
+                init=struct('atlasMode','histology','atlasSliceIndex',min(size(R.atlas.Histology,1),max(1,round(point(2)))), ...
+                    'opacity',.85,'winMin',0,'winMax',1,'cmapName','hot', ...
+                    'tx',point(3)-(size(plane,2)+1)/2,'ty',point(1)-(size(plane,1)+1)/2, ...
+                    'sx',norm(previous.M(3,1:3)),'sy',norm(previous.M(1,1:3)), ...
+                    'rotDeg',atan2d(previous.M(3,1),previous.M(3,3)));
+                if ~isempty(retainedDraft)
+                    index=find([retainedDraft.sourceSlice]==slices(k),1);
+                    if ~isempty(index)
+                        retained=retainedDraft(index);A=retained.M;c=[(size(plane,2)+1)/2 (size(plane,1)+1)/2];t=A(3,1:2)+c*A(1:2,1:2)-c;
+                        init.tx=t(1);init.ty=t(2);init.sx=norm(A(1,1:2));init.sy=norm(A(2,1:2));init.rotDeg=atan2d(A(1,2),A(1,1));
+                        if isempty(apSeed),init.atlasSliceIndex=retained.atlasSliceIndex;end
+                    end
+                end
+                info=struct('anchorOnly',true,'displayIsProcessed',true,'preparedAP',q, ...
+                    'originalSlice',slices(k),'label',sprintf('Reference slice %d of 3 | scan slice %d: choose matching atlas plane',k,slices(k)));
+                reference=init.atlasSliceIndex;if ~isempty(anchors),reference=anchors(1).atlasSliceIndex;end
+                info.sliceGuide=struct('sourceSlices',slices,'preparedPositions',preparedPositions,'current',k, ...
+                    'referenceAtlasIndex',reference,'atlasCount',size(R.atlas.Histology,1), ...
+                    'scanSpacingUm',ratio*R.atlas.VoxelSize(1),'atlasSpacingUm',R.atlas.VoxelSize(1));
+                info.acceptedAnchors=anchors;info.atlasVoxelSize=R.atlas.VoxelSize;
+                anchor=registration_coronal_2d(R.atlas,plane,info,init,R.saveDir);
+                if isempty(anchor),set(R.uiSaveStatus,'String','Anchor alignment cancelled; previous 3D transform preserved.');return;end
+                if isempty(anchors),anchors=anchor;else,anchors(end+1)=anchor;end %#ok<AGROW>
+                R.anchorDraft=anchors;
+            end
+                R.anchorDraft=anchors;
+                [~,order]=sort([anchors.preparedAP]);positions=[anchors.atlasSliceIndex];
+                if all(diff(positions(order))<0) && ~isempty(R.scanGeometry)
+                    if isempty(reverseAP)
+                        choice=questdlg(sprintf('Source slices %s map to atlas AP %s. Their direction is reversed. Is this acquisition ordered posterior to anterior relative to the current geometry? Reverse AP keeps your accepted anchors and does not change left/right.',mat2str([anchors.sourceSlice]),mat2str(positions)), ...
+                            'Confirm acquisition AP direction','Reverse source AP','Recheck anchors','Recheck anchors');
+                    elseif isequal(reverseAP,true),choice='Reverse source AP';else,choice='Recheck anchors';end
+                    if strcmp(choice,'Reverse source AP')
+                        R.RegistrationData=flip(R.RegistrationData,1);R.DataNoScale=flip(R.DataNoScale,1);R.previewSampler=griddedInterpolant(single(R.DataNoScale),'linear','none');
+                        if ~isempty(R.savedDisplayData),R.savedDisplayData=flip(R.savedDisplayData,1);end
+                        if ~isfield(R.scanGeometry,'flipAxes'),R.scanGeometry.flipAxes=[];end
+                        R.scanGeometry.flipAxes=setxor(R.scanGeometry.flipAxes,1);
+                        apReversed=true;
+                        for j=1:numel(anchors),anchors(j).preparedAP=size(R.DataNoScale,1)+1-anchors(j).preparedAP;end
+                        R.anchorDraft=anchors;
+                    end
+                end
+                [M,report]=fusiFitCoronalAnchors(anchors,[size(R.DataNoScale,2) size(R.DataNoScale,3)],R.atlas.VoxelSize);
+                if ~isempty(apSeed),report.bregmaSeed=apSeed;end
+                R.autoUndo=previous;R.installMatrix(M);R.autoReport=report;R.refresh();
+                R.publishPreview();
+                R.anchorDraft=[];
+                set(R.uiUndoAuto,'Enable','on');
+                set(R.uiSaveStatus,'String','Three reference slices applied. Review all planes; refine if needed, then SAVE TRANSFORM NOW.', ...
+                    'TooltipString',sprintf('Reference slice fitting errors: %.3f / %.3f / %.3f mm. This preview is not saved yet.',report.anchorRMSErrorMm));
+            catch ME
+                if apReversed
+                    R.RegistrationData=flip(R.RegistrationData,1);R.DataNoScale=flip(R.DataNoScale,1);R.previewSampler=griddedInterpolant(single(R.DataNoScale),'linear','none');R.scanGeometry=previousGeometry;
+                    if ~isempty(R.savedDisplayData),R.savedDisplayData=flip(R.savedDisplayData,1);end
+                    for j=1:numel(R.anchorDraft),R.anchorDraft(j).preparedAP=size(R.DataNoScale,1)+1-R.anchorDraft(j).preparedAP;end
+                end
+                R.installMatrix(previous.M);R.autoReport=previous.autoRegistration;
+                if isgraphics(R.H.figure1),set(R.uiSaveStatus,'String',ME.message);end
+                R.log(['[Atlas anchors] ' ME.message]);
+            end
+        end
+
+        function finishSemi(R,controls,enabled)
+            R.autoSetupBusy=false;
+            for k=1:numel(controls)
+                if isgraphics(controls(k)),set(controls(k),'Enable',enabled{k});end
+            end
+            if isgraphics(R.H.figure1) && ~isempty(R.autoUndo),set(R.uiUndoAuto,'Enable','on');end
         end
 
         function finishAutoSetup(R)
@@ -1122,31 +1458,84 @@ classdef registration_ccf < handle
             end
             if ~isgraphics(R.H.figure1), return; end
             setappdata(R.H.figure1,'AtlasAutoBusy',false);
-            set(R.uiAuto,'String','Automatic 3D registration','BackgroundColor',[.16 .60 .34]);
+            set(R.uiAuto,'String','1. Auto: fit anatomy','BackgroundColor',[.16 .60 .34]);
             if ~isempty(R.autoUndo), set(R.uiUndoAuto,'Enable','on'); end
             set(R.H.figure1,'Pointer','arrow');
         end
 
-        function onReviewSnap(R)
+        function onSnapReference(R,src)
+            names={'vascular','histology'};R.setSnapReference(names{get(src,'Value')});
+        end
+
+        function slices=referenceSliceDefaults(R)
+            % Carry the automatic fit's usable range into manual matching.
+            % A scan fitted on 15-45 should offer 15/30/45, not its bad ends.
+            n=size(R.RegistrationData,1);ratio=1;flipAP=false;
+            if ~isempty(R.scanGeometry) && isfield(R.scanGeometry,'originalSize')
+                g=R.scanGeometry;axis=g.permutation(1);n=g.originalSize(axis);
+                ratio=g.originalSpacingUm(axis)/R.atlas.VoxelSize(1);
+                flipAP=isfield(g,'flipAxes') && ismember(1,g.flipAxes);
+            end
+            cfg=struct('trimEmptySlices',true);
+            if isstruct(R.autoReport) && isfield(R.autoReport,'sliceSelection')
+                cfg.preparedSliceRange=R.autoReport.sliceSelection.preparedSliceRange;
+            end
+            [~,quality]=fusiRegistrationSliceSupport(R.RegistrationData,cfg);
+            usable=1+(quality.preparedSliceRange-1)/ratio;
+            if flipAP,usable=n+1-usable;end
+            usable=sort(usable);first=max(1,ceil(usable(1)));last=min(n,floor(usable(2)));
+            slices=[first round((first+last)/2) last];
+            if isstruct(R.autoReport) && isfield(R.autoReport,'anchors') && numel(R.autoReport.anchors)==3
+                slices=sort([R.autoReport.anchors.sourceSlice]);
+            end
+            if ~isempty(R.anchorDraft),slices=[R.anchorDraft.sourceSlice];end
+        end
+
+        function onScaleNudge(R,axisIndex,direction)
+            if R.autoBusy,return;end
+            fields=[R.uiScaleCorX R.uiScaleSagY R.uiScaleAxiZ];
+            value=str2double(get(fields(axisIndex),'String'));
+            step=[.01 .05 .10];step=step(get(R.uiScaleStep,'Value'));
+            next=round((value+direction*step)*1e6)/1e6;
+            if ~isfinite(value) || value<=0 || next<=0
+                set(R.uiSaveStatus,'String','Size factors must stay finite and positive. Previous alignment preserved.');
+                return;
+            end
+            set(fields(axisIndex),'String',sprintf('%.6g',next));
+            R.onApply();
+        end
+
+        function setSnapReference(R,target)
+            assert(any(strcmpi(target,{'histology','vascular'})),'Choose Histology or Vascular for SNAP review.');
+            R.snapReference=lower(target);
+            control=findobj(R.H.figure1,'Tag','AtlasSnapReference');
+            if ~isempty(control),set(control,'Value',1+strcmpi(target,'histology'));end
+        end
+
+        function onReviewSnap(R,target,launch)
+            if nargin<2,target=R.snapReference;end
+            if nargin<3,launch=true;end
+            R.setSnapReference(target);
             if R.reviewBusy, return; end
             R.reviewBusy=true;
             guard=onCleanup(@()R.finishReview()); %#ok<NASGU>
             try
                 proposal=R.getCurrentTransform();
-                target='vascular'; fixed=R.mapVascular.D;
-                if R.ms1==R.mapHistology, target='histology'; fixed=R.mapHistology.D; end
+                fixed=R.mapVascular.D;
+                if strcmpi(target,'histology'),fixed=R.mapHistology.D;end
                 if ~isempty(R.reviewBundle) && isequal(proposal.M,R.reviewMatrix) && strcmp(target,R.reviewTarget)
-                    try
-                        if R.reviewBundle.process.isAlive()
-                            set(R.uiSaveStatus,'String','This alignment is already open in ITK-SNAP.'); return;
-                        end
-                    catch
-                    end
+                    if launch,R.reviewBundle.process=fusiOpenSnapWorkspace(R.reviewBundle.executable,R.reviewBundle.workspace);end
+                    if launch,set(R.uiSaveStatus,'String',['Verified ITK-SNAP window opened with ' target ' underlay. Use Tools > Registration > Manual.']);end
+                    return;
                 end
-                bundle=AtlasRegistration('review',fixed,R.DataNoScale,R.atlas.Regions, ...
-                    R.atlas.infoRegions,proposal.M,R.atlas.VoxelSize,R.saveDir,true);
+                regions=R.atlas.Regions;regionInfo=R.atlas.infoRegions;
+                if ~strcmp(R.regionMode,'Detailed'),regions=R.groupedRegions;regionInfo=R.groupedRegionInfo;end
+                bundle=AtlasRegistration('review',fixed,R.DataNoScale,regions, ...
+                    regionInfo,proposal.M,R.atlas.VoxelSize,R.saveDir,launch);
                 R.reviewBundle=bundle; R.reviewMatrix=proposal.M; R.reviewTarget=target;
-                set(R.uiSaveStatus,'String',['ITK-SNAP review opened. Return here to Save reviewed or Undo auto. Files: ' bundle.folder]);
+                message=['SNAP review files created with ' target ' underlay.'];
+                if launch,message=['Verified ITK-SNAP window opened with ' target ' underlay. Tools > Registration > Manual; select aligned_anatomy. Save its transform, then Import SNAP edit here.'];end
+                set(R.uiSaveStatus,'String',[message ' Files: ' bundle.folder]);
                 R.log(['[Atlas GUI] Review bundle: ' bundle.folder]);
             catch ME
                 set(R.uiSaveStatus,'String',['ITK-SNAP review: ' ME.message]); R.log(ME.message);
@@ -1163,15 +1552,16 @@ classdef registration_ccf < handle
             if R.autoBusy || t-R.lastDragPreview<.12, return; end
             R.lastDragPreview=t;
             proposal=R.getCurrentTransform();
-            [cor,axi,sag]=AtlasRegistration('previewcuts',R.DataNoScale,proposal.M,size(R.ms1.D), ...
+            [cor,axi,sag]=AtlasRegistration('previewcuts',R.previewSampler,proposal.M,size(R.ms1.D), ...
                 [R.ms1.x0 R.ms1.y0 R.ms1.z0]);
             views={cor,axi,sag}; movers={R.r1,R.r2,R.r3}; handles=[R.im4 R.im5 R.im6];
             for k=1:3
+                [D,alpha]=fusiRegistrationOverlayAppearance(views{k},[R.overlayWinMin R.overlayWinMax], ...
+                    R.overlayGain,R.overlayGamma,R.overlayOpacity,R.overlayInvert);
                 if safeIsDragging(movers{k})
-                    set(handles(k),'AlphaData',R.overlayOpacity*single(views{k}>0)); continue;
+                    set(handles(k),'AlphaData',alpha); continue;
                 end
-                D=views{k}; if R.overlayInvert, D=1-D; end
-                set(handles(k),'CData',D,'AlphaData',R.overlayOpacity*single(views{k}>0));
+                set(handles(k),'CData',D,'AlphaData',alpha);
             end
         end
 
@@ -1188,26 +1578,101 @@ classdef registration_ccf < handle
             if isempty(R.autoUndo) || R.autoBusy, return; end
             previous=R.autoUndo; R.installMatrix(previous.M);
             R.autoReport=previous.autoRegistration; R.autoUndo=[];
+            R.publishPreview();
             set(R.uiUndoAuto,'Enable','off');
             set(R.uiSaveStatus,'String','Automatic proposal discarded. Previous alignment restored.');
         end
 
-        function onSave(R)
-            Transf = R.getCurrentTransform();
-            if isstruct(Transf.autoRegistration) && ~isempty(Transf.autoRegistration)
-                Transf.autoRegistration.reviewRequired=false;
-                Transf.autoRegistration.reviewedSavedAt=datestr(now,30);
-                Transf.autoRegistration.savedMatrix=Transf.M;
+        function onSaveAs(R,outFile)
+            if nargin<2
+                [file,folder]=uiputfile('*.mat','Save current animal atlas transform',fullfile(R.saveDir,'Transformation.mat'));
+                if isequal(file,0),return;end
+                outFile=fullfile(folder,file);
             end
-            outFile = fullfile(R.saveDir,'Transformation.mat');
+            R.onSave(outFile);
+        end
+
+        function onImportSnap(R,file,proposalFile)
+            try
+                if nargin<3
+                    if isempty(R.reviewBundle),error('Open ITK-SNAP review from this editor first.');end
+                    proposalFile=R.reviewBundle.session;
+                end
+                if nargin<2
+                    if isstruct(proposalFile),startFolder=R.reviewBundle.folder;else,startFolder=fileparts(proposalFile);end
+                    [name,folder]=uigetfile({'*.txt;*.tfm;*.mat','ITK affine text / Convert3D RAS matrix'}, ...
+                        'Import manually saved ITK-SNAP transform',startFolder);
+                    if isequal(name,0),return;end;file=fullfile(folder,name);
+                end
+                previous=R.getCurrentTransform();
+                [M,report]=fusiImportSnapAdjustment(file,proposalFile,previous.M);
+                R.installMatrix(M);R.autoUndo=previous;R.autoReport=report;R.refresh();
+                R.publishPreview();
+                set(R.uiUndoAuto,'Enable','on');
+                set(R.uiSaveStatus,'String','SNAP adjustment imported. Review all planes, then SAVE TRANSFORM NOW to update the 3D model.');
+            catch ME
+                set(R.uiSaveStatus,'String',['SNAP import: ' ME.message]);R.log(ME.message);
+            end
+        end
+
+        function outFile=onSaveProposal(R)
+            % Legacy explicit export API; never called by automatic fitting
+            % or GUI buttons. Automatic computation is not anatomical review.
+            Transf=R.getCurrentTransform();
+            if ~isstruct(Transf.autoRegistration)||isempty(Transf.autoRegistration),Transf.autoRegistration=struct();end
+            Transf.autoRegistration.reviewRequired=true;
+            Transf.autoRegistration.proposalSavedAt=datestr(now,30);
+            if ~isfolder(R.saveDir),mkdir(R.saveDir);end
+            outFile=fullfile(R.saveDir,['Transformation_proposal_' char(datetime('now','Format','yyyy-MM-dd_HH-mm-ss-SSS')) '.mat']);
+            save(outFile,'Transf');
+            callback=getappdata(R.H.figure1,'AtlasSavedCallback');
+            if isa(callback,'function_handle')
+                try,callback(outFile);catch ME,R.log(['Proposal saved; companion refresh failed: ' ME.message]);end
+            end
+        end
+
+        function onSave(R,outFile)
+            R.cancelPreview();
+            Transf = R.getCurrentTransform();
+            if ~isstruct(Transf.autoRegistration)||isempty(Transf.autoRegistration),Transf.autoRegistration=struct('engine','manual');end
+            Transf.autoRegistration.reviewRequired=false;
+            Transf.autoRegistration.reviewedSavedAt=datestr(now,30);
+            Transf.autoRegistration.savedMatrix=Transf.M;
+            quickSave=nargin<2;
+            if quickSave
+                root=R.saveDir;[parent,leaf]=fileparts(root);
+                if startsWith(leaf,'AtlasRegistration_'),root=parent;end
+                folder=fusiUniqueOutputFolder(root,['AtlasRegistration_' char(datetime('now','Format','yyyy-MM-dd_HH-mm-ss-SSS'))]);
+                outFile=fullfile(folder,'Transformation.mat');
+            end
+            outFile=fusiAnalysisOutputPath(outFile);
+            if isfile(outFile)
+                [folder,stem,ext]=fileparts(outFile);
+                folder=fusiUniqueOutputFolder(folder,['AtlasRegistration_' char(datetime('now','Format','yyyy-MM-dd_HH-mm-ss-SSS'))]);
+                outFile=fullfile(folder,[stem ext]);
+            end
 
             try
+                folder=fileparts(outFile);if ~isfolder(folder),mkdir(folder);end
+                Transf.atlasUnderlays=fusiSaveAtlasUnderlays3D(R.atlas,Transf,outFile);
                 save(outFile,'Transf');
-                set(R.uiSaveStatus,'String',['Saved: ' outFile]);
-                R.log(sprintf('[Atlas GUI] Saved Transformation.mat -> %s', outFile));
+                % Existing Studio/coregistration readers use this canonical
+                % reviewed file. Retain it alongside the timestamped record.
+                % Only the root compatibility alias follows the latest save.
+                % Dated folders and their self-contained underlays are immutable.
+                if quickSave,save(fullfile(root,'Transformation.mat'),'Transf');end
+                setappdata(R.H.figure1,'AtlasLastSavedFile',outFile);
+                set(R.uiSaveStatus,'String',sprintf('Saved transform: %s | Histology, Vascular, Regions_All and Regions_Merged: %s',outFile,Transf.atlasUnderlays.folder));
+                R.log(sprintf('[Atlas GUI] Saved new registration -> %s', outFile));
             catch ME
                 set(R.uiSaveStatus,'String',['Save failed: ' ME.message]);
                 R.log(['[Atlas GUI] Save failed: ' ME.message]);
+                return;
+            end
+            callback=getappdata(R.H.figure1,'AtlasSavedCallback');
+            if isa(callback,'function_handle')
+                try,callback(outFile);
+                catch ME,R.log(['[Atlas GUI] Transform saved; companion refresh failed: ' ME.message]);end
             end
         end
 
@@ -1265,10 +1730,13 @@ classdef registration_ccf < handle
                 meta.source_file = f;
                 meta.source_description = desc0;
                 meta.registration_description = desc1;
-                meta.transformation_file = fullfile(R.saveDir,'Transformation.mat');
-                meta.timestamp = ts;
+                meta.transformation_file = getappdata(R.H.figure1,'AtlasLastSavedFile');
+                if isempty(meta.transformation_file),meta.transformation_file=fullfile(R.saveDir,'Transformation.mat');end
+                meta.timestamp = ts;meta.region_grouping=R.regionMode;
 
-                save(outFile,'registered','meta','TransfNow','-v7.3');
+                atlasRegionLabels=R.atlas.Regions;atlasInfoRegions=R.atlas.infoRegions;
+                if ~strcmp(R.regionMode,'Detailed'),atlasRegionLabels=R.groupedRegions;atlasInfoRegions=R.groupedRegionInfo;end
+                save(outFile,'registered','meta','TransfNow','atlasRegionLabels','atlasInfoRegions','-v7.3');
 
                 set(R.uiFuncStatus,'String',['Registered saved: ' outFile]);
                 R.log(sprintf('[Atlas GUI] Registered scan saved -> %s', outFile));
@@ -1346,6 +1814,24 @@ classdef registration_ccf < handle
                 '4) Use Apply, then Save.'
                 '5) Use Preview selected or Register selected for functional outputs.'
                 ' '
+                'Automatic alignment:'
+                'Greedy is the registration calculation engine bundled with ITK-SNAP.'
+                'ITK-SNAP review is a separate viewer; it does not accept the transform for you.'
+                'Refine current manual alignment: use after your rough placement is close.'
+                'Leave it off to search new starting positions when the placement is wrong.'
+                'Review multiple coronal, axial and sagittal slices before SAVE TRANSFORM NOW.'
+                ' '
+                'Visibility and browsing:'
+                'Vessel detail / Linear power / Log Doppler affect display only.'
+                'Hot is the default, matching the 2D anatomy appearance; reduce opacity to see the atlas.'
+                'Slice numbers are in the top bar; the wheel browses the hovered plane.'
+                'In ITK-SNAP use Alt-I for contrast, Q/E for opacity, W to toggle the overlay.'
+                'Separate image tiles? Right-click aligned_anatomy and choose Display as Overlay.'
+                'Tools > Registration > Manual: select aligned_anatomy, then enable Interactive Tool.'
+                'Drag away from the wheel to translate; turn the wheel to rotate.'
+                'Save Transform as ITK affine text or Convert3D RAS text; return here and Import SNAP edit.'
+                'Review the imported adjustment, then SAVE TRANSFORM NOW to update the 3D model.'
+                ' '
                 'Mouse interaction on right panels:'
                 '  - Left drag  = translate overlay'
                 '  - Right drag = rotate overlay'
@@ -1366,11 +1852,48 @@ classdef registration_ccf < handle
                 'String',strjoin(txt, sprintf('\n')));
         end
 
+        function publishPreview(R)
+            R.cancelPreview();
+            if ~isgraphics(R.H.figure1),return;end
+            callback=getappdata(R.H.figure1,'AtlasPreviewCallback');
+            if isa(callback,'function_handle')
+                try,callback(R.getCurrentTransform());
+                catch ME,R.log(['[Atlas preview] ' ME.message]);end
+            end
+        end
+
+        function queuePreview(R)
+            % Coalesce rapid nudges. Never rebuild an atlas model inside a
+            % mouse-release or size-edit callback.
+            R.cancelPreview();
+            if ~R.livePreview,return;end
+            if ~isgraphics(R.H.figure1) || ~isa(getappdata(R.H.figure1,'AtlasPreviewCallback'),'function_handle'),return;end
+            R.previewTimer=timer('ExecutionMode','singleShot','StartDelay',.75, ...
+                'Name','deConfUSIon_atlas_preview','TimerFcn',@(~,~)R.flushPreview());
+            start(R.previewTimer);
+        end
+
+        function onLivePreview(R,src)
+            R.livePreview=logical(get(src,'Value'));R.queuePreview();
+        end
+
+        function flushPreview(R)
+            if ~isgraphics(R.H.figure1),R.cancelPreview();return;end
+            if R.anyDragging() || R.autoBusy || R.autoSetupBusy,R.queuePreview();return;end
+            R.publishPreview();
+        end
+
+        function cancelPreview(R)
+            pending=R.previewTimer;R.previewTimer=[];
+            if ~isempty(pending) && isvalid(pending),stop(pending);delete(pending);end
+        end
+
         function onClose(R)
             if R.autoBusy
                 setappdata(R.H.figure1,'AtlasAutoCancel',true);
                 return;
             end
+            R.publishPreview();
             try
                 delete(R.H.figure1);
             catch
@@ -1438,9 +1961,9 @@ classdef registration_ccf < handle
 
         function clampIndices(R)
 
-            nx = min(R.ms1.nx, size(R.ms2.D,1));
-            ny = min(R.ms1.ny, size(R.ms2.D,2));
-            nz = min(R.ms1.nz, size(R.ms2.D,3));
+            nx = size(R.ms1.D,1);
+            ny = size(R.ms1.D,2);
+            nz = size(R.ms1.D,3);
 
             R.ms1.nx = nx;
             R.ms1.ny = ny;
@@ -1527,17 +2050,10 @@ if isempty(LL) || ip < 1 || ip > numel(LL)
     return;
 end
 
-L = LL{ip};
-hold(ax,'on');
-nb = length(L);
-h = gobjects(nb,1);
-
-for ib = 1:nb
-    x = L{ib};
-    h(ib) = plot(ax, x(:,2), x(:,1), 'w:', 'LineWidth', 1, 'HitTest','off');
-end
-
-hold(ax,'off');
+L = LL{ip};coords=cell(1,numel(L));
+for ib=1:numel(L),coords{ib}=[L{ib};NaN NaN];end
+xy=[];if ~isempty(coords),xy=vertcat(coords{:});end;h=gobjects(0);
+if ~isempty(xy),h=line(ax,xy(:,2),xy(:,1),'Color','w','LineStyle',':','LineWidth',1,'HitTest','off');end
 
 end
 
@@ -1824,7 +2340,7 @@ axis(ax,'image');
 axis(ax,'off');
 hold(ax,'on');
 h = imagesc(overData01, 'Parent', ax);
-set(h,'AlphaData',alphaVal);
+set(h,'AlphaData',fusiRegistrationOverlayAlpha(overData01,win,alphaVal));
 set(ax,'CLim',win);
 colormap(ax, cmap);
 title(ax, ttl, 'Color','w', 'FontWeight','bold');
@@ -1835,6 +2351,8 @@ end
 
 function cmap = getOverlayCmap(nameIn)
 switch lower(nameIn)
+    case 'cyan'
+        cmap=[zeros(256,1) linspace(.25,1,256)' linspace(.4,1,256)'];
     case 'red'
         cmap = [linspace(0,1,256)' zeros(256,1) zeros(256,1)];
     otherwise

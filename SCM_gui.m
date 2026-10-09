@@ -6,9 +6,17 @@ function fig = SCM_gui(PSC, bg, TR, par, baseline, nVolsOrig, varargin)
 %   [Y X T] or [Y X Z T]
 
 %% ---------------- SAFETY ----------------
+deConfUSIon_setup();
 if nargin < 4 || isempty(par), par = struct(); end
 if nargin < 5 || isempty(baseline), baseline = struct(); end
 if nargin < 6 || isempty(nVolsOrig), nVolsOrig = []; end
+
+% Static maps have spatial dimensions only. Do not fabricate a time axis or
+% pass them through the temporal baseline/PSC calculation below.
+if isfield(par,'staticVolume') && isequal(par.staticVolume,true)
+    fig=SCM_static_gui(PSC,bg,par);
+    return;
+end
 
 assert(isscalar(TR) && isfinite(TR) && TR > 0, 'TR must be positive scalar');
 
@@ -41,6 +49,9 @@ if exist('isstring','builtin') && isstring(fileLabel), fileLabel = char(fileLabe
 if ~ischar(fileLabel), fileLabel = 'SCM'; end
 
 passedMask = [];
+baselineRaw=[];
+if ~isempty(varargin)&&isnumeric(varargin{1})&&~isempty(varargin{1}),baselineRaw=varargin{1};end
+if isfield(par,'baselineRawIsPSC')&&par.baselineRawIsPSC,baselineRaw=[];end
 passedMaskIsInclude = true;
 if numel(varargin) >= 5
     passedMask = varargin{5};
@@ -71,6 +82,8 @@ if isstruct(baseline) && isfield(baseline,'mode') && ~isempty(baseline.mode)
     end
 end
 isVolMode = (strncmpi(modeStr, 'vol', 3) || strncmpi(modeStr, 'idx', 3));
+localBaselineReset=baseline;
+if isfield(baseline,'localBaseline'),localBaselineReset=baseline.localBaseline;end
 
 baseStart0 = 30;
 baseEnd0   = 240;
@@ -256,6 +269,18 @@ state.tcFixY = false;
 state.tcFixX = false;
 state.tcYLim = [0 100];
 state.tcXLim = [0 displayEndMin];
+state.referenceMode=1;
+state.referenceTraceCache={};
+state.referenceTraceError='';
+state.tcSmoothOn=false;state.tcSmoothSeconds=60;state.pendingSlice=[];state.tcLiveAllScans=false;
+state.scanSequence=[];
+state.retainedUnderlay=[];
+state.originalScanKey='';
+if ~isempty(baselineRaw)
+    state.scanSequence=fusiScanSequence('init',par,baselineRaw,TR,fileLabel);
+    state.originalScanKey=state.scanSequence.originalKey;
+    if numel(state.scanSequence.scans)>1,state.referenceMode=4;end
+end
 state.isAtlasWarped = false;
 state.atlasTransformFile = '';
 state.lastAtlasTransformFile = '';
@@ -270,6 +295,8 @@ state.isColorUnderlay = false;
 state.regionLabelUnderlay = [];
 state.regionColorLUT = [];
 state.regionInfo = struct();
+state.atlasDisplay3D=[];
+state.atlasInPlaneSpacingUm=[NaN NaN NaN];
 state.atlasUnderlays = struct();
 state.atlasUnderlayChoice = 'normal';
 state.lastAtlasUnderlayBuildMessage = '';
@@ -282,11 +309,16 @@ state.seriesExportSliceRange = [1 nZ];
 
 roi = struct();
 roi.size = 5;
+roi.sizeMode='pixels';roi.sizeUm=[1000 1000];roi.revision=0;roi.sizingById={};
+roi.viewKey='native';roi.viewShape=[nY nX nZ];roi.viewMapping=[];roi.viewBanks={};roi.hiddenDefinitions={};
+state.currentROIMapping=[];
+state.physicalScale=true;state.sharpPixels=true;
 roi.colors = lines(12);
 roi.isFrozen = false;
 roi.nextId = 1;
 roi.exportedIds = [];
 roi.lastAddStamp = 0;
+roi.addBusy = false;
 roi.lastHoverXY = [-inf -inf];
 roi.pendingHover = [];
 roi.hoverScheduled = false;
@@ -318,10 +350,12 @@ MAX_CONLEV  = 500;
 origPSC = PSC;
 origBG  = bg;
 origPassedMask = passedMask;
+origPassedMaskIsInclude=passedMaskIsInclude;
 startupAtlasNote = '';
 
 % Auto-fix bad startup case: atlas/histology underlay with native PSC.
 autoFixStartupAtlasUnderlayIfNeeded();
+roi.viewShape=[nY nX nZ];if state.isAtlasWarped,roi.viewKey=['atlas|' state.atlasTransformFile];roi.viewMapping=state.currentROIMapping;end
 
 %% ---------------- MASK INIT ----------------
 if isempty(passedMask)
@@ -390,6 +424,7 @@ hold(ax, 'on');
 
 bg2 = getBg2DForSlice(state.z);
 hBG = image(ax, renderUnderlayRGB(bg2));
+set(hBG,'XData',[1 nX],'YData',[1 nY]);
 hOV = imagesc(ax, zeros(nY, nX));
 set(hOV, 'AlphaData', zeros(nY, nX));
 
@@ -473,7 +508,17 @@ hSigTxt = text(axTC, 0, 0, '', 'Color', [1.00 0.75 0.35], ...
 hLivePSC = plot(axTC, state.tminHover, nan(1, numel(state.tminHover)), ':', 'LineWidth', 3.0);
 hLivePSC.Color = [1.00 0.60 0.10];
 hLivePSC.Visible = 'off';
+set(hBasePatch,'Tag','SCM_BaselineBand');
 set(hLivePSC,'Tag','SCM_LiveROI');
+hScanBoundary=plot(axTC,[0 0],[0 1],'--','Color',[.8 .85 .9],'Visible','off','Tag','SCM_ScanBoundary');
+hReferenceScanTxt=text(axTC,0,0,'','Color',[1 .6 .6],'FontSize',10,'FontWeight','bold', ...
+    'Interpreter','none','Clipping','on','VerticalAlignment','top', ...
+    'BackgroundColor',[.05 .05 .05],'Margin',1,'Visible','off','Tag','SCM_ReferenceScanLabel');
+hCurrentScanTxt=text(axTC,0,0,'','Color',[.6 .85 1],'FontSize',10,'FontWeight','bold', ...
+    'Interpreter','none','Clipping','on','VerticalAlignment','top','HorizontalAlignment','center', ...
+    'BackgroundColor',[.05 .05 .05],'Margin',1,'Visible','off','Tag','SCM_CurrentScanLabel');
+hSequenceLabels=gobjects(0);hSequenceBoundaries=gobjects(0);
+hSequenceBaselineBands=gobjects(0);
 hRoiCoordTxt = text(axTC, 0.99, 1.12, '', ...
     'Units', 'normalized', 'HorizontalAlignment', 'right', ...
     'VerticalAlignment', 'top', 'Color', [0.92 0.92 0.92], ...
@@ -483,7 +528,7 @@ hRoiCoordTxt = text(axTC, 0.99, 1.12, '', ...
 slZ = uicontrol(fig, 'Style', 'slider', 'Units', 'pixels', ...
     'Min', 1, 'Max', max(1,nZ), 'Value', nZ-state.z+1, ...
     'SliderStep', [1/max(1,nZ-1) 5/max(1,nZ-1)], ...
-    'Callback', @sliceChanged, 'Visible', 'off', 'Enable', 'off');
+    'Callback', @sliceChanged, 'Visible', 'off', 'Enable', 'off','Tag','FUSISliceSlider');
 txtZ = uicontrol(fig, 'Style', 'text', 'Units', 'pixels', 'String', '', ...
     'ForegroundColor', [0.85 0.9 1], 'BackgroundColor', get(fig,'Color'), ...
     'HorizontalAlignment', 'left', 'FontWeight', 'bold', 'FontSize', 13, ...
@@ -542,10 +587,17 @@ mkBtn = @(pp,lbl,cbk,bgcol,fs) uicontrol(pp, 'Style', 'pushbutton', 'String', lb
     'FontName', 'Arial', 'FontSize', fs, 'FontWeight', 'bold');
 
 %% ---------------- Overlay controls ----------------
-lblROIsz = mkLbl(pOverlay, 'ROI size (px)');
+lblROIsz = mkPopup(pOverlay,{sprintf('ROI size [px; X %c Y]',215),sprintf('ROI size [%cm; X %c Y]',181,215)},1,@roiSizeModeChanged);
+set(lblROIsz,'Tag','SCM_ROISizeMode','TooltipString','Pixels: legacy square. Micrometres: separate physical width X and height Y.');
 slROI = mkSlider(pOverlay, 1, 220, roi.size, @(~,~)setROIsize());
+set(slROI,'Tag','SCM_ROISizeSlider');
 txtROIsz = mkEdit(pOverlay, sprintf('%d', roi.size), @onRoiSizeEdited);
+set(txtROIsz,'Tag','SCM_ROISize');
 set(txtROIsz, 'TooltipString', 'Type ROI size in pixels, then press Enter.');
+ebRoiWidth=mkEdit(pOverlay,'1000',@roiPhysicalEdited);set(ebRoiWidth,'Tag','SCM_ROIWidthUm','Visible','off','TooltipString','X: horizontal width in micrometres');
+ebRoiHeight=mkEdit(pOverlay,'1000',@roiPhysicalEdited);set(ebRoiHeight,'Tag','SCM_ROIHeightUm','Visible','off','TooltipString','Y: vertical height in micrometres');
+txtROIPhysical=mkLbl(pOverlay,'');
+set(txtROIPhysical,'Tag','SCM_ROIPhysicalSize','ForegroundColor',fgSub);
 
 lblRoiXY = mkLbl(pOverlay, 'Add ROI by center (x y)');
 ebRoiXY = mkEdit(pOverlay, '', @roiXYNoop);
@@ -556,10 +608,26 @@ btnRoiAddXY = mkBtn(pOverlay, 'ADD ROI', @addRoiFromXY, colBtnNeutral, 12);
 set(btnRoiAddXY,'Tag','SCM_AddROI');
 
 lblBase = mkLblImp(pOverlay, 'Baseline window (s)');
+btnBaselineSource=mkBtn(pOverlay,'Baseline source...',@baselineSourceChanged,[0.25 0.40 0.65],13);
+btnResetBaseline=mkBtn(pOverlay,'Reset local baseline',@resetLocalBaseline,[0.25 0.45 0.35],13);
+set(btnResetBaseline,'Tag','SCM_ResetLocalBaseline','TooltipString','Restore this scan/animal''s baseline window from before the shared reference.');
+set(btnBaselineSource,'Tag','SCM_BaselineSource','TooltipString',fusiBaselineReference('label',baseline));
+setappdata(fig,'FUSIGetBaselineState',@getBaselineState);
+btnScans=mkBtn(pOverlay,'Scans / order...',@manageScanSequence,[.20 .38 .62],12);
+set(btnScans,'Tag','SCM_ScanSequence','TooltipString','Add up to ten raw scans, choose preprocessing, and change their time-course order.');
+popOverlayScan=uicontrol(pOverlay,'Style','popupmenu','String',{'Overlay: current scan'}, ...
+    'BackgroundColor',bgEdit,'ForegroundColor',fgMain,'FontSize',10,'Callback',@overlayScanChanged,'Tag','SCM_OverlayScan');
+popOverlayScan.TooltipString='Select which scan supplies the SCM signal overlay. The sequence time courses retain all scans.';
+setappdata(fig,'FUSIGetScanSequence',@getScanSequence);
+setappdata(fig,'FUSIRemoveROI',@removeNearestRoi);
+setappdata(fig,'AutomaticROISelections',scmAutomaticROISelections(fig));
+setappdata(fig,'FUSIQueueHover',@queueHover);
+setappdata(fig,'FUSIRenderHover',@renderPendingHover);
 ebBase = mkEdit(pOverlay, sprintf('%g-%g', baseStart0, baseEnd0), @onWindowEdited);
 set(ebBase,'Tag','SCM_BaselineWindow','TooltipString','Baseline in seconds. Press Enter or leave the field to refresh maps and all ROI curves.');
 set(ebBase, 'ForegroundColor', [1.00 0.35 0.35]);
 set(ebBase, 'KeyPressFcn', @windowKeyPress);
+if fusiBaselineReference('isExternal',baseline),set(ebBase,'Enable','off');set(lblBase,'String','Source baseline (s)');end
 lblSig = mkLblImp(pOverlay, 'Signal window (s)');
 ebSig = mkEdit(pOverlay, sprintf('%g-%g', sigStart0, sigEnd0), @onWindowEdited);
 set(ebSig, 'ForegroundColor', [1.00 0.35 0.35]);
@@ -603,7 +671,10 @@ ebSigma = mkEdit(pOverlay, '0', @computeSCM);
 set(ebSigma,'Tag','SCM_SmoothingSigma');
 btnScale=mkBtn(pOverlay,'Scale / units',@scaleSettings,colBtnNeutral,10);
 set(btnScale,'Tag','SCM_ScaleSettings');
-par.scmSizeYXZ=[nY nX nZ]; spatial=scmSpatialCalibration(par); rulerStep=0;
+par.scmSizeYXZ=[nY nX nZ]; spatial=scmSpatialCalibration(par); rulerStep=500;
+setappdata(fig,'SCMRulerVisible',true);
+scaleListeners=[addlistener(ax,'XLim','PostSet',@spatialScaleAxisChanged); addlistener(ax,'YLim','PostSet',@spatialScaleAxisChanged)];
+setappdata(fig,'SCMScaleListeners',scaleListeners);
 set(ebSigma, 'ForegroundColor', [1.00 0.35 0.35]);
 set(ebCax,'Tag','SCM_DisplayRange');
 set(ebSig,'Tag','SCM_SignalWindow');
@@ -629,7 +700,30 @@ popUnder = mkPopup(pUnderlay, { ...
     '3) VideoGUI robust (0.5..99.5%)', ...
     '4) Vessel enhance (conectSize/Lev)', ...
     '5) Saved appearance (0..1)'}, uState.mode, @underlayModeChanged);
+lblAtlasChoice=mkLbl(pUnderlay,'Atlas underlay');
+popAtlasChoice=mkPopup(pUnderlay,{'Load a saved atlas underlay first'},1,@atlasUnderlayChoiceCB);
+set(popAtlasChoice,'Tag','AtlasUnderlayChoice','Enable','off');
+cbRegionLabels=uicontrol(pUnderlay,'Style','checkbox','String','Region abbreviations','Value',0, ...
+    'ForegroundColor','w','BackgroundColor',[.08 .08 .08],'FontSize',12, ...
+    'Tag','AtlasRegionLabelsToggle','Callback',@updateRegionLabels);
+btnRegionList=mkBtn(pUnderlay,'Region list',@showRegionList,[.20 .38 .62],12);
+set(btnRegionList,'Tag','AtlasRegionListButton');
+lblRegionScheme=mkLbl(pUnderlay,'Region colors');
+popRegionScheme=mkPopup(pUnderlay,{'Atlas','Distinct','Pastel','Grayscale'},1,@regionAppearanceChanged);
+set(popRegionScheme,'Tag','AtlasRegionColorScheme');
+cbAtlasLines=uicontrol(pUnderlay,'Style','checkbox','String','Atlas region boundaries','Value',0, ...
+    'ForegroundColor','w','BackgroundColor',[.08 .08 .08],'FontSize',12, ...
+    'Tag','AtlasRegionLinesToggle','Callback',@updateRegionLabels);
+cbShowRuler=mkChk(pUnderlay,sprintf('Show %cm ruler',181),1,@rulerVisibilityChanged);
+set(cbShowRuler,'Tag','SCM_RulerToggle','FontSize',12, ...
+    'TooltipString','Show or hide the physical scale bar and its micrometre label. Choose its length in Scale / units. ROI sizes and image scaling are unchanged.');
+state.regionScheme='Atlas';
+state.underlayRevision=0;state.renderedAtlasCache={};
+
+state.atlasRegionSearch=[];
 lblBri = mkLbl(pUnderlay, 'Underlay brightness');
+cbPhysicalScale=mkChk(pUnderlay,'Physical X/Y scale',1,@imageAppearanceChanged);set(cbPhysicalScale,'Tag','SCM_PhysicalScale');
+cbSharpPixels=mkChk(pUnderlay,'Sharp pixels',1,@imageAppearanceChanged);set(cbSharpPixels,'Tag','SCM_SharpPixels');
 slBri = mkSlider(pUnderlay, -0.80, 0.80, uState.brightness, @underlaySliderChanged);
 txtBri = mkValBox(pUnderlay, sprintf('%.2f', uState.brightness));
 lblCon = mkLbl(pUnderlay, 'Underlay contrast');
@@ -648,6 +742,14 @@ set(slVlv, 'SliderStep', [1/max(1,MAX_CONLEV) 10/max(1,MAX_CONLEV)]);
 txtVlv = mkValBox(pUnderlay, sprintf('%d', uState.conectLev));
 
 btnLoadUnder = mkBtn(pUnderlay, 'LOAD NEW UNDERLAY', @loadNewUnderlayCB, colBtnNeutral, 12);
+btnLoadAtlasFolder=mkBtn(pUnderlay,'LOAD ATLAS FOLDER',@loadAtlasUnderlayFolderCB,colBtnNeutral,12);
+set(btnLoadAtlasFolder,'Tag','SCM_LoadAtlasFolder','TooltipString', ...
+ 'Choose one saved step-motor session folder. Loads all registered source planes and histology, vascular and region modes together.');
+setappdata(fig,'FUSILoadUnderlay',@(file)loadNewUnderlayCB([],[],file));
+setappdata(fig,'FUSILoadMask',@(file)loadMaskCB([],[],file));
+setappdata(fig,'FUSIUnderlayData',@underlayData);
+setappdata(fig,'FUSIWarpFunctionalToAtlas',@(varargin)warpFunctionalToAtlasCB([],[],varargin{:}));
+setappdata(fig,'FUSISetSlice',@browseSlice);
 btnWarpAtlas = mkBtn(pUnderlay, 'WARP FUNCTIONAL TO ATLAS', @warpFunctionalToAtlasCB, colBtnExport, 12);
 btnResetWarp = mkBtn(pUnderlay, 'RESET TO NATIVE', @resetWarpToNativeCB, colBtnNeutral, 12);
 btnSigUnder  = mkBtn(pUnderlay, 'SIGNAL UNDERLAY (sharp)', @signalUnderlayCB, colBtnNeutral, 12);
@@ -675,6 +777,25 @@ ebTcXLim = uicontrol(tcAxisBar, 'Style', 'edit', 'String', sprintf('%g %g', stat
 btnTcXAll = uicontrol(tcAxisBar, 'Style', 'pushbutton', 'String', 'X = ALL', ...
     'Units', 'pixels', 'Callback', @tcXAll, 'BackgroundColor', colBtnNeutral, ...
     'ForegroundColor', fgMain, 'FontName', 'Arial', 'FontSize', 10, 'FontWeight', 'bold');
+lblReferenceTrace=uicontrol(tcAxisBar,'Style','text','String','Time courses:', ...
+    'Units','pixels','BackgroundColor',[.05 .05 .05],'ForegroundColor',fgMain,'HorizontalAlignment','left','FontSize',11);
+popReferenceTrace=uicontrol(tcAxisBar,'Style','popupmenu', ...
+    'String',{'Baseline window before current scan','Entire reference scan before current','Hide reference trace','All scans in sequence'}, ...
+    'Units','pixels','Value',state.referenceMode,'Tag','SCM_ReferenceTraceMode','Callback',@referenceTraceModeChanged, ...
+    'BackgroundColor',bgEdit,'ForegroundColor',fgMain,'FontSize',11, ...
+    'TooltipString','Display only: reference samples are placed before current t=0 with a scan boundary. SCM windows and calculations stay on the current scan.');
+cbTcSmooth=uicontrol(tcAxisBar,'Style','checkbox','String','Smooth curves','Value',0, ...
+    'BackgroundColor',[.05 .05 .05],'ForegroundColor',fgMain,'FontSize',11,'Callback',@timecourseSmoothingChanged,'Tag','SCM_TemporalSmooth');
+ebTcSmooth=uicontrol(tcAxisBar,'Style','edit','String','60','Enable','off','BackgroundColor',bgEdit, ...
+    'ForegroundColor',fgMain,'FontSize',11,'Callback',@timecourseSmoothingChanged,'Tag','SCM_TemporalSmoothSeconds');
+lblTcSmooth=mkLbl(tcAxisBar,'s window');
+cbTcSmooth.TooltipString='Display-only centred sliding average. Each scan and finite segment is smoothed separately; SCM maps and ROI TXT measurements remain unchanged.';
+cbNormalizeScans=uicontrol(tcAxisBar,'Style','checkbox','String','Normalize each scan','Value',0,'Enable','off', ...
+    'BackgroundColor',[.05 .05 .05],'ForegroundColor',fgMain,'FontSize',11,'Callback',@normalizeScansChanged,'Tag','SCM_NormalizeScans');
+cbNormalizeScans.TooltipString='PSC = 100*(power - this scan''s voxelwise baseline mean)/baseline mean. The defined window is used independently within every scan. No maximum scaling. Configure seconds in Scans / order...; uncheck to restore the shared reference.';
+cbLiveAllScans=uicontrol(tcAxisBar,'Style','checkbox','String','Live all scans','Value',0,'Enable','off', ...
+    'BackgroundColor',[.05 .05 .05],'ForegroundColor',fgMain,'FontSize',10,'Callback',@liveAllScansChanged,'Tag','SCM_LiveAllScans');
+cbLiveAllScans.TooltipString='Off: hover previews the selected scan immediately; click or ADD ROI to compare all scans. On: update all scans when the pointer pauses; the first read can take longer.';
 
 %% ---------------- Bottom buttons ----------------
 btnCompute = uicontrol(fig, 'Style', 'pushbutton', 'String', 'Compute SCM', ...
@@ -690,24 +811,27 @@ btnMaskQuick = uicontrol(fig, 'Style', 'pushbutton', 'String', 'LOAD MASK', ...
 btnOpenVid = uicontrol(fig, 'Style', 'pushbutton', 'String', 'Open Video GUI', ...
     'Units', 'pixels', 'Callback', @openVideo, 'BackgroundColor', colBtnNeutral, ...
     'ForegroundColor', 'w', 'FontSize', 15, 'FontWeight', 'bold');
+setappdata(fig,'FUSIOpenVideo',@(cfg)openVideo([],[],cfg));
 btnHelp = uicontrol(fig, 'Style', 'pushbutton', 'String', 'HELP', ...
     'Units', 'pixels', 'Callback', @showHelp, 'BackgroundColor', colBtnExport, ...
     'ForegroundColor', 'w', 'FontSize', 15, 'FontWeight', 'bold');
 btnClose = uicontrol(fig, 'Style', 'pushbutton', 'String', 'CLOSE', ...
-    'Units', 'pixels', 'Callback', @(~,~)close(fig), 'BackgroundColor', colBtnDanger, ...
+    'Units', 'pixels', 'Callback', @closeSCM, 'BackgroundColor', colBtnDanger, ...
     'ForegroundColor', 'w', 'FontSize', 15, 'FontWeight', 'bold');
 
 %% ---------------- CALLBACKS / INIT ----------------
 % Coalesce motion into the latest ROI. Do not queue a full trace redraw for
 % every mouse event; the timer also renders the last position after stopping.
-hoverTimer = timer('ExecutionMode','fixedSpacing','Period',0.04, ...
-    'StartDelay',0.01,'BusyMode','drop','TimerFcn',@renderPendingHover, ...
+hoverTimer = timer('ExecutionMode','fixedSpacing','Period',0.10, ...
+    'StartDelay',0.08,'BusyMode','drop','TimerFcn',@renderPendingHover, ...
     'Name','SCM live ROI');
+sliceTimer=timer('ExecutionMode','singleShot','StartDelay',.08,'BusyMode','drop', ...
+    'TimerFcn',@renderPendingSlice,'Name','SCM latest slice');
 set(fig,'DeleteFcn',@disposeHoverTimer);
 set(fig, 'WindowButtonMotionFcn', @mouseMove);
 set(fig, 'WindowButtonDownFcn', @mouseClick);
 set(fig, 'WindowScrollWheelFcn', @mouseScroll);
-set(fig, 'ResizeFcn', @(~,~)layoutUI());
+set(fig, 'ResizeFcn', @resizeSCM);
 
 % DECONF_STD_SCM_CONTROL_SYNC_V10
 try
@@ -742,6 +866,8 @@ updateUnderlayControlsEnable();
 updateInfoLines();
 deConfUSIon_ui('present',fig);
 layoutUI();
+restoreAtlasDisplayContext();
+refreshScanSequenceControls();
 tcAxisModeChanged();
 updateSliceIndicators();
 computeSCM();
@@ -804,8 +930,8 @@ function layoutUI()
     set(btnClose, 'Position', [panelX + halfW + 14 yClose halfW btnH]);
 
     tcCtrlH = 60;
-    tcCtrlGap = 20;
-    tcHfull = min(250, max(190, round(0.24 * Hh)));
+    tcCtrlGap = 40; % Reserve room for ticks and the stitched-time axis label.
+    tcHfull = min(300, max(280, round(0.28 * Hh)));
     tcPlotH = max(120, tcHfull - tcCtrlH - tcCtrlGap);
     cbW = 18; cbGap = 10; imgRightGap = 26;
     axH = max(340, Hh - botM - tcHfull - gapY - topM);
@@ -816,17 +942,31 @@ function layoutUI()
     cbH = round(0.84 * axH); cbY = axY + round(0.08 * axH); cbX = axX + leftW + cbGap;
     try, set(cb, 'Position', [cbX cbY cbW cbH]); catch, end
     tcLeftPad = 8;
+    narrowTC=leftW-tcLeftPad<760;
+    if narrowTC,tcCtrlH=116;tcPlotH=max(120,tcHfull-tcCtrlH-tcCtrlGap);end
     set(axTC, 'Position', [axX + tcLeftPad, botM + tcCtrlH + tcCtrlGap, leftW - tcLeftPad, tcPlotH]);
     set(tcAxisBar, 'Position', [axX + tcLeftPad, botM - 6, leftW - tcLeftPad, tcCtrlH]);
 
-    hh=24; y=32; x=4; wChk=62; wEdit=95; wBtn=72; g=8;
+    hh=24; y=32+56*narrowTC; x=4; wChk=62; wEdit=95; wBtn=72; g=8;
     set(cbTcFixY,'Position',[x y wChk hh]); x=x+wChk+g;
     set(ebTcYLim,'Position',[x y wEdit hh]); x=x+wEdit+g;
     set(btnTcYFromCax,'Position',[x y wBtn hh]);
-    y=3; x=4;
+    y=3+56*narrowTC; x=4;
     set(cbTcFixX,'Position',[x y wChk hh]); x=x+wChk+g;
     set(ebTcXLim,'Position',[x y wEdit hh]); x=x+wEdit+g;
     set(btnTcXAll,'Position',[x y wBtn hh]);
+    barWidth=leftW-tcLeftPad;xRef=320;yRef=32;if narrowTC,xRef=4;yRef=31;end
+    set(lblReferenceTrace,'Position',[xRef yRef+2 125 22]);
+    popupWidth=max(80,min(380,barWidth-xRef-284));
+    set(popReferenceTrace,'Position',[xRef+130 yRef popupWidth hh]);
+    liveX=xRef+140+popupWidth;set(cbLiveAllScans,'Position',[liveX yRef max(80,min(140,barWidth-liveX-4)) hh]);
+    set(cbTcSmooth,'Position',[xRef 3 145 hh]);set(ebTcSmooth,'Position',[xRef+150 3 80 hh]);set(lblTcSmooth,'Position',[xRef+237 3 75 hh]);
+    set(cbTcSmooth,'String','Smooth curves');set(lblTcSmooth,'String','s window');
+    set(cbNormalizeScans,'Position',[xRef+320 3 220 hh],'String','Normalize each scan');
+    if narrowTC
+        set(cbTcSmooth,'Position',[4 3 100 hh],'String','Smooth');set(ebTcSmooth,'Position',[109 3 60 hh]);set(lblTcSmooth,'Position',[175 3 25 hh],'String','s');
+        set(cbNormalizeScans,'Position',[210 3 max(120,barWidth-214) hh],'String','Normalize scans');
+    end
 
     set(slZ, 'Visible', 'off', 'Enable', 'off');
     set(txtZ, 'Visible', 'off');
@@ -863,11 +1003,14 @@ function scrollControls(~,~)
     p(2)=(vp(4)-p(4))*get(controlScroll,'Value');
     set(pOverlay,'Position',p); set(pUnderlay,'Position',p);
 end
+function spatialScaleAxisChanged(~,~),if isgraphics(ax),updateSpatialScale();end,end
+function resizeSCM(~,~),layoutUI();end
+function closeSCM(~,~),if isgraphics(fig),delete(fig);end,end
 
 function layoutOverlay(w, h)
     compact = (h < 700);
     if compact
-        rowHLoc = 30; gapLoc = 5; groupGapLoc = 8; sliderHLoc = 16; wideBtnHLoc = 32; smallBtnHLoc = 30;
+        rowHLoc = 28; gapLoc = 4; groupGapLoc = 7; sliderHLoc = 16; wideBtnHLoc = 30; smallBtnHLoc = 28;
     else
         rowHLoc = rowH; gapLoc = gap; groupGapLoc = groupGap; sliderHLoc = sliderH; wideBtnHLoc = wideBtnH; smallBtnHLoc = smallBtnH;
     end
@@ -878,13 +1021,21 @@ function layoutOverlay(w, h)
     set(lblROIsz, 'Position', [xLabel y wLabel rowHLoc]);
     set(slROI, 'Position', [xCtrl y + round((rowHLoc-sliderHLoc)/2) wCtrl sliderHLoc]);
     set(txtROIsz, 'Position', [xVal y wVal rowHLoc]);
-    y = y - (rowHLoc + gapLoc);
+    roiAvailable=w-xCtrl-pad;roiHalf=(roiAvailable-10)/2;
+    set(ebRoiWidth,'Position',[xCtrl y roiHalf rowHLoc]);set(ebRoiHeight,'Position',[xCtrl+roiHalf+10 y roiHalf rowHLoc]);
+    set(txtROIPhysical,'Position',[xLabel y-22 w-2*pad 22]);
+    y = y - (rowHLoc + gapLoc + 22);
 
     set(lblRoiXY, 'Position', [xLabel y wLabel rowHLoc]);
     set(ebRoiXY, 'Position', [xCtrl y wCtrl rowHLoc]);
     set(btnRoiAddXY, 'Position', [xVal y wVal rowHLoc]);
     y = y - (rowHLoc + groupGapLoc);
 
+    baselineWidth=(w-2*pad-10)/2;
+    set(btnBaselineSource,'Position',[xLabel y baselineWidth rowHLoc]);
+    set(btnResetBaseline,'Position',[xLabel+baselineWidth+10 y baselineWidth rowHLoc]);y=y-(rowHLoc+gapLoc);
+    set(btnScans,'Position',[xLabel y baselineWidth rowHLoc]);
+    set(popOverlayScan,'Position',[xLabel+baselineWidth+10 y baselineWidth rowHLoc]);y=y-(rowHLoc+gapLoc);
     setRowEditOverlay(lblBase, ebBase); setRowEditOverlay(lblSig, ebSig);
     y = y + (gapLoc - groupGapLoc);
     setRowSliderOverlay(lblAlpha, slAlpha, txtAlpha);
@@ -946,6 +1097,21 @@ function layoutUnder(w, h)
     y = h - rowHLoc;
     set(lblUnderMode, 'Position', [xLabel y wLabel rowHLoc]);
     set(popUnder, 'Position', [xCtrl y (w-xCtrl-pad) rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(lblAtlasChoice,'Position',[xLabel y wLabel rowHLoc]);
+    set(popAtlasChoice,'Position',[xCtrl y (w-xCtrl-pad) rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(cbRegionLabels,'Position',[xLabel y max(160,round(w*.52)) rowHLoc]);
+    set(btnRegionList,'Position',[xVal y wVal rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(lblRegionScheme,'Position',[xLabel y wLabel rowHLoc]);
+    set(popRegionScheme,'Position',[xCtrl y (w-xCtrl-pad) rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    rulerX=round(w*.58);
+    set(cbAtlasLines,'Position',[xLabel y rulerX-xLabel-10 rowHLoc]);
+    set(findall(fig,'Tag','SCM_RulerToggle'),'Position',[rulerX y w-rulerX-pad rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(cbPhysicalScale,'Position',[xLabel y round(w*.55) rowHLoc]);set(cbSharpPixels,'Position',[round(w*.58) y round(w*.38) rowHLoc]);
     y = y - (rowHLoc + groupGapLoc);
     setRowSliderUnder(lblBri, slBri, txtBri);
     setRowSliderUnder(lblCon, slCon, txtCon);
@@ -953,7 +1119,9 @@ function layoutUnder(w, h)
     setRowSliderUnder(lblVsz, slVsz, txtVsz);
     setRowSliderUnder(lblVlv, slVlv, txtVlv);
     y = y - 2;
-    set(btnLoadUnder, 'Position', [xLabel y (w-2*pad) wideBtnHLoc]);
+    loadWidth=round((w-2*pad-8)/2);
+    set(btnLoadUnder, 'Position', [xLabel y loadWidth wideBtnHLoc]);
+    set(findall(fig,'Tag','SCM_LoadAtlasFolder'),'Position',[xLabel+loadWidth+8 y loadWidth wideBtnHLoc]);
     y = y - (wideBtnHLoc + gapLoc);
     set(btnWarpAtlas, 'Position', [xLabel y (w-2*pad) wideBtnHLoc]);
     y = y - (wideBtnHLoc + gapLoc);
@@ -972,13 +1140,263 @@ end
 %% ==========================================================
 % CALLBACKS
 %% ==========================================================
+function s=getBaselineState()
+    s=struct('baseline',baseline,'PSC',PSC,'map',state.lastSignedMap);
+end
+
+function refreshScanSequenceControls()
+    q=state.scanSequence;set(btnScans,'Enable','on');set(popOverlayScan,'Enable','off');
+    set(cbNormalizeScans,'Enable','off','Value',0);
+    if isempty(q),set(btnScans,'Enable','off');return;end
+    labels=fusiScanSequence('labels',q);
+    for si=1:numel(labels)
+        original='';if strcmp(q.scans{si}.key,state.originalScanKey),original=' [originally loaded]';end
+        labels{si}=sprintf('Overlay %d: %s%s',si,labels{si},original);
+    end
+    set(popOverlayScan,'String',labels,'Value',q.active,'TooltipString',labels{q.active});
+    if numel(labels)>1,set(popOverlayScan,'Enable','on');end
+    if ~isempty(baselineRaw),set(cbNormalizeScans,'Enable','on','Value',double(strcmp(q.normMode,'local')));end
+    set(cbLiveAllScans,'Enable','off');if numel(labels)>1||fusiBaselineReference('isExternal',baseline),set(cbLiveAllScans,'Enable','on');end
+end
+
+function q=getScanSequence()
+    q=state.scanSequence;
+end
+
+function manageScanSequence(~,~)
+    try
+        if isappdata(fig,'FUSIScanSequenceError'),rmappdata(fig,'FUSIScanSequenceError');end
+        assert(~isempty(baselineRaw),'deConfUSIon:ScanSequencePower','Open an absolute power dataset from Studio to compare scans.');
+        if isempty(state.scanSequence),state.scanSequence=fusiScanSequence('init',par,baselineRaw,TR,fileLabel);end
+        q=state.scanSequence;
+        q.atlasRegistered=state.isAtlasWarped;
+        if isappdata(fig,'FUSIScanSequenceRequest'),q=getappdata(fig,'FUSIScanSequenceRequest');rmappdata(fig,'FUSIScanSequenceRequest');
+        else,q=fusiScanSequenceDialog(q,baseline,fusiBaselineRawStart(par,getDatasetRootForSelectors()));end
+        if isempty(q),return;end
+        q.originalKey=state.originalScanKey;
+        assert(any(cellfun(@(d)strcmp(d.key,q.originalKey),q.scans)),'deConfUSIon:OriginalScan','Keep the originally loaded dataset in the scan list; untick it to hide its curve.');
+        assert(numel(q.scans)<=fusiScanSequence('maxScans')&&q.active>=1&&q.active<=numel(q.scans),'deConfUSIon:ScanSequenceCount','Choose one to ten scans.');
+        b=baseline;[b.sigStart,b.sigEnd]=parseRangeSafe(getStr(ebSig),sigStart0,sigEnd0);
+        if ~fusiBaselineReference('isExternal',b)
+            [b.start,b.end]=parseRangeSafe(getStr(ebBase),baseStart0,baseEnd0);
+        end
+        progress=fusiBaselineProgress('open','Preparing scan normalization');
+        pg=onCleanup(@()fusiBaselineProgress('close',progress)); %#ok<NASGU>
+        [q,b]=fusiScanSequence('prepare',q,b,baselineRaw,TR,par,@(fraction,message)fusiBaselineProgress('update',progress,fraction,message));
+        setappdata(fig,'FUSIScanSequenceApplying',true);syncGuard=onCleanup(@()removeSequenceApplyingFlag()); %#ok<NASGU>
+        setappdata(fig,'FUSIBaselineRequest',b);baselineSourceChanged();
+        if isappdata(fig,'FUSIBaselineError'),error('deConfUSIon:ScanSequenceBaseline','%s',getappdata(fig,'FUSIBaselineError'));end
+        state.scanSequence=q;par.scanSequence=q;state.referenceMode=4;if numel(q.scans)==1,state.referenceMode=3;end
+        set(popReferenceTrace,'Value',state.referenceMode);
+        state.referenceTraceCache={};state.timeWindowKey=[];refreshScanSequenceControls();computeSCM();redrawROIsForCurrentSlice();
+        message='Shared baseline retained across all scans.';
+        if strcmp(q.normMode,'local'),message='Each scan uses its own baseline window.';end
+        set(info1,'String',[message ' Overlay selector changes the signal scan.']);
+    catch ME
+        if isappdata(fig,'FUSIScanSequenceRequest'),rmappdata(fig,'FUSIScanSequenceRequest');end
+        setappdata(fig,'FUSIScanSequenceError',ME.message);set(info1,'String',['Scan sequence: ' ME.message]);
+    end
+end
+function removeSequenceApplyingFlag()
+    if isgraphics(fig)&&isappdata(fig,'FUSIScanSequenceApplying'),rmappdata(fig,'FUSIScanSequenceApplying');end
+end
+function normalizeScansChanged(~,~)
+    q=state.scanSequence;if isempty(q)||isempty(baselineRaw),return;end
+    q=fusiScanSequence('reference',q,baseline);
+    q.normMode='shared';if get(cbNormalizeScans,'Value'),q.normMode='local';end
+    setappdata(fig,'FUSIScanSequenceRequest',q);manageScanSequence();refreshScanSequenceControls();
+end
+
+function overlayScanChanged(~,~)
+    q=state.scanSequence;index=get(popOverlayScan,'Value');if isempty(q)||index==q.active,return;end
+    progress=fusiBaselineProgress('open','Loading selected overlay scan');
+    guard=onCleanup(@()fusiBaselineProgress('close',progress)); %#ok<NASGU>
+    try
+        if isappdata(fig,'FUSIScanSequenceError'),rmappdata(fig,'FUSIScanSequenceError');end
+        definitions=roiDefinitionsForCurrentView();displayDefinitions=definitions;
+        source=q.scans{q.active};target=q.scans{index};mode='keep';if isfield(q,'underlayMode'),mode=q.underlayMode;end
+        if state.isAtlasWarped&&fusiScanSequence('shareAtlas',q),mode='keep';end
+        maskFile='';
+        if strcmp(mode,'mask')
+            if isappdata(fig,'FUSIOverlayUnderlayRequest'),maskFile=getappdata(fig,'FUSIOverlayUnderlayRequest');rmappdata(fig,'FUSIOverlayUnderlayRequest');
+            else
+                paths=fusiResolveAnalysisFolder(target.rawFile);[name,folder]=uigetfile('*.mat','Choose this scan''s Mask Editor underlay',paths.datasetFolder);
+                if isequal(name,0),refreshScanSequenceControls();return;end;maskFile=fullfile(folder,name);
+            end
+        end
+        retain=strcmp(mode,'keep');registered=retain&&state.isAtlasWarped;appearance=uState;
+        anchor=state.retainedUnderlay;
+        if retain&&(isempty(anchor)||anchor.revision~=state.underlayRevision)
+            anchor=struct('source',source,'nativeBG',origBG,'revision',state.underlayRevision);
+        end
+        displayPSC=[];newMapping=[];nativeBG=procOrRetainedBG(anchor,target,retain);
+        if registered,newMapping=scmRebaseROIMapping(state.currentROIMapping,source,target);end
+        if state.isAtlasWarped
+            native=[size(origPSC,1) size(origPSC,2) 1];if ndims(origPSC)==4,native(3)=size(origPSC,3);end
+            definitions=scmROI('map',definitions,[nY nX nZ],native,roi.viewMapping,true,[NaN NaN NaN]);
+        end
+        mapped={};
+        for di=1:numel(definitions)
+            c=fusiScanSequence('mapROI',definitions{di},source,target);if ~isempty(c),mapped{end+1}=c;end %#ok<AGROW>
+        end
+        b=baseline;[b.sigStart,b.sigEnd]=parseRangeSafe(getStr(ebSig),sigStart0,sigEnd0);
+        [q,b]=fusiScanSequence('prepare',q,b,baselineRaw,TR,par,@(fraction,message)fusiBaselineProgress('update',progress,fraction,message));
+        [proc,b,newPar,I]=fusiScanSequence('load',q,index,b,par, ...
+            @(fraction,message)fusiBaselineProgress('update',progress,fraction,message));
+        if registered
+            fusiBaselineProgress('update',progress,.9,'Placing the new signal on the retained atlas grid...');
+            displayPSC=scmWarpMappedSeries(proc.PSC,newMapping,[nY nX nZ]);mapped=displayDefinitions;
+        end
+        newMask=fusiScanSequence('mapVolume',origPassedMask,source,target);
+        par=newPar;state.scanSequence=par.scanSequence;TR=target.TR;baseline=b;
+        if isfield(b,'localBaseline'),localBaselineReset=b.localBaseline;end
+        state.referenceMode=4;set(popReferenceTrace,'Value',4);
+        origPSC=proc.PSC;baselineRaw=I;nVolsOrig=target.nFrames;origPassedMask=newMask;
+        if registered
+            PSC=displayPSC;origBG=nativeBG;state.currentROIMapping=newMapping;roi.viewMapping=newMapping;
+        else
+            PSC=proc.PSC;bg=proc.bg;if retain&&~isempty(nativeBG),bg=nativeBG;end;origBG=bg;
+            passedMask=newMask;state.isAtlasWarped=false;state.isStepMotorAtlasWarped=false;
+            state.atlasDisplay3D=[];state.regionLabelUnderlay=[];state.regionInfo=struct();state.regionColorLUT=[];
+            state.currentROIMapping=[];roi.viewMapping=[];state.pendingAtlasUnderlay3D=[];
+            applyUnderlayMeta(defaultUnderlayMeta(),bg);
+        end
+        if retain
+            uState=appearance;set(popUnder,'Value',uState.mode);
+            set(slBri,'Value',uState.brightness);set(slCon,'Value',uState.contrast);set(slGam,'Value',uState.gamma);
+            set(txtBri,'String',sprintf('%.2f',uState.brightness));set(txtCon,'String',sprintf('%.2f',uState.contrast));set(txtGam,'String',sprintf('%.2f',uState.gamma));
+            anchor.revision=state.underlayRevision;state.retainedUnderlay=anchor;
+        else,state.retainedUnderlay=[];end
+        fileLabel=target.label;spatial=scmSpatialCalibration(par);isVolMode=false;
+        set(ebBase,'String',sprintf('%.9g-%.9g',b.start,b.end),'Enable','on');set(lblBase,'String','Baseline window (s)');
+        if fusiBaselineReference('isExternal',b),set(ebBase,'Enable','off');set(lblBase,'String','Source baseline (s)');end
+        set(btnBaselineSource,'TooltipString',fusiBaselineReference('label',b));
+        state.referenceTraceCache={};state.timeWindowKey=[];state.tcFixX=false;set(cbTcFixX,'Value',0);
+        resetRoisAndRefreshAfterDataChange(false);
+        if ~isempty(maskFile),loadMaskCB([],[],maskFile);end
+        for di=1:numel(mapped),if mapped{di}.sourceAutomatic,mapped{di}=candidateForBaseline(mapped{di});end,end
+        installROIDefinitions(mapped);redrawROIsForCurrentSlice();refreshScanSequenceControls();layoutUI();
+        set(info1,'String',['Signal overlay: ' target.label ' | Underlay: ' mode]);
+    catch ME
+        setappdata(fig,'FUSIScanSequenceError',ME.message);set(info1,'String',['Scan switch failed: ' ME.message]);refreshScanSequenceControls();
+    end
+end
+
+function U=procOrRetainedBG(anchor,target,retain)
+    U=[];if ~retain||isempty(anchor),return;end
+    offset=fusiScanSequence('offset',anchor.source,target);
+    if all(offset==0)&&isequal(anchor.source.spatialSize,target.spatialSize),U=anchor.nativeBG;return;end
+    if numel(anchor.source.spatialSize)==2&&ndims(anchor.nativeBG)==3&&size(anchor.nativeBG,3)==3
+        for channel=1:3,U(:,:,channel)=fusiScanSequence('mapVolume',anchor.nativeBG(:,:,channel),anchor.source,target);end
+    else,U=fusiScanSequence('mapVolume',anchor.nativeBG,anchor.source,target);end
+end
+
+function baselineSourceChanged(~,~)
+    try
+        if isappdata(fig,'FUSIBaselineError'),rmappdata(fig,'FUSIBaselineError');end
+        assert(~isempty(baselineRaw),'deConfUSIon:BaselineRaw','This SCM contains PSC only. Open the raw/preprocessed scan from Studio to select an absolute baseline.');
+        if isappdata(fig,'FUSIBaselineRequest')
+            b=getappdata(fig,'FUSIBaselineRequest');rmappdata(fig,'FUSIBaselineRequest');
+        else
+            current=baseline;[current.start,current.end]=parseRangeSafe(getStr(ebBase),baseStart0,baseEnd0);
+            if isVolMode,current.start=(current.start-1)*TR;current.end=(current.end-1)*TR;end
+            b=fusiBaselineSourceDialog(current,TR,size(baselineRaw,1:ndims(baselineRaw)-1),getDatasetRootForSelectors(),par);
+        end
+        if isempty(b),return;end
+        if ~fusiBaselineReference('isExternal',baseline)&&fusiBaselineReference('isExternal',b)
+            localBaselineReset=baseline;
+            [localBaselineReset.start,localBaselineReset.end]=parseRangeSafe(getStr(ebBase),baseStart0,baseEnd0);
+            if isVolMode,localBaselineReset.start=(localBaselineReset.start-1)*TR;localBaselineReset.end=(localBaselineReset.end-1)*TR;end
+            localBaselineReset.mode='sec';
+        end
+        if fusiBaselineReference('isExternal',b),b.localBaseline=localBaselineReset;end
+        sequenceBaseline=[];
+        if ~isempty(state.scanSequence)&&numel(state.scanSequence.scans)>1&&~isappdata(fig,'FUSIScanSequenceApplying')
+            sequenceBaseline=state.scanSequence;
+            if fusiBaselineReference('isExternal',b)
+                sequenceBaseline.normMode='shared';
+            elseif strcmp(sequenceBaseline.normMode,'local')
+                sequenceBaseline.localWindowSec=[b.start b.end];
+            else
+                sequenceBaseline.sharedReference=[];
+            end
+            [sequenceBaseline,b]=fusiScanSequence('prepare',sequenceBaseline,b,baselineRaw,TR,par);
+        end
+        if fusiBaselineNeedsRecalculation(baseline,b)
+            proc=fusiApplyBaseline(baselineRaw,TR,par,b,nT);updatedPSC=proc.PSC;
+            if state.isAtlasWarped,updatedPSC=scmWarpMappedSeries(proc.PSC,state.currentROIMapping,[nY nX nZ]);end
+            PSC=updatedPSC;origPSC=proc.PSC;
+            count=getappdata(fig,'FUSIBaselineRecomputations');if isempty(count),count=0;end
+            setappdata(fig,'FUSIBaselineRecomputations',count+1);
+        end
+        baseline=b;isVolMode=false;
+        if ~isempty(sequenceBaseline),state.scanSequence=sequenceBaseline;par.scanSequence=sequenceBaseline;refreshScanSequenceControls();end
+        if ~fusiBaselineReference('isExternal',b)&&state.referenceMode==4&& ...
+                (isempty(state.scanSequence)||numel(state.scanSequence.scans)<2)
+            state.referenceMode=3;set(popReferenceTrace,'Value',3);
+        end
+        baseStart0=b.start;baseEnd0=b.end;
+        set(ebBase,'String',sprintf('%.9g-%.9g',b.start,b.end),'Enable','on');set(lblBase,'String','Baseline window (s)');
+        if fusiBaselineReference('isExternal',b),set(ebBase,'Enable','off');set(lblBase,'String','Source baseline (s)');end
+        set(btnBaselineSource,'TooltipString',fusiBaselineReference('label',b));
+        state.baseKey=[];state.signalKey=[];state.timeWindowKey=[];roi.hoverStats=[];
+        state.referenceTraceCache={};state.referenceTraceError='';
+        state.tcFixX=false;set(cbTcFixX,'Value',0);set(ebTcXLim,'Enable','off');
+        audit=scmAutomaticROISelections(fig);
+        for ai=1:numel(audit)
+            c=candidateForBaseline(audit{ai});tc=scmROI('trace',PSC,c);
+            c.meanPSC=mean(tc(c.signalFrames));
+            c.method='Fixed ROI and signal window retained after baseline change';
+            c.selection='Reference changed; score recomputed. Rerun Automatic analysis to select new peaks.';
+            audit{ai}=c;
+        end
+        setappdata(fig,'AutomaticROISelections',audit);
+        if ~isappdata(fig,'FUSIScanSequenceApplying'),computeSCM();redrawROIsForCurrentSlice();end
+        set(hLivePSC,'Visible','off');roi.lastHoverXY=[-inf -inf];
+        set(info1,'String',['Baseline: ' fusiBaselineReference('label',baseline)]);
+    catch ME
+        setappdata(fig,'FUSIBaselineError',ME.message);set(info1,'String',['Baseline failed: ' ME.message]);
+    end
+end
+
+function resetLocalBaseline(~,~)
+    if ~fusiBaselineReference('isExternal',baseline)
+        set(info1,'String','This scan already uses its local baseline window.');return;
+    end
+    setappdata(fig,'FUSIBaselineRequest',localBaselineReset);baselineSourceChanged();
+end
+
+function c=candidateForBaseline(c)
+    c.baselineMode='local';
+    if fusiBaselineReference('isExternal',baseline)
+        c.baselineMode='external';c.baselineReference=baseline.reference;
+        r=baseline.reference;c.baselineFrames=r.frames(1):r.frames(2);
+        c.baselineSec=r.windowSec;c.baselineSampleSec=(c.baselineFrames-1)*r.TR;
+    else
+        [b0,b1]=selectedBaselineFrames();c.baselineFrames=b0:b1;
+        c.baselineSec=tsec([b0 b1]);c.baselineSampleSec=tsec(c.baselineFrames);
+        if isfield(c,'baselineReference'),c=rmfield(c,'baselineReference');end
+    end
+end
+
 function onWindowEdited(~,~)
     % Refresh persistent and hover ROIs from the same source used by export.
     try
         [v0,v1]=parseRangeSafe(getStr(ebBase),NaN,NaN);
         if ~isfinite(v0) || ~isfinite(v1) || v1<v0, return; end
         if isVolMode, lastAllowed=nT; firstAllowed=1; else, lastAllowed=tsec(end); firstAllowed=0; end
-        if v0<firstAllowed || v1>lastAllowed, return; end
+        if ~fusiBaselineReference('isExternal',baseline)&&(v0<firstAllowed || v1>lastAllowed), return; end
+        if ~isempty(state.scanSequence)&&numel(state.scanSequence.scans)>1&&strcmp(state.scanSequence.normMode,'local')
+            window=[v0 v1];if isVolMode,window=(window-1)*TR;end
+            if ~isequal(window,state.scanSequence.localWindowSec)
+                updatedSequence=state.scanSequence;updatedSequence.localWindowSec=window;
+                setappdata(fig,'FUSIScanSequenceRequest',updatedSequence);manageScanSequence();
+                if isappdata(fig,'FUSIScanSequenceError')
+                    set(ebBase,'String',sprintf('%.9g-%.9g',state.scanSequence.localWindowSec));
+                end
+                return;
+            end
+        end
         computeSCM();
         redrawROIsForCurrentSlice();
         if strcmp(get(hLiveRect,'Visible'),'on')
@@ -988,7 +1406,7 @@ function onWindowEdited(~,~)
             x1=round(bounds(1)); y1=round(bounds(2));
             x2=x1+round(bounds(3))-1; y2=y1+round(bounds(4))-1;
             tc=computeRoiPSC_idx(state.z,x1,x2,y1,y2,state.hoverIdx);
-            set(hLivePSC,'XData',state.tminHover,'YData',tc,'Visible','on');
+            setLiveCurve(tc,state.z,x1,x2,y1,y2);
         end
         roi.lastHoverXY=[-inf -inf];
         applyTimecourseAxisMode(); drawnow;
@@ -1014,7 +1432,7 @@ function sliceChanged(~,~)
     state.z = clamp(zNew, 1, nZ);
     set(slZ, 'Value', nZ - state.z + 1);
     mask2D = getMaskForCurrentSlice();
-    set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+    updateSCMUnderlayDisplay(state.z);
     roi.pendingHover=[];
     set(hLiveRect, 'Visible', 'off');
     set(hLivePSC, 'Visible', 'off');
@@ -1044,17 +1462,103 @@ function setHoverActive(active)
 end
 
 function setROIsize()
+    roi.revision=roi.revision+1;
     roi.size = max(1, round(get(slROI, 'Value')));
     set(txtROIsz, 'String', sprintf('%d', roi.size));
+    updateROIPhysicalSize();
     applyTimecourseAxisMode();
 end
 
 function onRoiSizeEdited(~,~)
+    roi.revision=roi.revision+1;
     v = str2double(strtrim(getStr(txtROIsz)));
     if ~isfinite(v), v = roi.size; end
     roi.size = max(1, min(220, round(v)));
     set(slROI, 'Value', roi.size);
     set(txtROIsz, 'String', sprintf('%d', roi.size));
+    updateROIPhysicalSize();
+end
+
+function roiSizeModeChanged(~,~)
+    requested=get(lblROIsz,'Value')==2;
+    if requested
+        try,scmROI('size',struct('sizeMode','um','sizeUm',roi.sizeUm),currentROISpacingUm());
+        catch ME,set(lblROIsz,'Value',1);set(info1,'String',ME.message);requested=false;end
+    end
+    roi.sizeMode='pixels';if requested,roi.sizeMode='um';end
+    pixelVis='on';physicalVis='off';if requested,pixelVis='off';physicalVis='on';end
+    set([slROI txtROIsz],'Visible',pixelVis);set([ebRoiWidth ebRoiHeight],'Visible',physicalVis);
+    roi.revision=roi.revision+1;roi.pendingHover=[];roi.hoverStats=[];updateROIPhysicalSize();
+end
+function roiPhysicalEdited(~,~)
+    requested=[str2double(getStr(ebRoiWidth)) str2double(getStr(ebRoiHeight))];
+    try
+        scmROI('size',struct('sizeMode','um','sizeUm',requested),currentROISpacingUm());roi.sizeUm=requested;
+        roi.revision=roi.revision+1;roi.pendingHover=[];roi.hoverStats=[];updateROIPhysicalSize();
+    catch ME
+        set(ebRoiWidth,'String',num2str(roi.sizeUm(1)));set(ebRoiHeight,'String',num2str(roi.sizeUm(2)));set(info1,'String',ME.message);
+    end
+end
+function imageAppearanceChanged(~,~)
+    state.physicalScale=logical(get(cbPhysicalScale,'Value'));state.sharpPixels=logical(get(cbSharpPixels,'Value'));
+    syncSCMImageGeometry();drawnow limitrate;
+end
+function spacing=currentROISpacingUm()
+    spacing=spatial.spacingUm;
+    if state.isAtlasWarped || state.isStepMotorAtlasWarped
+        % ROI coordinates belong to the functional grid, not the finer
+        % reference texture or the original acquisition after resampling.
+        spacing=state.atlasInPlaneSpacingUm;
+        if ~isempty(state.atlasDisplay3D),spacing=state.atlasDisplay3D.spacingUm;end
+        if any(~isfinite(spacing(1:2)) | spacing(1:2)<=0) && isfield(par,'atlasVoxelSizeYXZUm')
+            spacing=par.atlasVoxelSizeYXZUm;
+        end
+    end
+end
+
+function updateROIPhysicalSize()
+    spacing=currentROISpacingUm();
+    if strcmp(roi.sizeMode,'um')&&any(~isfinite(spacing(1:2))|spacing(1:2)<=0)
+        roi.sizeMode='pixels';set(lblROIsz,'Value',1);set([slROI txtROIsz],'Visible','on');set([ebRoiWidth ebRoiHeight],'Visible','off');
+    end
+    [x1,x2,y1,y2]=roiBounds(ceil(nX/2),ceil(nY/2));
+    counts=[x2-x1+1 y2-y1+1]; % width (columns), height (rows)
+    known=numel(spacing)>=2 && all(isfinite(spacing(1:2)) & spacing(1:2)>0);
+    dimensions=[NaN NaN];
+    if known
+        dimensions=counts.*spacing([2 1]);
+        label=sprintf('(%.6g %c %.6g %cm; X %c Y)',dimensions(1),215,dimensions(2),181,215);
+        detail=sprintf(['ROI footprint: %d columns x %d rows = %.6g x %.6g um (X x Y).\n' ...
+            'First value: X = horizontal width = columns x %.6g um.\n' ...
+            'Second value: Y = vertical height = rows x %.6g um.\n' ...
+            'Uses the current functional pixel grid. Atlas display texture upsampling does not change ROI size.\n' ...
+            'ROI bounds are clipped at image edges; the ROI preview reports that actual size.\n' ...
+            'Pixel spacing describes sampling, not acoustic resolution.'], ...
+            counts(1),counts(2),dimensions(1),dimensions(2),spacing(2),spacing(1));
+    else
+        label=sprintf('(%cm size unavailable - set Scale / units)',181);
+        detail='Physical ROI size requires verified row and column spacing for the current functional grid. Use Scale / units to calibrate it.';
+    end
+    if strcmp(roi.sizeMode,'um')
+        label=sprintf('Actual %.6g %c %.6g %cm; %d %c %d px (X %c Y)',dimensions(1),215,dimensions(2),181,counts(1),215,counts(2),215);
+        detail=sprintf('Requested %.6g x %.6g um (X x Y). Nearest whole native pixels; no interpolation.\n%s',roi.sizeUm,detail);
+    elseif any(counts~=roi.size)
+        detail=sprintf('%s\nSelected size %d uses the existing centered ROI bounds (%d x %d pixels here).',detail,roi.size,counts(1),counts(2));
+        if known,label=sprintf('%s [%d %c %d px]',label,counts(1),215,counts(2));end
+    end
+    set(txtROIPhysical,'String',label,'TooltipString',detail);
+    set(txtROIsz,'TooltipString',['Type ROI size in pixels, then press Enter.' newline detail]);
+    set(slROI,'TooltipString',detail);
+    setappdata(fig,'SCMROIPhysicalSize',struct('selectedSize',roi.size,'pixelsXY',counts, ...
+        'sizeXYUm',dimensions,'spacingYXUm',spacing(1:2),'calibrated',known,'sizeMode',roi.sizeMode,'requestedSizeUm',roi.sizeUm));
+end
+
+function label=roiCoordinateText(z,x1,x2,y1,y2)
+    label=sprintf('ROI z=%d | x:%d-%d  y:%d-%d',z,x1,x2,y1,y2);
+    spacing=currentROISpacingUm();
+    if numel(spacing)>=2 && all(isfinite(spacing(1:2)) & spacing(1:2)>0)
+        label=sprintf('%s | %.6g %c %.6g %cm (X %c Y)',label,(x2-x1+1)*spacing(2),215,(y2-y1+1)*spacing(1),181,215);
+    end
 end
 
 function roiXYKey(~, evt)
@@ -1087,7 +1591,10 @@ end
 
 function queueHover(x,ypix)
     setappdata(fig,'deConfUSIonInteractionUntil',now+0.75/86400);
-    roi.pendingHover=[state.z x ypix roi.size];
+    roi.pendingHover=[state.z x ypix roi.revision];
+    roi.lastHoverMove=now;
+    [x1,x2,y1,y2]=roiBounds(x,ypix);
+    set(hLiveRect,'Position',[x1 y1 x2-x1+1 y2-y1+1],'Visible','on');
     if ~roi.hoverScheduled
         roi.hoverScheduled=true;
         start(hoverTimer);
@@ -1100,20 +1607,21 @@ function renderPendingHover(~,~)
         roi.hoverScheduled=false;
         stop(hoverTimer); return;
     end
+    if state.tcLiveAllScans&&(sequenceTraceShown()||referenceTraceShown())&&isfield(roi,'lastHoverMove')&&(now-roi.lastHoverMove)*86400<.25,return;end
     target=roi.pendingHover; roi.pendingHover=[];
-    if target(1)~=state.z || target(4)~=roi.size, return; end
+    if target(1)~=state.z || target(4)~=roi.revision, return; end
     x=target(2); ypix=target(3);
     if isequal(roi.lastHoverXY,target) && strcmp(get(hLiveRect,'Visible'),'on'), return; end
     [x1,x2,y1,y2] = roiBounds(x, ypix);
     col = roi.colors(mod(numel(ROI_byZ{state.z}), size(roi.colors,1))+1, :);
     set(hLiveRect, 'Position', [x1 y1 x2-x1+1 y2-y1+1], 'EdgeColor', col, 'Visible', 'on');
-    set(hRoiCoordTxt, 'String', sprintf('ROI z=%d | x:%d-%d  y:%d-%d', state.z, x1, x2, y1, y2), 'Visible', 'on');
+    set(hRoiCoordTxt, 'String', roiCoordinateText(state.z,x1,x2,y1,y2), 'Visible', 'on');
     tc = computeHoverPSC(x1,x2,y1,y2);
     if isempty(tc) || numel(tc) ~= numel(state.tminHover)
         set(hLivePSC, 'Visible', 'off');
         return;
     end
-    set(hLivePSC, 'XData', state.tminHover, 'YData', tc, 'Visible', 'on');
+    setLiveCurve(tc,state.z,x1,x2,y1,y2);
     roi.lastHoverXY=target;
     applyTimecourseAxisMode();
     drawnow limitrate nocallbacks;
@@ -1124,10 +1632,11 @@ function disposeHoverTimer(~,~)
     if ~isempty(hoverTimer) && isvalid(hoverTimer)
         stop(hoverTimer); delete(hoverTimer);
     end
+    if ~isempty(sliceTimer)&&isvalid(sliceTimer),stop(sliceTimer);delete(sliceTimer);end
 end
 
 function mouseClick(~,~)
-    if ~isPointerOverImageAxis(), return; end
+    if roi.addBusy || ~isPointerOverImageAxis(), return; end
     cp = get(ax, 'CurrentPoint');
     x = round(cp(1,1)); ypix = round(cp(1,2));
     if x < 1 || x > nX || ypix < 1 || ypix > nY, return; end
@@ -1143,9 +1652,22 @@ function mouseScroll(~, evt)
     if nZ <= 1 || ~isPointerOverImageAxis(), return; end
     dz = sign(evt.VerticalScrollCount);
     if dz == 0, return; end
-    state.z = clamp(state.z + dz, 1, nZ);
+    current=state.z;if ~isempty(state.pendingSlice),current=state.pendingSlice;end
+    state.pendingSlice=clamp(current+evt.VerticalScrollCount,1,nZ);
+    roi.pendingHover=[];
+    if strcmp(sliceTimer.Running,'off'),start(sliceTimer);end
+end
+
+function renderPendingSlice(~,~)
+    if ~isgraphics(fig)||isempty(state.pendingSlice),return;end
+    target=state.pendingSlice;state.pendingSlice=[];if target~=state.z,browseSlice(target);end
+end
+
+function browseSlice(z)
+    validateattributes(z,{'numeric'},{'scalar','finite'});
+    state.z = clamp(round(z), 1, nZ);
     mask2D = getMaskForCurrentSlice();
-    set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+    updateSCMUnderlayDisplay(state.z);
     roi.pendingHover=[];
     set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
     updateSliceIndicators(); updateInfoLines(); computeSCM(); redrawROIsForCurrentSlice();
@@ -1167,24 +1689,48 @@ function addRoiFromXY(~,~)
 end
 
 function addRoiAtCenter(x, ypix)
+    if roi.addBusy, return; end
+    roi.addBusy=true;
+    roi.addAppearance=struct('pointer',get(fig,'Pointer'),'info',get(info1,'String'), ...
+        'loadingInfo',sprintf('Adding ROI %d: calculating its time course...',roi.nextId));
+    set(fig,'Pointer','watch');set(info1,'String',roi.addAppearance.loadingInfo);
+    guard=onCleanup(@finishRoiAdd); %#ok<NASGU>
+    setHoverActive(false);
+    if sequenceTraceShown()||referenceTraceShown(),drawnow limitrate nocallbacks;end
     x = clamp(round(x), 1, nX); ypix = clamp(round(ypix), 1, nY);
     [x1,x2,y1,y2] = roiBounds(x, ypix);
     tc = computeRoiPSC_atSlice(state.z, x1, x2, y1, y2);
     if numel(tc) ~= nT, return; end
     col = roi.colors(mod(numel(ROI_byZ{state.z}), size(roi.colors,1))+1, :);
-    ROI_byZ{state.z}(end+1) = struct('id', roi.nextId, 'x1', x1, 'x2', x2, 'y1', y1, 'y2', y2, 'color', col);
+    r=struct('id', roi.nextId, 'x1', x1, 'x2', x2, 'y1', y1, 'y2', y2, 'color', col);
+    ROI_byZ{state.z}(end+1) = r;
+    sizing=scmROI('size',struct('size',roi.size,'sizeMode',roi.sizeMode,'sizeUm',roi.sizeUm),currentROISpacingUm());
+    sizing.boundsXY=[x1 x2 y1 y2];sizing.sizeXY=[x2-x1+1 y2-y1+1];
+    if sizing.calibrated,sizing.sizeXYUm=sizing.sizeXY.*sizing.spacingUm([2 1]);end
+    roi.sizingById{roi.nextId}=sizing;
     roi.nextId = roi.nextId + 1;
-    setHoverActive(false);
-    redrawROIsForCurrentSlice();
+    % Adding one ROI must not recalculate or replace the existing curves.
+    setappdata(fig,'FUSICurveReadBatch',[1 1]);
+    drawRoiForCurrentSlice(r,scmAutomaticROISelections(fig),tc);
     set(hLiveRect, 'Position', [x1 y1 x2-x1+1 y2-y1+1], 'EdgeColor', col, 'Visible', 'on');
-    tcHover = computeRoiPSC_idx(state.z, x1, x2, y1, y2, state.hoverIdx);
+    tcHover = tc(state.hoverIdx);
     if ~isempty(tcHover) && numel(tcHover) == numel(state.tminHover)
-        set(hLivePSC, 'XData', state.tminHover, 'YData', tcHover, 'Visible', 'on');
+        setLiveCurve(tcHover,state.z,x1,x2,y1,y2);
     else
         set(hLivePSC, 'Visible', 'off');
     end
-    set(hRoiCoordTxt, 'String', sprintf('ROI z=%d | x:%d-%d  y:%d-%d', state.z, x1, x2, y1, y2), 'Visible', 'on');
+    set(hRoiCoordTxt, 'String', roiCoordinateText(state.z,x1,x2,y1,y2), 'Visible', 'on');
     applyTimecourseAxisMode();
+
+end
+
+function finishRoiAdd()
+    appearance=roi.addAppearance;roi.addBusy=false;
+    closeCurveReadProgress();
+    if ~isgraphics(fig),return;end
+    set(fig,'Pointer',appearance.pointer);
+    if isequal(get(info1,'String'),appearance.loadingInfo),set(info1,'String',appearance.info);end
+    roi.addAppearance=[];
 end
 
 function removeNearestRoi(x, ypix)
@@ -1194,9 +1740,16 @@ function removeNearestRoi(x, ypix)
         ctr = arrayfun(@(r)[(r.x1+r.x2)/2, (r.y1+r.y2)/2], ROI, 'UniformOutput', false);
         ctr = cat(1, ctr{:});
         [~, i] = min(sum((ctr - [x ypix]).^2, 2));
-        ROI(i) = [];
-        ROI_byZ{state.z} = ROI;
-        redrawROIsForCurrentSlice();
+        removedID=ROI(i).id;
+        for zz=1:nZ,marks=ROI_byZ{zz};ROI_byZ{zz}=marks([marks.id]~=removedID);end
+        audit=scmAutomaticROISelections(fig);audit=audit(~cellfun(@(c)c.roiId==removedID,audit));setappdata(fig,'AutomaticROISelections',audit);
+        roi.hiddenDefinitions=roi.hiddenDefinitions(~cellfun(@(c)c.roiId==removedID,roi.hiddenDefinitions));
+        for bi=1:numel(roi.viewBanks)
+            definitions=roi.viewBanks{bi}.definitions;
+            roi.viewBanks{bi}.definitions=definitions(~cellfun(@(c)c.roiId==removedID,definitions));
+        end
+        if numel(roi.sizingById)>=removedID,roi.sizingById{removedID}=[];end
+        pruneRoiGraphics(removedID);
     end
     set(hLiveRect, 'Visible', 'off');
     set(hLivePSC, 'Visible', 'off');
@@ -1204,7 +1757,29 @@ function removeNearestRoi(x, ypix)
     applyTimecourseAxisMode();
 end
 
+function pruneRoiGraphics(id)
+    roiHandles=removeGraphicsForId(roiHandles,id);
+    roiTextHandles=removeGraphicsForId(roiTextHandles,id);
+    roiPlotPSC=removeGraphicsForId(roiPlotPSC,id);
+    roi.savedTcBounds=zeros(0,6);
+    for h=reshape(roiPlotPSC,1,[]),roi.savedTcBounds(end+1,:)=traceBounds(h.XData,h.YData);end
+    applyTimecourseAxisMode();drawnow limitrate nocallbacks;
+end
+function handles=removeGraphicsForId(handles,id)
+    keep=true(size(handles));
+    for k=1:numel(handles)
+        if ~isgraphics(handles(k)),keep(k)=false;
+        elseif isequal(getappdata(handles(k),'SCMROIId'),id),delete(handles(k));keep(k)=false;end
+    end
+    handles=handles(keep);
+end
+
 function [x1,x2,y1,y2] = roiBounds(x, ypix)
+    if strcmp(roi.sizeMode,'um')
+        s=scmROI('size',struct('sizeMode','um','sizeUm',roi.sizeUm),currentROISpacingUm());xy=s.sizeXY;
+        x1=max(1,x-floor((xy(1)-1)/2));x2=min(nX,x+ceil((xy(1)-1)/2));
+        y1=max(1,ypix-floor((xy(2)-1)/2));y2=min(nY,ypix+ceil((xy(2)-1)/2));return;
+    end
     hlf = floor(roi.size/2);
     x1 = max(1, x-hlf); x2 = min(nX, x+hlf);
     y1 = max(1, ypix-hlf); y2 = min(nY, ypix+hlf);
@@ -1267,60 +1842,64 @@ function scaleSettings(~,~)
         end
         spatial=calibration; rulerStep=500;
     elseif strcmp(choice,'Calibrate spacing')
+        currentSpacing=currentROISpacingUm();
         answer=inputdlg({'Row spacing (um)','Column spacing (um)','Slice spacing (um, NaN if unknown)'}, ...
-            'Confirm spacing in CURRENT image coordinates',1,arrayfun(@num2str,spatial.spacingUm,'UniformOutput',false));
+            'Confirm spacing in CURRENT image coordinates',1,arrayfun(@num2str,currentSpacing,'UniformOutput',false));
         if isempty(answer), return; end
         v=str2double(answer)';
         if any(~isfinite(v(1:2)) | v(1:2)<=0) || ~(isnan(v(3)) || (isfinite(v(3)) && v(3)>0))
             warndlg('Enter positive row/column spacing. Slice spacing may be NaN.','Spatial scale'); return;
         end
-        spatial.spacingUm=v; spatial.source='User-confirmed spacing for current image.';
+        if state.isAtlasWarped || state.isStepMotorAtlasWarped
+            state.atlasInPlaneSpacingUm=v;
+        else
+            spatial.spacingUm=v; spatial.source='User-confirmed spacing for current image.';
+        end
     elseif strcmp(choice,'Ruler settings')
         [ix,ok]=listdlg('PromptString','Ruler tick interval','SelectionMode','single', ...
-            'ListString',{'Off','100 um','500 um'});
+            'ListString',{'Off','50 um','100 um','200 um','250 um','300 um','500 um','750 um','1000 um','1500 um','2000 um','5000 um'});
         if ~ok, return; end
-        values=[0 100 500]; rulerStep=values(ix);
-        if rulerStep>0 && any(~isfinite(spatial.spacingUm(1:2)))
-            rulerStep=0; warndlg('Units could not be verified. Use Scale / units > Probe presets for these sequences, or Calibrate spacing.','Spatial scale');
+        values=[0 50 100 200 250 300 500 750 1000 1500 2000 5000]; selectedStep=values(ix);
+        setappdata(fig,'SCMRulerVisible',selectedStep>0);
+        set(findall(fig,'Tag','SCM_RulerToggle'),'Value',double(selectedStep>0));
+        if selectedStep>0,rulerStep=selectedStep;end % Off retains the last chosen length.
+        currentSpacing=currentROISpacingUm();
+        if selectedStep>0 && any(~isfinite(currentSpacing(1:2)))
+            setappdata(fig,'SCMRulerVisible',false);
+            set(findall(fig,'Tag','SCM_RulerToggle'),'Value',0); warndlg('Units could not be verified. Use Scale / units > Probe presets for these sequences, or Calibrate spacing.','Spatial scale');
         end
     end
     updateSpatialScale();
 end
 
+function rulerVisibilityChanged(src,~)
+    enabled=logical(get(src,'Value'));setappdata(fig,'SCMRulerVisible',enabled);
+    if enabled && rulerStep<=0,rulerStep=500;end
+    updateSpatialScale();
+    drawnow limitrate;
+end
+
 function updateSpatialScale()
-    delete(findall(ax,'Tag','SCM_PhysicalRuler'));
+    updateROIPhysicalSize();
     sig=str2double(getStr(ebSigma)); if ~isfinite(sig), sig=0; end
     detail=sprintf(['Gaussian sigma = %.3g pixels in each in-plane axis; FWHM = %.3g pixels.\n' ...
         'No smoothing across slices. Sigma 0 = off. Voxel spacing is not acoustic resolution.\n' ...
-        'Native rulers are suppressed after atlas warping.\n' ...
+        'The ruler uses the spacing of the current native or atlas grid.\n' ...
         'Spacing [row column slice] um: %s\n%s'],sig,2.35482*sig,mat2str(spatial.spacingUm),spatial.source);
     if all(isfinite(spatial.spacingUm(1:2)))
         detail=sprintf('%s\nSigma [row column] = %s um; FWHM = %s um.',detail, ...
             mat2str(sig*spatial.spacingUm(1:2),4),mat2str(2.35482*sig*spatial.spacingUm(1:2),4));
     end
     set(ebSigma,'TooltipString',detail); set(btnScale,'TooltipString',detail);
+    label='SCM smoothing sigma (px)';
+    if all(isfinite(spatial.spacingUm(1:2))) && ~state.isAtlasWarped && ~state.isStepMotorAtlasWarped
+        label=sprintf('Sigma px | %.3g / %.3g um',sig*spatial.spacingUm(1:2));
+    end
+    set(lblSigma,'String',label);
     setappdata(fig,'SCMSpatialCalibration',spatial);
-    if rulerStep<=0 || any(~isfinite(spatial.spacingUm(1:2))), return; end
-    if state.isAtlasWarped || state.isStepMotorAtlasWarped, return; end
-    % Edge rulers in native pixel coordinates; no resizing of scientific data.
-    x0=max(1,.06*nX); y0=max(1,.90*nY); tick=.008*nY;
-    dx=rulerStep/spatial.spacingUm(2); dy=rulerStep/spatial.spacingUm(1);
-    nx=floor(.70*nX/dx); ny=floor(.65*nY/dy);
-    if nx<1 && ny<1, return; end
-    if nx>0
-        line(ax,[x0 x0+nx*dx],[y0 y0],'Color','w','LineWidth',1.3,'Tag','SCM_PhysicalRuler','HitTest','off');
-        for k=0:nx
-            line(ax,[x0+k*dx x0+k*dx],[y0-tick y0+tick],'Color','w','Tag','SCM_PhysicalRuler','HitTest','off');
-        end
-        text(ax,x0,y0+2*tick,sprintf('%g um / tick | total %g um',rulerStep,nx*rulerStep), ...
-            'Color','w','BackgroundColor','k','FontSize',11,'Tag','SCM_PhysicalRuler','HitTest','off','Interpreter','none');
-    end
-    if ny>0
-        line(ax,[x0 x0],[y0 y0-ny*dy],'Color','w','LineWidth',1.3,'Tag','SCM_PhysicalRuler','HitTest','off');
-        for k=0:ny
-            line(ax,[x0-tick x0+tick],[y0-k*dy y0-k*dy],'Color','w','Tag','SCM_PhysicalRuler','HitTest','off');
-        end
-    end
+    enabled=true;
+    if isappdata(fig,'SCMRulerVisible'),enabled=logical(getappdata(fig,'SCMRulerVisible'));end
+    fusiDrawScaleBar(ax,currentROISpacingUm(),max(eps,rulerStep),enabled&&rulerStep>0);
 end
 
 function alphaModToggled(~,~)
@@ -1416,7 +1995,7 @@ end
 function underlayModeChanged(~,~)
     uState.mode = get(popUnder, 'Value');
     updateUnderlayControlsEnable();
-    set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+    updateSCMUnderlayDisplay(state.z);
     updateInfoLines();
 end
 
@@ -1431,7 +2010,7 @@ function underlaySliderChanged(~,~)
     set(txtGam, 'String', sprintf('%.2f', uState.gamma));
     set(txtVsz, 'String', sprintf('%d', uState.conectSize));
     set(txtVlv, 'String', sprintf('%d', uState.conectLev));
-    set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+    updateSCMUnderlayDisplay(state.z);
     updateInfoLines();
 end
 
@@ -1459,7 +2038,13 @@ function updateInfoLines()
     m = uState.mode; if m < 1 || m > numel(modeNames), m = 3; end
     atlasTxt = '';
     if state.isAtlasWarped, atlasTxt = ' | ATLAS'; end
-    set(info1, 'String', sprintf('TR = %.4gs | Slice %d/%d | Underlay: %s%s', TR, state.z, nZ, modeNames{m}, atlasTxt));
+    message=sprintf('TR = %.4gs | Slice %d/%d | Underlay: %s%s', TR, state.z, nZ, modeNames{m}, atlasTxt);
+    if state.isAtlasWarped && ~isempty(state.atlasTransformFile)
+        [folder,name,ext]=fileparts(state.atlasTransformFile);[~,version]=fileparts(folder);
+        message={message,['Transform: ' version '/' name ext]};
+        set(info1,'TooltipString',state.atlasTransformFile);
+    end
+    set(info1,'String',message);
 end
 
 function s = onoff(tf)
@@ -1469,7 +2054,10 @@ end
 %% ==========================================================
 % MASK / UNDERLAY FILE PICKERS
 %% ==========================================================
-function loadMaskCB(~,~)
+function loadMaskCB(~,~,selectedFile)
+    if nargin>=3&&~isempty(selectedFile)
+        fullf=char(selectedFile);
+    else
     startPath = getMaskStartPath();
     [f,p] = uigetfileStartIn( ...
         {'*.mat;*.nii;*.nii.gz', 'Mask / bundle files (*.mat, *.nii, *.nii.gz)'; ...
@@ -1479,6 +2067,7 @@ function loadMaskCB(~,~)
         'Select overlay mask / bundle', startPath);
     if isequal(f,0), return; end
 fullf = fullfile(p,f);
+    end
 try
     % If user accidentally selects an SCM_GroupExport bundle via LOAD MASK,
     % load it properly as a full SCM bundle instead of trying to read it as a mask.
@@ -1493,7 +2082,7 @@ try
         if strcmp(ext, '.mat')
             B = readScmBundleFile(fullf);
             if isfield(B,'isMaskEditor') && B.isMaskEditor
-                applyMaskEditorBundleLocal(B, fullf);
+                applyMaskEditorBundleLocal(B, fullf, true);
                 return;
             end
             if ~isempty(B.overlayMask)
@@ -1509,12 +2098,14 @@ try
            if ~isempty(B) && isstruct(B) && ~isempty(B.brainImage)
     U = squeeze(double(B.brainImage));
 
-    if isValidBundleUnderlayForCurrentScm(U)
+    if ~state.isAtlasWarped && isValidBundleUnderlayForCurrentScm(U)
         bg = prepareBundleUnderlayForCurrentScm(U);
         applyUnderlayMeta(defaultUnderlayMeta(), bg);
         origBG = bg;
 
         fprintf('[SCM] Loaded bundle underlay with size: %s\n', mat2str(size(bg)));
+    elseif state.isAtlasWarped
+        fprintf('[SCM] Loaded masks; retained the current atlas underlay.\n');
     else
         fprintf(['[SCM] Bundle underlay ignored because it is not a true slice-matched underlay.\n' ...
                  '      Underlay size: %s | SCM expects Y X Z = [%d %d %d]\n'], ...
@@ -1526,7 +2117,7 @@ end
             passedMask = fitBundleMaskToCurrentScm(passedMask);
         end
         mask2D = getMaskForCurrentSlice();
-        set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+        updateSCMUnderlayDisplay(state.z);
         if ~isempty(B) && isstruct(B)
             set(info1, 'String', sprintf('Loaded mask bundle: %s | field: %s', shortenPath(fullf,65), B.loadedField));
         else
@@ -1540,10 +2131,20 @@ end
 end
 
 
-function applyMaskEditorBundleLocal(B, fullf)
+function applyMaskEditorBundleLocal(B, fullf, maskOnly)
+    if nargin<3,maskOnly=false;end
+    % LOAD MASK changes membership, not the chosen registered anatomy.
+    % Keep its full-resolution texture, grid and region catalog intact.
+    keepRegisteredUnderlay=maskOnly && state.isAtlasWarped;
     % Validate the entire bundle before changing the viewer. A grayscale
     % three-slice export must never be mistaken for a single RGB image.
     expected = [nY nX nZ];
+    nativeSize=[size(origPSC,1) size(origPSC,2) 1];
+    if ndims(origPSC)==4,nativeSize(3)=size(origPSC,3);end
+    nativeBundle=B;
+    context=struct('sizeYXZ',expected,'nativeSizeYXZ',nativeSize, ...
+        'isAtlasWarped',state.isAtlasWarped,'mapping',state.currentROIMapping);
+    [B,alignment]=scmReadMaskEditorBundle('align',B,context);
     U = B.image;
     if ndims(U) > 3 || ~isequal([size(U,1) size(U,2) size(U,3)], expected)
         error('SCM:MaskEditorDimensions', ...
@@ -1563,15 +2164,17 @@ function applyMaskEditorBundleLocal(B, fullf)
         % The renderer keeps this boundary black even after slider changes.
         U(~B.brainMask) = NaN;
     end
-    bg = U;
-    applyUnderlayMeta(defaultUnderlayMeta(), bg);
-    state.isColorUnderlay = false;
+    if ~keepRegisteredUnderlay
+        bg = U;
+        applyUnderlayMeta(defaultUnderlayMeta(), bg);
+        state.isColorUnderlay = false;
+    end
     if ~isempty(B.includeMask)
         passedMask = B.includeMask;
         passedMaskIsInclude = true;
     end
-    applyRecommendedUnderlayDisplayForModeLocal('normal');
-    if B.isProcessed
+    if ~keepRegisteredUnderlay,applyRecommendedUnderlayDisplayForModeLocal('normal');end
+    if B.isProcessed && ~keepRegisteredUnderlay
         uState.mode = 5;
         uState.brightness = 0;
         uState.contrast = 1;
@@ -1585,25 +2188,193 @@ function applyMaskEditorBundleLocal(B, fullf)
     if ~state.isAtlasWarped
         origBG = bg;
         origPassedMask = passedMask;
+        origPassedMaskIsInclude = passedMaskIsInclude;
+    elseif alignment.warpedFromNative
+        % Reset to native must recover the newly loaded mask, not an old one.
+        origBG=nativeBundle.image;
+        if ~isempty(nativeBundle.brainMask),origBG(~nativeBundle.brainMask)=NaN;end
+        if ~isempty(nativeBundle.includeMask)
+            origPassedMask=nativeBundle.includeMask;origPassedMaskIsInclude=true;
+        end
     end
     mask2D = getMaskForCurrentSlice();
-    set(hBG,'CData',renderUnderlayRGB(getBg2DForSlice(state.z)));
+    updateROIPhysicalSize();
+    updateSCMUnderlayDisplay(state.z);
     computeSCM();
-    set(info1,'String',['Loaded Mask Editor underlay and masks: ' shortenPath(fullf,65)], ...
-        'TooltipString',fullf);
+    if keepRegisteredUnderlay
+        set(info1,'String',['Loaded masks; retained current atlas anatomy and scale: ' shortenPath(fullf,65)], ...
+            'TooltipString',fullf);
+    elseif alignment.warpedFromNative
+        set(info1,'String',['Loaded native Mask Editor bundle using the applied atlas transform: ' shortenPath(fullf,65)]);
+    else
+        set(info1,'String',['Loaded Mask Editor underlay and masks: ' shortenPath(fullf,65)], ...
+            'TooltipString',fullf);
+    end
 end
 
-function loadNewUnderlayCB(~,~)
+function showRegionList(~,~)
+    labels=state.regionLabelUnderlay;info=state.regionInfo;
+    if ~isempty(state.atlasRegionSearch),labels=state.atlasRegionSearch.labels;info=state.atlasRegionSearch.info;end
+    if isempty(labels)
+        ctx=getappdata(popAtlasChoice,'AtlasRegionContext2D');
+        if ~isempty(ctx),labels=ctx.labels;info=ctx.info;end
+    end
+    fusiRegionListDialog(labels,info);
+end
+function updateRegionLabels(varargin)
+    labels=[];xData=[];yData=[];
+    z=state.z;
+    namesShown=logical(get(cbRegionLabels,'Value'));linesShown=logical(get(cbAtlasLines,'Value'));
+    regionInfoForDisplay=state.regionInfo;
+    if (namesShown||linesShown)&&state.isColorUnderlay&&~isempty(state.regionLabelUnderlay)
+        if ~isempty(state.atlasDisplay3D)&&isfield(state.atlasDisplay3D,'getLabels')
+            labels=state.atlasDisplay3D.getLabels(z);xData=state.atlasDisplay3D.xData;yData=state.atlasDisplay3D.yData;
+        else,labels=state.regionLabelUnderlay(:,:,min(z,size(state.regionLabelUnderlay,3)));end
+    elseif (namesShown||linesShown)&&~isempty(state.atlasRegionSearch)
+        ctx=state.atlasRegionSearch;regionInfoForDisplay=ctx.info;
+        if isfield(ctx,'displayProvider')
+            labels=ctx.displayProvider.getLabels(z);xData=ctx.displayProvider.xData;yData=ctx.displayProvider.yData;
+        else,labels=ctx.labels(:,:,min(z,size(ctx.labels,3)));end
+    end
+    if isempty(xData),xData=[1 size(labels,2)];yData=[1 size(labels,1)];end
+    fusiRegionAnnotations(ax,labels,regionInfoForDisplay,namesShown, ...
+        [state.underlayRevision z],xData,yData);
+    fusiRegionBoundaryOverlay(ax,labels,linesShown,[state.underlayRevision z],xData,yData);
+end
+function regionAppearanceChanged(src,~)
+    choices=get(src,'String');state.regionScheme=choices{get(src,'Value')};
+    state.renderedAtlasCache={};updateSCMUnderlayDisplay(state.z);
+end
+function refreshRegistered2DUnderlays()
+    if ~state.isAtlasWarped || (isfield(state,'atlasUnderlayKey')&&~isempty(state.atlasUnderlayKey)),return;end
+    files={state.atlasTransformFile};
+    if state.isStepMotorAtlasWarped,files=state.stepMotorAtlasTransformFiles;end
+    if state.isStepMotorAtlasWarped&&isfield(state,'stepMotorUnderlayBundle')&& ...
+            ~isempty(state.stepMotorUnderlayBundle)&&strcmp(state.atlasTransformFile,state.stepMotorUnderlayBundle.folder)
+        bundle=state.stepMotorUnderlayBundle;entries=bundle.entries;names=bundle.names;ctx=bundle.context;
+    else
+        [entries,names,ctx]=fusiAtlasUnderlayLibrary2D(files,[nY nX nZ]);
+    end
+    state.atlasInPlaneSpacingUm=[NaN NaN NaN];
+    if isempty(entries),updateROIPhysicalSize();return;end
+    state.atlasInPlaneSpacingUm=entries{1}.meta.voxelSizeUm;
+    updateROIPhysicalSize();
+    selected=1;
+    for k=1:numel(entries)
+        if (state.isColorUnderlay&&entries{k}.meta.isColor&&strcmp(entries{k}.grouping,'Detailed'))||(~state.isColorUnderlay&&strcmp(entries{k}.meta.atlasMode,'histology')),selected=k;end
+    end
+    setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',entries);setappdata(popAtlasChoice,'AtlasRegionContext2D',ctx);
+    setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});
+    set(popAtlasChoice,'String',names,'Value',selected,'Enable','on');
+    state.atlasRegionSearch=ctx;
+    if state.isColorUnderlay&&~isempty(ctx)
+        state.regionLabelUnderlay=entries{selected}.meta.regionLabels;state.regionInfo=entries{selected}.meta.regionInfo;
+    end
+end
+function result=underlayData()
+    result=struct('PSC',PSC,'underlay',bg,'mask',passedMask,'maskIsInclude',passedMaskIsInclude, ...
+        'isAtlasWarped',state.isAtlasWarped,'mapping',state.currentROIMapping,'regionLabels',state.regionLabelUnderlay, ...
+        'roiDefinitions',{roiDefinitionsForCurrentView()}, ...
+        'regionInfo',state.regionInfo,'atlasRegionSearch',state.atlasRegionSearch,'transformFile',state.atlasTransformFile, ...
+        'imageGeometry',struct('xlim',ax.XLim,'ylim',ax.YLim,'aspect',ax.DataAspectRatio, ...
+        'underlayX',hBG.XData,'underlayY',hBG.YData,'overlayX',hOV.XData,'overlayY',hOV.YData, ...
+        'underlayTextureSize',size(hBG.CData,[1 2])),'displayRGB',hBG.CData);
+end
+function atlasUnderlayChoiceCB(~,~)
+    entries=getappdata(popAtlasChoice,'AtlasUnderlayEntries2D');
+    if ~isempty(entries)
+        entry=entries{get(popAtlasChoice,'Value')};
+        bg=entry.data;applyUnderlayMeta(entry.meta,bg);
+        applyRecommendedUnderlayDisplayForModeLocal(entry.meta.atlasMode);
+        state.atlasRegionSearch=getappdata(popAtlasChoice,'AtlasRegionContext2D');
+        if entry.meta.isColor
+            state.atlasRegionSearch.labels=entry.meta.regionLabels;state.atlasRegionSearch.info=entry.meta.regionInfo;
+            state.atlasRegionSearch.provenance.grouping=entry.grouping;
+        end
+        setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',entries);set(popAtlasChoice,'Enable','on');updateSCMUnderlayDisplay(state.z);computeSCM();return;
+    end
+    files=getappdata(popAtlasChoice,'AtlasUnderlayFiles');if isempty(files),return;end
+    groups=getappdata(popAtlasChoice,'AtlasUnderlayGroupings');k=get(popAtlasChoice,'Value');
+    loadNewUnderlayCB([],[],struct('file',files{k},'grouping',groups{k}));
+end
+function refreshAtlasUnderlayChoices(space)
+    setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',{});
+    bundle=state.pendingAtlasUnderlay3D;
+    [names,files,selected,groups]=fusiAtlasUnderlayChoices(bundle.file);
+    if isempty(names),set(popAtlasChoice,'Enable','off');return;end
+    set(popAtlasChoice,'String',names,'Value',selected,'Enable','on');
+    setappdata(popAtlasChoice,'AtlasUnderlayFiles',files);
+    setappdata(popAtlasChoice,'AtlasUnderlayGroupings',groups);
+    if bundle.meta.isColor&&isfield(bundle.meta,'regionGrouping')
+        selected=find(strcmp(files,bundle.file)&strcmp(groups,bundle.meta.regionGrouping),1);
+        if ~isempty(selected),set(popAtlasChoice,'Value',selected);end
+    end
+    state.atlasRegionSearch=fusiAtlasSearchContext(bundle,space,state.atlasRegionSearch);
+end
+function loadAtlasUnderlayFolderCB(~,~)
+    folder=uigetdir(getUnderlayStartPathFast(),'Choose a saved atlas session or underlay folder');
+    if isequal(folder,0),return;end
+    % The folder button also accepts the dated 3D Histology/Regions bundle.
+    for filename={'Histology.mat','Vascular.mat','Regions.mat'}
+        file=fullfile(folder,filename{1});
+        if isfile(file)
+            contents=whos('-file',file);
+            if ismember('atlasUnderlayMeta',{contents.name}),loadNewUnderlayCB([],[],file);return;end
+        end
+    end
+    loadNewUnderlayCB([],[],folder);
+end
+function applyStepMotorUnderlayBundle(bundle)
+    sourceCount=1;if ndims(origPSC)==4,sourceCount=size(origPSC,3);end
+    assert(sourceCount==bundle.sourceNSlices,'deConfUSIon:StepMotorSourceMismatch', ...
+        'This registration was saved for %d source slices; the current recording has %d.',bundle.sourceNSlices,sourceCount);
+    [PSCnew,report]=warpFunctionalSeriesToAtlasStepMotor(origPSC,bundle.regList);
+    state.stepMotorUnderlayBundle=bundle;
+    PSC=PSCnew;passedMask=[];passedMaskIsInclude=true;
+    state.isAtlasWarped=true;state.isStepMotorAtlasWarped=true;state.atlasUnderlayKey=[];state.pendingAtlasUnderlay3D=[];
+    state.atlasTransformFile=bundle.folder;state.lastAtlasTransformFile=report.files{1};
+    state.stepMotorAtlasFolder=bundle.folder;state.stepMotorAtlasTransformFiles=report.files;
+    state.stepMotorAtlasSourceIdx=report.sourceIdx;state.stepMotorAtlasAtlasIdx=report.atlasIdx;
+    entry=bundle.entries{bundle.selected};bg=entry.data;applyUnderlayMeta(entry.meta,bg);
+    applyRecommendedUnderlayDisplayForModeLocal(entry.meta.atlasMode);
+    state.atlasUnderlayChoice=entry.meta.atlasMode;
+    setTitleAtlasStepMotor(report);resetRoisAndRefreshAfterDataChange(true);
+    set(popAtlasChoice,'Value',bundle.selected);atlasUnderlayChoiceCB([],[]);
+    set(btnWarpAtlas,'String','STEP MOTOR ATLAS-WARPED');
+    set(info1,'String',sprintf('Loaded step-motor session: %d/%d source planes | %s', ...
+        report.nUsed,sourceCount,bundle.names{bundle.selected}),'TooltipString',bundle.sessionFile);
+end
+function loadNewUnderlayCB(~,~,selectedFile)
     ensureUnderlayStateFields();
-    startPath = getUnderlayStartPathFast();
-    [f,p] = uigetfileStartIn( ...
-        {'*.mat;*.nii;*.nii.gz;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp', ...
-         'Underlay files (*.mat,*.nii,*.nii.gz,*.png,*.jpg,*.jpeg,*.tif,*.tiff,*.bmp)'}, ...
-        'Select new underlay', startPath);
-    if isequal(f,0), return; end
-    fullf = fullfile(p,f);
+    groupingOverride='';
+    if nargin>=3&&isstruct(selectedFile)
+        groupingOverride=selectedFile.grouping;selectedFile=selectedFile.file;
+    end
+    if nargin<3 || isa(selectedFile,'function_handle')
+    picker=[];if nargin>=3,picker=selectedFile;end
+    lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+    [fullf,options]=fusiChooseUnderlayFile(par,getDatasetRootForSelectors(),state.atlasTransformFile,lastFile,picker);
+    setappdata(fig,'FUSIUnderlayPickerOptions',options);
+    if isempty(fullf),return;end
+    else,fullf=char(selectedFile);end
     try
+        motorBundle=fusiReadStepMotorUnderlays2D(fullf);
+        if ~isempty(motorBundle)
+            applyStepMotorUnderlayBundle(motorBundle);state.lastUnderlayFile=fullf;return;
+        elseif isfolder(fullf)
+            warpFunctionalToAtlasStepMotorFolder(fullf);state.lastUnderlayFile=fullf;return;
+        end
         [Uraw, meta] = readUnderlayFile(fullf);
+        if isfield(meta,'registrationBundle3D') && meta.registrationBundle3D
+            [Uraw,meta]=fusiAtlasRegroupUnderlay3D(Uraw,meta,groupingOverride);
+            assert(isequal(double(meta.transform.scanGeometry.originalSize),double(size(origPSC,[1 2 3]))), ...
+                'deConfUSIon:AtlasGeometryMismatch','This underlay was saved for a different native recording grid.');
+            bundle=struct('file',fullf,'underlay',Uraw,'meta',meta);
+            apply3DAtlasWarp(bundle);
+            state.lastUnderlayFile=fullf;
+            return;
+        end
+        state.lastUnderlayFile=fullf;
         if isfield(meta,'maskEditorBundle')
             applyMaskEditorBundleLocal(meta.maskEditorBundle, fullf);
             return;
@@ -1628,7 +2399,8 @@ function loadNewUnderlayCB(~,~)
                 error('Selected underlay does not match current atlas display or original native display.');
             end
             bg = U; applyUnderlayMeta(meta, bg);
-            set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+            refreshRegistered2DUnderlays();
+            updateSCMUnderlayDisplay(state.z);
             set(info1, 'String', ['Loaded atlas-space underlay: ' shortenPath(fullf,85)], 'TooltipString', fullf);
             % DECONF_STD_SCM_LATE_FORCE_V9
 try
@@ -1701,7 +2473,7 @@ T0 = askAndApply2DWarpDirection(T0, 'Atlas/histology underlay warp');
                     end
 
                     setTitleAtlas(T0);
-                    resetRoisAndRefreshAfterDataChange();
+                    resetRoisAndRefreshAfterDataChange(true);
 
                     set(info1, 'String', ...
                         ['Loaded atlas/histology underlay and warped functional: ' shortenPath(fullf,70)], ...
@@ -1756,7 +2528,7 @@ drawnow;
         bg = validateAndPrepareUnderlay(Uraw, fullf);
         applyUnderlayMeta(meta, bg);
         origBG = bg;
-        set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+        updateSCMUnderlayDisplay(state.z);
         set(info1, 'String', ['Loaded native underlay: ' shortenPath(fullf,85)], 'TooltipString', fullf);
         % DECONF_STD_SCM_LATE_FORCE_V9
 try
@@ -1814,10 +2586,10 @@ T = askAndApply2DWarpDirection(T, 'Atlas/histology underlay warp');
         state.atlasTransformFile = tfFile;
         state.lastAtlasTransformFile = tfFile;
         try, set(btnWarpAtlas, 'String', 'ALREADY WARPED TO ATLAS'); catch, end
-        resetRoisAndRefreshAfterDataChange();
         bg = validateAndPrepareUnderlay(Uraw, fullf);
         applyUnderlayMeta(meta, bg);
-        set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+        resetRoisAndRefreshAfterDataChange(true);
+        updateSCMUnderlayDisplay(state.z);
         setTitleAtlas(T);
         set(info1, 'String', ['Loaded atlas underlay and warped functional: ' shortenPath(fullf,70)], 'TooltipString', fullf);
         % DECONF_STD_SCM_LATE_FORCE_V9
@@ -1850,6 +2622,7 @@ catch
 end
 drawnow;
     catch ME
+        if nargin>=3,rethrow(ME);end
         errordlg(ME.message, 'Load underlay failed');
     end
 end
@@ -1857,7 +2630,60 @@ end
 %% ==========================================================
 % ATLAS WARP
 %% ==========================================================
-function warpFunctionalToAtlasCB(~,~)
+function warpFunctionalToAtlasCB(source,~,selectedFile)
+    try
+        if nargin<3,selectedFile='';end
+        bundle=[];
+        picker=[];
+        if nargin>=3&&isa(selectedFile,'function_handle'),picker=selectedFile;selectedFile='';end
+        % Real button clicks always ask which 3D transform to use. Discovery
+        % only supplies the initial folder; it must not apply an affine.
+        hasPaired3D=isfield(state,'pendingAtlasUnderlay3D')&&~isempty(state.pendingAtlasUnderlay3D);
+        if ~isempty(picker)||(nargin<3&&isgraphics(source)&&hasPaired3D)
+            lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+            [selectedFile,options]=fusiChooseAtlasTransformFile(par,getDatasetRootForSelectors(), ...
+                state.atlasTransformFile,lastFile,picker);
+            setappdata(fig,'FUSIAtlasTransformPickerOptions',options);
+            if isempty(selectedFile),return;end
+        end
+        if ~isempty(selectedFile)
+            if isfolder(selectedFile),warpFunctionalToAtlasStepMotorFolder(char(selectedFile));return;end
+            motorBundle=fusiReadStepMotorUnderlays2D(selectedFile);
+            if ~isempty(motorBundle),applyStepMotorUnderlayBundle(motorBundle);return;end
+            selectedPayload=load(selectedFile);selectedTransform=extractAtlasWarpStruct(selectedPayload);
+            if isfield(selectedTransform,'type')&&strcmpi(selectedTransform.type,'simple_coronal_2d')
+                selectedTransform=askAndApply2DWarpDirection(selectedTransform,'Saved coronal registration');
+                PSC=warpFunctionalSeriesToAtlas(origPSC,selectedTransform);
+                state.isAtlasWarped=true;state.isStepMotorAtlasWarped=false;state.atlasUnderlayKey=[];
+                state.atlasTransformFile=char(selectedFile);state.lastAtlasTransformFile=char(selectedFile);
+                bg=makeFunctionalContrastFallbackUnderlay(PSC);
+                resetRoisAndRefreshAfterDataChange(true);
+                entries=getappdata(popAtlasChoice,'AtlasUnderlayEntries2D');
+                if ~isempty(entries),atlasUnderlayChoiceCB([],[]);end
+                return;
+            end
+            bundle=fusiFindAtlasUnderlay3D(par,getDatasetRootForSelectors(),selectedFile,'',size(origPSC,[1 2 3]));
+            assert(~isempty(bundle),'deConfUSIon:AtlasGeometryMismatch','No matching saved 3D alignment was found in this file.');
+        elseif isfield(state,'pendingAtlasUnderlay3D') && ~isempty(state.pendingAtlasUnderlay3D),bundle=state.pendingAtlasUnderlay3D;
+        elseif size(origPSC,3)>1
+            lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+            bundle=fusiFindAtlasUnderlay3D(par,getDatasetRootForSelectors(),state.atlasTransformFile,lastFile,size(origPSC,[1 2 3]));
+        end
+        if ~isempty(bundle)
+            if nargin<3&&isgraphics(source)&&~hasPaired3D
+                [file,options]=fusiChooseAtlasTransformFile(par,getDatasetRootForSelectors(), ...
+                    fusiAtlasPairedTransformFile(bundle.meta,bundle.file),bundle.file);
+                setappdata(fig,'FUSIAtlasTransformPickerOptions',options);if isempty(file),return;end
+                bundle=fusiFindAtlasUnderlay3D(par,getDatasetRootForSelectors(),file,bundle.file,size(origPSC,[1 2 3]));
+                assert(~isempty(bundle),'deConfUSIon:AtlasGeometryMismatch','The selected transform does not match this native recording grid.');
+            end
+            apply3DAtlasWarp(bundle);return;
+        end
+    catch ME
+        setappdata(fig,'FUSIAtlasWarpLastError',ME);if nargin>=3,rethrow(ME);end
+        errordlg(ME.message,'3D atlas warp failed');return;
+    end
+    state.atlasUnderlayKey=[];
 
     if state.isAtlasWarped
         choice0 = questdlg(['Functional data is already in atlas space.' newline newline ...
@@ -1916,6 +2742,11 @@ function warpFunctionalToAtlasSingleFile()
 
         S = load(tfFile);
 T = extractAtlasWarpStruct(S);
+if isfield(T,'scanGeometry') && strcmp(T.scanGeometry.convention,'coronal_stack_v2')
+    bundle=fusiFindAtlasUnderlay3D(par,getDatasetRootForSelectors(),tfFile,'',size(origPSC,[1 2 3]));
+    assert(~isempty(bundle),'deConfUSIon:AtlasGeometryMismatch','The 3D transform does not match this recording.');
+    apply3DAtlasWarp(bundle);return;
+end
 T = askAndApply2DWarpDirection(T, 'Single atlas warp');
 
 PSC = warpFunctionalSeriesToAtlas(origPSC, T);
@@ -1949,7 +2780,7 @@ PSC = warpFunctionalSeriesToAtlas(origPSC, T);
         end
 
         setTitleAtlas(T);
-        resetRoisAndRefreshAfterDataChange();
+        resetRoisAndRefreshAfterDataChange(true);
 
         msg = 'Functional data warped to atlas.';
 
@@ -1965,18 +2796,23 @@ PSC = warpFunctionalSeriesToAtlas(origPSC, T);
 end
 
 
-function warpFunctionalToAtlasStepMotorFolder()
+function warpFunctionalToAtlasStepMotorFolder(folderPath)
 
     startDir = getStepMotorTransformStartPath();
 
+    if nargin<1
     folderPath = uigetdir(startDir, ...
         'Select Step Motor Registration2D folder containing source001/source002 transforms');
+    end
 
     if isequal(folderPath,0)
         return;
     end
 
     try
+        motorBundle=fusiReadStepMotorUnderlays2D(folderPath);
+        if ~isempty(motorBundle),applyStepMotorUnderlayBundle(motorBundle);return;end
+        state.stepMotorUnderlayBundle=[];
         regList = collectStepMotorRegistration2DTransforms(folderPath);
 regList = askAndApply2DWarpDirectionToRegList(regList, 'Step Motor atlas warp');
         if isempty(regList)
@@ -2044,7 +2880,8 @@ regList = askAndApply2DWarpDirectionToRegList(regList, 'Step Motor atlas warp');
        % ---------------------------------------------------------
 % Build ALL atlas underlay choices for Step Motor atlas-space SCM.
 % The displayed underlay is user-selected, but all modes are saved later.
-state.atlasUnderlayChoice = askAtlasUnderlayChoiceLocal('step-motor');
+if nargin<1,state.atlasUnderlayChoice=askAtlasUnderlayChoiceLocal('step-motor');
+else,state.atlasUnderlayChoice='histology';end
 [state.atlasUnderlays, bgNew, bgMsg, metaNew] = buildAtlasUnderlayLibraryStepMotorLocal(report.usedRegList, report.outSize, PSCnew, bg, state.atlasUnderlayChoice);
 if isempty(bgNew)
     bgNew = makeFunctionalContrastFallbackUnderlay(PSCnew);
@@ -2061,7 +2898,7 @@ state.lastAtlasUnderlayBuildMessage = bgMsg;
         end
 
         setTitleAtlasStepMotor(report);
-        resetRoisAndRefreshAfterDataChange();
+        resetRoisAndRefreshAfterDataChange(true);
 
        msg = sprintf('Step Motor atlas warp complete: %d slices warped. Underlay: %s', report.nUsed, bgMsg);
         set(info1, 'String', msg, 'TooltipString', folderPath);
@@ -2075,13 +2912,15 @@ function resetWarpToNativeCB(~,~)
     try
         PSC = origPSC;
         bg = origBG;
+        applyUnderlayMeta(defaultUnderlayMeta(),bg);
         passedMask = origPassedMask;
-        passedMaskIsInclude = true;
+        passedMaskIsInclude = origPassedMaskIsInclude;
        state.isAtlasWarped = false;
 state.isStepMotorAtlasWarped = false;
 
 state.atlasTransformFile = '';
 state.lastAtlasTransformFile = '';
+state.atlasUnderlayKey=[];state.atlasSliceSampling=[];
 
 state.stepMotorAtlasFolder = '';
 state.stepMotorAtlasTransformFiles = {};
@@ -2089,8 +2928,9 @@ state.stepMotorAtlasSourceIdx = [];
 state.stepMotorAtlasAtlasIdx = [];
         try, set(btnWarpAtlas, 'String', 'WARP FUNCTIONAL TO ATLAS'); catch, end
         set(txtTitle, 'String', fileLabel);
-        resetRoisAndRefreshAfterDataChange();
-        set(info1, 'String', 'Returned to native functional space.', 'TooltipString', '');
+        resetRoisAndRefreshAfterDataChange(true);
+        retained=getappdata(fig,'SCMROIDefinitions');
+        set(info1, 'String', sprintf('Returned to native functional space. Retained %d ROIs; mapped masks remain one ROI across slices.',numel(retained)), 'TooltipString', '');
     catch ME
         errordlg(ME.message, 'Reset to native failed');
     end
@@ -2109,16 +2949,52 @@ function setTitleAtlas(T)
     end
 end
 
-function resetRoisAndRefreshAfterDataChange()
+function resetRoisAndRefreshAfterDataChange(preserveROIs)
+    if nargin<1,preserveROIs=false;end
+    state.referenceTraceCache={};
+    definitions={};targetKey='native';mapping=[];
+    if state.isAtlasWarped,targetKey=['atlas|' state.atlasTransformFile];mapping=state.currentROIMapping;
+    else,mapping=roi.viewMapping;end
+    if preserveROIs
+        definitions=roiDefinitionsForCurrentView();
+        same=cellfun(@(b)strcmp(b.key,roi.viewKey)&&isequal(b.shape,roi.viewShape),roi.viewBanks);roi.viewBanks(same)=[];
+        roi.viewBanks{end+1}=struct('key',roi.viewKey,'shape',roi.viewShape,'definitions',{definitions});
+        if numel(roi.viewBanks)>8,roi.viewBanks(1)=[];end
+    else,roi.viewBanks={};roi.hiddenDefinitions={};end
     closeCandidateReviews();
     setappdata(fig,'AutomaticROISelections',{});
     state.baseKey=[]; state.signalKey=[];
     refreshDimsAfterPSCChange();
+    refreshRegistered2DUnderlays();
+    syncSCMImageGeometry();
     ROI_byZ = cell(1, nZ);
     for zzi = 1:nZ
         ROI_byZ{zzi} = struct('id', {}, 'x1', {}, 'x2', {}, 'y1', {}, 'y2', {}, 'color', {});
     end
-    roi.nextId = 1; roi.exportedIds = []; setHoverActive(true);
+    if preserveROIs
+        targetShape=[nY nX nZ];restored={};remaining=definitions;
+        for bi=numel(roi.viewBanks):-1:1
+            bank=roi.viewBanks{bi};if ~strcmp(bank.key,targetKey)||~isequal(bank.shape,targetShape),continue;end
+            for di=numel(remaining):-1:1
+                match=find(cellfun(@(c)c.roiId==remaining{di}.roiId,bank.definitions),1);
+                if ~isempty(match),restored{end+1}=bank.definitions{match};remaining(di)=[];end %#ok<AGROW>
+            end
+            break;
+        end
+        if ~isempty(remaining)
+            sourceShape=roi.viewShape;
+            if startsWith(roi.viewKey,'atlas|')&&state.isAtlasWarped
+                nativeShape=[size(origPSC,1) size(origPSC,2) 1];if ndims(origPSC)==4,nativeShape(3)=size(origPSC,3);end
+                remaining=scmROI('map',remaining,sourceShape,nativeShape,roi.viewMapping,true,[NaN NaN NaN]);sourceShape=nativeShape;
+            end
+            restored=[restored scmROI('map',remaining,sourceShape,targetShape,mapping,~state.isAtlasWarped,currentROISpacingUm())];
+        end
+        installROIDefinitions(restored);
+        roi.viewKey=targetKey;roi.viewShape=targetShape;roi.viewMapping=mapping;
+    else
+        roi.nextId = 1;roi.sizingById={};roi.viewKey=targetKey;roi.viewShape=[nY nX nZ];roi.viewMapping=mapping;
+    end
+    roi.exportedIds = []; setHoverActive(isempty(definitions));
     deleteIfValid(roiHandles); roiHandles = gobjects(0);
     deleteIfValid(roiPlotPSC); roiPlotPSC = gobjects(0);
     deleteIfValid(roiTextHandles); roiTextHandles = gobjects(0);
@@ -2133,7 +3009,7 @@ function resetRoisAndRefreshAfterDataChange()
     set(hLiveRect, 'Visible', 'off');
     set(hLivePSC, 'XData', state.tminHover, 'YData', nan(1,numel(state.tminHover)), 'Visible', 'off');
     set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
-    set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+    updateSCMUnderlayDisplay(state.z);
     set(hOV, 'CData', zeros(nY,nX), 'AlphaData', zeros(nY,nX));
     updateInfoLines(); computeSCM(); redrawROIsForCurrentSlice(); % DECONF_STD_SCM_LATE_FORCE_V9
 try
@@ -2164,6 +3040,46 @@ end
 catch
 end
 drawnow;
+end
+
+function definitions=roiDefinitionsForCurrentView()
+    definitions=roi.hiddenDefinitions;audit=scmAutomaticROISelections(fig);seen=[];
+    for zz=1:numel(ROI_byZ)
+        for mark=ROI_byZ{zz}
+            if ismember(mark.id,seen),continue;end;seen(end+1)=mark.id; %#ok<AGROW>
+            c=[];for ai=1:numel(audit),if audit{ai}.roiId==mark.id,c=audit{ai};break;end,end
+            automatic=~isempty(c);
+            if isempty(c)&&numel(roi.sizingById)>=mark.id,c=roi.sizingById{mark.id};end
+            if isempty(c),c=struct('boundsXY',[mark.x1 mark.x2 mark.y1 mark.y2]);end
+            c.roiId=mark.id;c.color=mark.color;c.sourceAutomatic=automatic;
+            if ~isfield(c,'slice'),c.slice=zz;end
+            if ~isfield(c,'activeSlices'),c.activeSlices=zz;end
+            definitions{end+1}=c; %#ok<AGROW>
+        end
+    end
+end
+function installROIDefinitions(definitions)
+    roi.hiddenDefinitions={};audit={};
+    for di=1:numel(definitions)
+        c=definitions{di};
+        if isfield(c,'roiMaskVolumeIndices')&&isempty(c.roiMaskVolumeIndices)
+            roi.hiddenDefinitions{end+1}=c;continue; %#ok<AGROW>
+        end
+        slices=c.slice;if isfield(c,'activeSlices'),slices=c.activeSlices;end
+        for zz=slices
+            m=scmROI('mask',c,zz,[nY nX nZ]);[yy,xx]=find(m);if isempty(xx),continue;end
+            ROI_byZ{zz}(end+1)=struct('id',c.roiId,'x1',min(xx),'x2',max(xx),'y1',min(yy),'y2',max(yy),'color',c.color);
+        end
+        if c.sourceAutomatic
+            if isfield(c,'roiMaskVolumeIndices')
+                trace=scmROI('trace',PSC,c);c.meanPSC=mean(trace(c.signalFrames));
+            end
+            audit{end+1}=c; %#ok<AGROW>
+        else,roi.sizingById{c.roiId}=c;end
+    end
+    setappdata(fig,'AutomaticROISelections',audit);
+    if ~isempty(definitions),roi.nextId=max(roi.nextId,1+max(cellfun(@(c)c.roiId,definitions)));end
+    setappdata(fig,'SCMROIDefinitions',definitions);
 end
 
 function autoFixStartupAtlasUnderlayIfNeeded()
@@ -2234,6 +3150,34 @@ function refreshDimsAfterPSCChange()
     roi.hoverStats=[];
 end
 
+function syncSCMImageGeometry()
+    % A changed CData size does not update an image object's coordinate span.
+    % Both layers must share the complete current grid, including atlas edges.
+    xData=[1 nX];yData=[1 nY];
+    if ~isempty(state.atlasDisplay3D)
+        xData=state.atlasDisplay3D.xData;yData=state.atlasDisplay3D.yData;
+    end
+    set(hBG,'XData',xData,'YData',yData);
+    set(hOV,'XData',[1 nX],'YData',[1 nY]);
+    aspect=1;
+    if ~isempty(state.atlasDisplay3D)
+        spacing=state.atlasDisplay3D.spacingUm;aspect=spacing(2)/spacing(1);
+    elseif state.isAtlasWarped || state.isStepMotorAtlasWarped
+        % Mask/native underlay textures can clear the atlas texture provider.
+        % Their pixels still belong to the current functional atlas grid.
+        spacing=currentROISpacingUm();
+        if all(isfinite(spacing(1:2)) & spacing(1:2)>0),aspect=spacing(2)/spacing(1);end
+    elseif nZ>1
+        aspect=deConfUSIon_utils('deConfUSIon_view_aspect',par);
+    end
+    if ~isequal(ax.XLim,xData+[-.5 .5]),set(ax,'XLim',xData+[-.5 .5]);end
+    if ~isequal(ax.YLim,yData+[-.5 .5]),set(ax,'YLim',yData+[-.5 .5]);end
+    set(ax,'YDir','reverse','DataAspectRatio',[1 aspect 1],'PlotBoxAspectRatioMode','auto','Color','k');
+    if ~state.physicalScale,set(ax,'DataAspectRatio',[1 1 1]);end
+    interpolation='bilinear';if state.sharpPixels,interpolation='nearest';end
+    for imageHandle=[hBG hOV],if isprop(imageHandle,'Interpolation'),set(imageHandle,'Interpolation',interpolation);end,end
+end
+
 %% ==========================================================
 % EXPORTS
 %% ==========================================================
@@ -2248,7 +3192,9 @@ function automaticAnalysisCB(~,~)
     guard=onCleanup(@()set(btnAutomatic,'Enable','on')); %#ok<NASGU>
     try
         P=getSimpleExportPaths();
-        result=AutomaticSCM(PSC,TR,fullfile(folder,name),fullfile(P.roiDir,'Automatic'),fileLabel);
+        protocol=jsondecode(fileread(fullfile(folder,name)));
+        if fusiBaselineReference('isExternal',baseline),protocol.baselineMode='external';protocol.baselineReference=baseline.reference;end
+        result=AutomaticSCM(PSC,TR,protocol,fullfile(P.roiDir,'Automatic'),fileLabel);
         msgbox(sprintf(['Fixed target/control ROI traces exported to:\n%s\n\n' ...
             'Protocol coordinates must have been chosen independently of this response, on the matching anatomy. ' ...
             'Display alpha and color range do not affect these measurements.'],result.outputFolder), ...
@@ -2260,13 +3206,26 @@ end
 
 function automaticPeakROI(useAwakePreset)
     if nargin<1, useAwakePreset=false; end
+    if isappdata(fig,'AutomaticROILastError'),rmappdata(fig,'AutomaticROILastError');end
     [s0,s1]=parseRangeSafe(getStr(ebSig),360,540);
     if isVolMode, s0=(s0-1)*TR; s1=(s1-1)*TR; end
     try, [b0,b1]=selectedBaselineFrames();
     catch ME, errordlg(ME.message,'ROI search'); return; end
     ctx=struct('sizeYXZ',[nY nX nZ],'slice',state.z,'roiSize',roi.size, ...
         'baselineSec',tsec([b0 b1]),'signalSec',[s0 s1],'TR',TR,'nT',nT, ...
-        'underlay',@(z)renderUnderlayRGB(getBg2DForSlice(z)),'mask',@(z)getMaskForSlice(z));
+        'underlay',@currentUnderlayDisplayRGB,'underlayXData',hBG.XData,'underlayYData',hBG.YData, ...
+        'mask',@(z)getMaskForSlice(z));
+    ctx.spacingUm=currentROISpacingUm();ctx.sizeMode=roi.sizeMode;ctx.sizeUm=roi.sizeUm;ctx.viewAspect=ax.DataAspectRatio;
+    if ~isempty(state.scanSequence)
+        ctx.scanLabels=fusiScanSequence('labels',state.scanSequence);ctx.scanTiming=state.scanSequence.scans;
+        ctx.originalScanIndex=find(cellfun(@(d)strcmp(d.key,state.originalScanKey),state.scanSequence.scans),1);
+    end
+    if ~isempty(state.atlasRegionSearch)
+        ctx.atlasLabels=state.atlasRegionSearch.labels;ctx.atlasRegionInfo=state.atlasRegionSearch.info;
+        ctx.atlasProvenance=state.atlasRegionSearch.provenance;
+    elseif ~isempty(state.regionLabelUnderlay)&&isfield(state.regionInfo,'name')
+        ctx.atlasLabels=state.regionLabelUnderlay;ctx.atlasRegionInfo=state.regionInfo;
+    end
     if useAwakePreset
         [window,canSearch,note]=scmAwakeSearchWindow(TR,nT);
         setappdata(fig,'AwakeSearchStatus',note);
@@ -2276,29 +3235,60 @@ function automaticPeakROI(useAwakePreset)
         opt=struct('size',5,'signalSec',window,'plateauSec',180,'sharedWindow',true, ...
             'boundsXY',[1 nX 1 nY],'bilateral',true,'splitX',floor(nX/2),'leftIsTarget',true, ...
             'allSlices',true,'slice',state.z,'cleanDisplay',true,'polygons',{cell(nZ,2)});
+        if isfield(ctx,'atlasLabels')
+            opt.atlasLabels=ctx.atlasLabels;[~,opt.excludedAtlasIDs]=fusiAtlasRegionCatalog(ctx.atlasLabels,ctx.atlasRegionInfo);
+            opt.atlasRegion=[];opt.minAtlasCoverage=.75;
+            if isfield(ctx,'atlasProvenance'),opt.atlasProvenance=ctx.atlasProvenance;end
+        end
     else
-        ctx.plateauSec=180; ctx.roiSize=5; ctx.signalSec=[240 min(960,tsec(end))];
+        ctx.plateauSec=180; ctx.roiSize=6; ctx.signalSec=[420 840];
+        ctx.display=struct('caxis',sscanf(strrep(getStr(ebCax),',',' '),'%f')', ...
+            'modMin',str2double(getStr(ebModMin)),'modMax',str2double(getStr(ebModMax)), ...
+            'alphaPercent',get(slAlpha,'Value'),'signMode',get(popSignMode,'Value'));
         opt=scmAutoSearchDialog(ctx); if isempty(opt), return; end
     end
-    n=opt.size; interval=opt.signalSec/60; searchAll=opt.allSlices; cleanDisplay=opt.cleanDisplay;
+    n=opt.size; interval=opt.signalSec/60; cleanDisplay=opt.cleanDisplay;
     set(btnAutomatic,'Enable','off'); guard=onCleanup(@()set(btnAutomatic,'Enable','on')); %#ok<NASGU>
     setappdata(fig,'StudioActionBusy',true); busyGuard=onCleanup(@()setappdata(fig,'StudioActionBusy',false)); %#ok<NASGU>
     try
         [b0,b1]=selectedBaselineFrames();
         cfg=struct('size',n,'slice',opt.slice,'baselineSec',tsec([b0 b1]),'signalSec',60*interval,'plateauSec',opt.plateauSec);
-        slices=opt.slice; if searchAll, slices=1:nZ; end
+        if fusiBaselineReference('isExternal',baseline),cfg.baselineMode='external';cfg.baselineReference=baseline.reference;end
+        cfg.spacingUm=currentROISpacingUm();
+        [baselineEntered0,baselineEntered1]=parseRangeSafe(getStr(ebBase),baseStart0,baseEnd0);
+        cfg.configuredBaselineRange=[baselineEntered0 baselineEntered1];
+        cfg.configuredBaselineUnits='s';
+        if isVolMode,cfg.configuredBaselineUnits='volume indices';end
+        slices=scmSearchSlices(opt,nZ);
         progress=deConfUSIon_ui('progress','Searching ROI candidates',true);
         pg=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
-        [candidates,skipped]=scmSearchCandidates(PSC,TR,cfg,opt,slices,@getMaskForSlice, ...
-            @(fraction,message)deConfUSIon_ui('progressupdate',progress,fraction,message));
+        if isempty(state.scanSequence)
+            [candidates,skipped]=scmSearchCandidates(PSC,TR,cfg,opt,slices,@getMaskForSlice, ...
+                @(fraction,message)deConfUSIon_ui('progressupdate',progress,fraction,message));
+        else
+            searchContext=struct('power',baselineRaw,'par',par,'mapping',state.currentROIMapping,'displayShape',[nY nX nZ]);
+            [candidates,skipped]=scmSearchScanSequence(PSC,TR,state.scanSequence,baseline,cfg,opt,slices,@getMaskForSlice,searchContext, ...
+                @(fraction,message)deConfUSIon_ui('progressupdate',progress,fraction,message));
+        end
         clear pg;
         if isempty(candidates)
-            set(info1,'String','No complete ROI found in the mask and available frames. Adjust search settings.'); return;
+            set(info1,'String','No complete ROI found in the eligible search area and available frames. Adjust search settings.'); return;
+        end
+        if isfield(opt,'topCount')&&any(opt.topCount>0)
+            candidates=scmTopCandidates(candidates,opt.topCount);
+        end
+        displayProfile=[];
+        if isfield(opt,'displayMode') && strcmp(opt.displayMode,'shared')
+            displayProfile=scmSharedDisplay('validate',opt.sharedDisplay);
+        elseif isfield(opt,'displayMode') && strcmp(opt.displayMode,'adaptive')
+            displayProfile=scmAutomaticDisplay(PSC,candidates,opt,@getMaskForSlice);
+            displayProfile.signMode=get(popSignMode,'Value');
+            if displayProfile.signMode==3, displayProfile.caxis=[-1 1]*displayProfile.caxis(2); end
         end
         % Publish marks only after the search completes. Cancellation leaves
         % existing ROIs and display untouched.
         replaceUnsavedAutomaticROIs();
-        audit=getappdata(fig,'AutomaticROISelections'); if isempty(audit), audit={}; end
+        audit=scmAutomaticROISelections(fig); if isempty(audit), audit={}; end
         highSlices=cellfun(@(c)c.slice,candidates(cellfun(@(c)c.meanPSC>200,candidates)));
         for ci=1:numel(candidates)
             candidate=candidates{ci}; bounds=candidate.boundsXY; id=roi.nextId; zz=candidate.slice;
@@ -2306,12 +3296,14 @@ function automaticPeakROI(useAwakePreset)
             if ismember(zz,highSlices), color=[1 .15 .15]; end
             ROI_byZ{zz}(end+1)=struct('id',id,'x1',bounds(1),'x2',bounds(2),'y1',bounds(3),'y2',bounds(4),'color',color);
             roi.nextId=id+1; candidate.roiId=id; candidate.source=fileLabel;
+            if isfield(candidate,'searchScanLabel'),candidate.source=candidate.searchScanLabel;end
             candidate.displayPresetApplied=cleanDisplay;
+            if ~isempty(displayProfile), candidate.automaticDisplay=displayProfile; end
             audit{end+1}=candidate; candidates{ci}=candidate; %#ok<AGROW>
         end
         setappdata(fig,'AutomaticROISelections',audit);
         setappdata(fig,'AutomaticROISearchSummary',struct('searchedSlices',slices,'skippedRegions',{skipped}, ...
-            'candidateSlices',cellfun(@(c)c.slice,candidates)));
+            'candidateSlices',cellfun(@(c)c.slice,candidates),'parameters',candidates{1}.searchParameters));
         if isVolMode, shown=60*interval/TR+1; else, shown=60*interval; end
         set(ebSig,'String',sprintf('%.9g-%.9g',shown));
         if cleanDisplay
@@ -2322,15 +3314,22 @@ function automaticPeakROI(useAwakePreset)
             set(cbAlphaMod,'Value',1); set(ebModMin,'String','5'); set(ebModMax,'String','10');
             set(slAlpha,'Value',get(slAlpha,'Max')); alphaModToggled([],[]);
         end
+        if ~isempty(displayProfile)
+            set(ebCax,'String',sprintf('%.9g %.9g',displayProfile.caxis));
+            set(cbAlphaMod,'Value',1);set(ebModMin,'String',num2str(displayProfile.modMin,9));set(ebModMax,'String',num2str(displayProfile.modMax,9));
+            set(slAlpha,'Value',displayProfile.alphaPercent);set(popSignMode,'Value',displayProfile.signMode);
+            setappdata(fig,'AutomaticDisplayProfile',displayProfile);alphaModToggled([],[]);
+        end
         [~,order]=sort(cellfun(@(c)c.meanPSC,candidates),'descend'); candidates=candidates(order);
         candidate=candidates{1}; id=candidate.roiId;
         showAutomaticWindow(candidate);
         if nZ>1, set(slZ,'Value',nZ-candidate.slice+1); sliceChanged([],[]); end
         setHoverActive(false);
         computeSCM([],[]); redrawROIsForCurrentSlice();
-        set(hRoiCoordTxt,'Visible','on','String',sprintf('Peak ROI %d | %dx%d px | mean %.3g%% | %d baseline / %d signal frames | review before export',id,n,n,candidate.meanPSC,numel(candidate.baselineFrames),numel(candidate.signalFrames)));
+        set(hRoiCoordTxt,'Visible','on','String',sprintf('Peak ROI %d | %d voxels | mean %.3g%% | %d baseline / %d signal frames | review before export',id,candidate.pixelCount,candidate.meanPSC,numel(candidate.baselineFrames),numel(candidate.signalFrames)));
         showCandidateReview(candidates,skipped);
     catch ME
+        setappdata(fig,'AutomaticROILastError',ME);
         if ~strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'), errordlg(ME.message,'ROI search'); end
     end
 end
@@ -2338,12 +3337,21 @@ end
 function showCandidateReview(candidates,skipped)
     closeCandidateReviews();
     review=figure('Name',['Automatic ROI candidates | ' fileLabel],'Tag','AutomaticROICandidateReview', ...
-        'NumberTitle','off','MenuBar','none','ToolBar','none','Color','k','Position',[160 150 1080 600]);
+        'NumberTitle','off','MenuBar','none','ToolBar','none','Color','k','Position',[160 100 1280 760]);
     setappdata(review,'deConfUSIonNoMaximize',true); setappdata(review,'SCMOwner',fig);
     order=[]; selected=[]; exportIds=[];
+    if any(cellfun(@(c)isfield(c,'requestedTopN')&&c.requestedTopN>0,candidates))
+        exportIds=cellfun(@(c)c.roiId,candidates);
+    end
     description=sprintf('%d candidates. Green = marked for export; red text = slice with mean PSC >200%%. Click a row to view its window.\nExploratory maxima. Shared mode uses the globally strongest candidate window for all slices.',numel(candidates));
     if ~isempty(skipped), description=sprintf('%s\nNo valid ROI: %s',description,strjoin(skipped,', ')); end
-    ctl('text',[.025 .80 .95 .18],description,[]);
+    summary=scmSearchParameterSummary(candidates,skipped,fileLabel);
+    brief=strsplit(summary,newline);brief=brief(1:min(7,numel(brief)));
+    hParameters=ctl('text',[.025 .755 .95 .23],strjoin(brief,newline),[]);
+    set(hParameters,'Tag','CandidateSearchParameters','HorizontalAlignment','left','FontSize',12, ...
+        'BackgroundColor','k','TooltipString',summary);
+    setappdata(review,'SearchParameterSummary',summary);
+    description=description(1:min(numel(description),300));
     role=ctl('popupmenu',[.025 .72 .18 .05],{'All','Target','Control','Search'},@refresh);
     set(role,'Tag','CandidateRoleFilter');
     sortBy=ctl('popupmenu',[.225 .72 .25 .05],{'Maximum PSC first','Minimum PSC first','Slice ascending','Slice descending'},@refresh);
@@ -2355,13 +3363,15 @@ function showCandidateReview(candidates,skipped)
     tbl=uitable(review,'Units','normalized','Position',[.025 .23 .95 .46],'Data',cell(0,10), ...
         'ColumnName',{'Slice','ROI','Role','Region','Mean PSC (%)','Center X','Center Y','Start (min)','End (min)','Export'}, ...
         'ColumnEditable',[false(1,9) true],'ColumnFormat',[repmat({'char'},1,9) {'logical'}], ...
-        'ColumnWidth',{50 50 70 85 100 75 75 95 95 65},'CellEditCallback',@markForExport, ...
-        'FontSize',12,'CellSelectionCallback',@reviewSlice,'Tag','CandidateTable');
+        'ColumnWidth',{55 55 85 200 115 80 80 110 110 75},'CellEditCallback',@markForExport, ...
+        'FontSize',12,'ForegroundColor','w','CellSelectionCallback',@reviewSlice,'Tag','CandidateTable');
     msg=ctl('text',[.025 .155 .95 .06],'',[]); set(msg,'Tag','CandidateStatus');
     ctl('pushbutton',[.025 .065 .25 .07],'Export SELECTED ROIs (TXT)',@exportSelected);
     ctl('pushbutton',[.29 .065 .25 .07],'Choose Target + Control to export',@exportPair);
     ctl('pushbutton',[.555 .065 .24 .07],'Clear ALL marked ROIs',@clearAllMarkedROIs);
-    ctl('pushbutton',[.82 .065 .155 .07],'Close',@(~,~)delete(review));
+    ctl('pushbutton',[.82 .065 .155 .07],'Close','delete(gcbf)');
+    bundleButton=ctl('pushbutton',[.025 .005 .95 .05],'Export checked ROIs: per-role bundle + averaged TXT (one observation per role)',@exportBundles);
+    set(bundleButton,'Tag','SCM_ExportROIBundles');
     refresh();
     function h=ctl(style,pos,str,cb)
         h=uicontrol(review,'Style',style,'Units','normalized','Position',pos,'String',str, ...
@@ -2382,32 +3392,62 @@ function showCandidateReview(candidates,skipped)
         rows=cell(numel(order),10);
         for row=1:numel(order)
             c=candidates{order(row)};
-            values={c.slice c.roiId c.role c.region c.meanPSC mean(c.boundsXY(1:2)) mean(c.boundsXY(3:4)) c.signalSampleSec(1)/divisor c.signalSampleSec(end)/divisor};
+            regionText=c.region;
+            if isfield(c,'searchScanLabel'),regionText=[regionText ' | ' c.searchScanLabel];end
+            if strcmp(c.roiMode,'region'),regionText=sprintf('%s | %d voxels',regionText,c.pixelCount);
+            elseif all(isfinite(c.sizeXYUm)),regionText=sprintf('%s | %.6g x %.6g um',regionText,c.sizeXYUm);end
+            values={c.slice c.roiId c.role regionText c.meanPSC mean(c.boundsXY(1:2)) mean(c.boundsXY(3:4)) c.signalSampleSec(1)/divisor c.signalSampleSec(end)/divisor};
             for col=1:9
                 v=values{col}; if isnumeric(v), v=sprintf('%.6g',v); end
                 if ismember(c.slice,highSlices), v=['<html><font color="#ff3030">' v '</font></html>']; end
-                if ismember(c.roiId,exportIds)
-                    v=['<html><span style="background-color:#16803c;color:white">' regexprep(v,'</?html>','') '</span></html>'];
-                end
                 rows{row,col}=v;
             end
             rows{row,10}=ismember(c.roiId,exportIds);
         end
-        set(tbl,'Data',rows); setappdata(tbl,'ExportROIIds',exportIds); setappdata(tbl,'CandidateIndices',order);
-        selected=[]; set(msg,'String',sprintf('%d / %d shown; %d selected for export (including hidden rows).',numel(order),numel(candidates),numel(exportIds)));
+        set(tbl,'Data',rows); setappdata(tbl,'CandidateIndices',order);
+        selected=[]; updateExportAppearance(false);
+    end
+    function updateExportAppearance(preserve)
+        % Avoid replacing Data after checkbox edits. Preserve the native
+        % viewport around recoloring too: MATLAB also resets it for colors.
+        colors=repmat([.10 .10 .10],max(1,numel(order)),1);
+        colors(2:2:end,:)=repmat([.14 .14 .14],floor(size(colors,1)/2),1);
+        if ~isempty(order)
+            checked=ismember(cellfun(@(c)c.roiId,candidates(order)),exportIds);
+            colors(checked,:)=repmat([22 128 60]/255,nnz(checked),1);
+        end
+        scmCandidateTableColors(tbl,colors,preserve); setappdata(tbl,'ExportROIIds',exportIds);
+        set(msg,'String',sprintf('%d / %d shown; %d selected for export (including hidden rows).',numel(order),numel(candidates),numel(exportIds)));
     end
     function markForExport(~,event)
-        if isempty(event.Indices)||event.Indices(2)~=10, return; end
+        if isempty(event.Indices)||event.Indices(2)~=10||event.Indices(1)>numel(order), return; end
+        if (isstruct(event)&&isfield(event,'Error') || isobject(event)&&isprop(event,'Error')) && ~isempty(event.Error)
+            set(msg,'String','The checkbox edit failed; export selection was kept.'); return;
+        end
         id=candidates{order(event.Indices(1))}.roiId;
         if logical(event.NewData), exportIds=unique([exportIds id],'stable');
         else, exportIds(exportIds==id)=[]; end
-        refresh();
+        % MATLAB already committed the checkbox to Data. Keep the row order,
+        % selection, column widths and both scroll positions intact.
+        updateExportAppearance(true);
     end
     function exportSelected(~,~)
         if isempty(exportIds)
             set(msg,'String','Tick the Export checkbox for at least one ROI first.'); return;
         end
         exportROIsCB([],[],[],exportIds);
+    end
+    function exportBundles(~,~)
+        if isempty(exportIds),set(msg,'String','Tick Export for the ROIs to average, or choose top-N in automatic analysis.');return;end
+        if roi.exportBusy,return;end
+        roi.exportBusy=true;lock=onCleanup(@releaseRoiExportLock); %#ok<NASGU>
+        try
+            chosen=candidates(ismember(cellfun(@(c)c.roiId,candidates),exportIds));
+            P=getSimpleExportPaths();[files,folder]=scmExportROIBundles(PSC,TR,chosen,P.roiDir,fileLabel);
+            roi.exportedIds=unique([roi.exportedIds exportIds]);
+            setappdata(review,'LastBundleFiles',files);setappdata(review,'LastSearchParameterFile',fullfile(folder,'Analysis_Parameters.txt'));
+            set(msg,'String',sprintf('Saved %d files to %s. In Group Analysis load mean OR allROIs, not both.',numel(files),folder));
+        catch ME,set(msg,'String',['Bundle export failed: ' ME.message]);end
     end
     function reviewSlice(~,event)
         if isempty(event.Indices)||~isgraphics(fig), return; end
@@ -2428,9 +3468,10 @@ function displayCandidate(c)
 end
 
 function replaceUnsavedAutomaticROIs()
+    roi.viewBanks={};roi.hiddenDefinitions={};
     % Replace previews only after the new search succeeds. Keep manual marks
     % and marks already written to TXT; exported file numbering is separate.
-    audit=getappdata(fig,'AutomaticROISelections');
+    audit=scmAutomaticROISelections(fig);
     remove=[];
     for ai=1:numel(audit)
         if ~ismember(audit{ai}.roiId,roi.exportedIds), remove(end+1)=audit{ai}.roiId; end %#ok<AGROW>
@@ -2452,6 +3493,8 @@ function clearAllMarkedROIs(~,~)
     end
     % Reviews and audit records are cleared together, so IDs can safely restart.
     roi.nextId=1; roi.exportedIds=[];
+    roi.sizingById={};
+    roi.viewBanks={};roi.hiddenDefinitions={};
     setappdata(fig,'AutomaticROISelections',{}); setappdata(fig,'AutomaticROISearchSummary',[]);
     roi.pendingHover=[]; setHoverActive(false);
     set(hLiveRect,'Visible','off'); set(hLivePSC,'Visible','off');
@@ -2462,6 +3505,7 @@ function exportPair(~,~)
     ids=[]; names={};
     for zz=1:nZ
         for rr=ROI_byZ{zz}
+            if ismember(rr.id,ids),continue;end
             ids(end+1)=rr.id; %#ok<AGROW>
             names{end+1}=sprintf('ROI %d | slice %d | X %d-%d, Y %d-%d',rr.id,zz,rr.x1,rr.x2,rr.y1,rr.y2); %#ok<AGROW>
         end
@@ -2522,6 +3566,9 @@ function exportROIsCB(~,~,pairIds,selectedIds)
                 flat(end+1) = struct('z', zz, 'id', r.id, 'x1', r.x1, 'x2', r.x2, 'y1', r.y1, 'y2', r.y2, 'color', r.color); %#ok<AGROW>
             end
         end
+        % Oblique masks can have marks on several slices but represent one
+        % volume ROI and one trace, not repeated observations.
+        if ~isempty(flat),[~,uniqueIDs]=unique([flat.id],'stable');flat=flat(uniqueIDs);end
         if ~isempty(selectedIds)
             flat=flat(ismember([flat.id],selectedIds));
             assert(numel(flat)==numel(selectedIds),'A selected ROI is no longer marked. Refresh the candidate search.');
@@ -2546,7 +3593,7 @@ function exportROIsCB(~,~,pairIds,selectedIds)
                 exportLabel='Ctrl'; if r.id==pairIds(1), exportLabel='Target'; end
             end
             if ~isempty(selectedIds)
-                audit=getappdata(fig,'AutomaticROISelections');
+                audit=scmAutomaticROISelections(fig);
                 for ai=1:numel(audit)
                     if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
                         exportLabel=audit{ai}.role;
@@ -2555,10 +3602,20 @@ function exportROIsCB(~,~,pairIds,selectedIds)
                     end
                 end
             end
-            outFile = fullfile(roiDir, sprintf('ROI%d_%s_d%d.txt', setId, exportLabel, dIdx));
+            [win0,win1]=parseRangeSafe(getStr(ebSig),840,900);
+            exportSignalSec=[win0 win1];
+            if isVolMode, exportSignalSec=(exportSignalSec-1)*TR; end
+            selection=[]; audit=scmAutomaticROISelections(fig);
+            for ai=1:numel(audit)
+                if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
+                    selection=audit{ai}; exportSignalSec=selection.signalSec; break;
+                end
+            end
+            windowTag=scmROIWindowTag(exportSignalSec,selection);
+            outFile = fullfile(roiDir, sprintf('ROI%d_%s_%s_d%d.txt', setId, exportLabel, windowTag, dIdx));
             while exist(outFile,'file') == 2
                 dIdx = dIdx + 1;
-                outFile = fullfile(roiDir, sprintf('ROI%d_%s_d%d.txt', setId, exportLabel, dIdx));
+                outFile = fullfile(roiDir, sprintf('ROI%d_%s_%s_d%d.txt', setId, exportLabel, windowTag, dIdx));
             end
             fid = fopen(outFile, 'w');
             if fid < 0, error('Could not write ROI file: %s', outFile); end
@@ -2572,11 +3629,19 @@ function exportROIsCB(~,~,pairIds,selectedIds)
             fprintf(fid, '# ROI_LABEL: %s\n', exportLabel);
             fprintf(fid, '# ROI_D_INDEX: %d\n', dIdx);
             fprintf(fid, '# ROI_MARKER_ID: %d\n', r.id);
+            fprintf(fid, '# WindowFilenameTag: %s\n',windowTag);
+            fprintf(fid, '# SelectedSignalWindow_sec: %.9g %.9g\n',exportSignalSec);
+            if ~isempty(selection)
+                fprintf(fid, '# SearchInterval_sec: %.9g %.9g\n',selection.searchIntervalSec);
+                fprintf(fid, '# PlateauDuration_sec: %.9g\n',selection.plateauSec);
+            end
             roiSignalWindow=getStr(ebSig);
-            audit=getappdata(fig,'AutomaticROISelections');
+            audit=scmAutomaticROISelections(fig);
             for ai=1:numel(audit)
                 if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
                     fprintf(fid,'# AutomaticROISelection: %s\n',jsonencode(audit{ai}));
+                    scmWriteAtlasSelectionHeader(fid,audit{ai});
+                    scmROI('writeSize',fid,audit{ai});
                     shown=audit{ai}.signalSec; if isVolMode, shown=shown/TR+1; end
                     roiSignalWindow=sprintf('%.9g-%.9g',shown);
                 end
@@ -2584,19 +3649,35 @@ function exportROIsCB(~,~,pairIds,selectedIds)
             fprintf(fid, '# SLICE: %d\n', r.z);
             fprintf(fid, '# BaselineWindow: %s\n', getStr(ebBase));
             fprintf(fid, '# PSC_REBASED: 1\n');
-            fprintf(fid, '# PSC_REBASE_METHOD: exact_percent_rebase_per_voxel_100_times_P_minus_B_over_100_plus_B\n');
-            fprintf(fid, '# PSC_BASELINE_TARGET: mean_selected_baseline_equals_0_percent\n');
+            if fusiBaselineReference('isExternal',baseline)
+                fprintf(fid,'# PSC_REBASE_METHOD: absolute_power_vs_external_mean_per_voxel\n');
+                fprintf(fid,'# PSC_BASELINE_TARGET: external_reference_mean_equals_0_percent\n# BaselineSource: %s\n',fusiBaselineReference('label',baseline));
+                fprintf(fid,'# BaselineSourceFile: %s\n',baseline.reference.sourceFile);
+                fprintf(fid,'# BaselineSource_TR_sec: %.12g\n# BaselineSourceFrames: %d %d\n',baseline.reference.TR,baseline.reference.frames);
+            else
+                fprintf(fid, '# PSC_REBASE_METHOD: exact_percent_rebase_per_voxel_100_times_P_minus_B_over_100_plus_B\n');
+                fprintf(fid, '# PSC_BASELINE_TARGET: mean_selected_baseline_equals_0_percent\n');
+            end
 
             fprintf(fid, '# SignalWindow: %s\n', roiSignalWindow);
+            if isempty(selection)&&numel(roi.sizingById)>=r.id&&~isempty(roi.sizingById{r.id}),scmROI('writeSize',fid,roi.sizingById{r.id});end
             fprintf(fid, '# x1 x2 y1 y2\n%d %d %d %d\n', r.x1,r.x2,r.y1,r.y2);
             fprintf(fid, '# color_rgb\n%.6f %.6f %.6f\n', r.color(1),r.color(2),r.color(3));
-            tc = computeRoiPSC_atSlice(r.z, r.x1, r.x2, r.y1, r.y2);
+            tc = computeRoiPSC_atSlice(r.z, r.x1, r.x2, r.y1, r.y2,r.id);
             if isempty(tc) || numel(tc) ~= nT, tc = nan(1,nT); end
             fprintf(fid, '# columns: time_sec\ttime_min\tPSC\n');
             for ii = 1:nT, fprintf(fid, '%.6f\t%.6f\t%.6f\n', tsec(ii), tmin(ii), tc(ii)); end
             clear fileGuard;
             roi.exportedIds=unique([roi.exportedIds r.id]);
             dIdx = dIdx + 1;
+        end
+        audit=scmAutomaticROISelections(fig);
+        chosen=audit(cellfun(@(c)ismember(c.roiId,[flat.id]),audit));
+        if ~isempty(chosen)
+            summary=getappdata(fig,'AutomaticROISearchSummary');skipped={};
+            if isstruct(summary)&&isfield(summary,'skippedRegions'),skipped=summary.skippedRegions;end
+            parameterFile=scmExportSearchParameters(roiDir,chosen,fileLabel,skipped,sprintf('Analysis_Parameters_ROIset%d.txt',setId));
+            setappdata(fig,'LastSearchParameterFile',parameterFile);
         end
         msgbox(sprintf('Exported %d ROI(s) to:\n%s\n(ROI set %d, %s)', numel(flat), roiDir, setId, labelTag), 'Export ROIs');
     catch ME
@@ -2629,8 +3710,9 @@ function exportSCMImageCB(~,~)
         tf = figure('Visible','off','Color',[0.05 0.05 0.05],'InvertHardcopy','off','Units','pixels','Position',[200 120 1400 980]);
         ax2 = axes('Parent',tf,'Units','normalized','Position',[0.06 0.10 0.74 0.84]);
         axis(ax2,'image'); axis(ax2,'off'); set(ax2,'YDir','reverse'); hold(ax2,'on');
-        image(ax2, get(hBG,'CData'));
-        h2 = imagesc(ax2, get(hOV,'CData')); set(h2,'AlphaData',get(hOV,'AlphaData'));
+        image(ax2,'CData',get(hBG,'CData'),'XData',hBG.XData,'YData',hBG.YData);
+        h2 = imagesc(ax2,hOV.XData,hOV.YData,get(hOV,'CData')); set(h2,'AlphaData',get(hOV,'AlphaData'));
+        set(ax2,'DataAspectRatio',ax.DataAspectRatio,'XLim',ax.XLim,'YLim',ax.YLim);
         try, colormap(ax2, colormap(ax)); catch, colormap(ax2, colormap(fig)); end
         caxis(ax2, state.cax);
 
@@ -2712,8 +3794,11 @@ function exportTimecoursePngCB(~,~)
         title(ax2, sprintf('%s | %s ROI Time Course', fileLabel, labelTag), 'Color','w','FontWeight','bold','Interpreter','none');
         ROI = ROI_byZ{state.z};
         for k = 1:numel(ROI)
-            r = ROI(k); tc = computeRoiPSC_atSlice(state.z, r.x1, r.x2, r.y1, r.y2);
-            if numel(tc) == nT, plot(ax2, tmin, tc, ':', 'Color', r.color, 'LineWidth', 2.6); end
+            r = ROI(k); tc = computeRoiPSC_atSlice(state.z, r.x1, r.x2, r.y1, r.y2,r.id);
+            if numel(tc) == nT
+                c=referenceCandidate(state.z,r.x1,r.x2,r.y1,r.y2,r.id);
+                [xPlot,yPlot]=stitchRoiTrace(tc,tmin,c);plot(ax2,xPlot,yPlot,':','Color',r.color,'LineWidth',2.6);
+            end
         end
         if strcmp(get(hLivePSC,'Visible'),'on')
             plot(ax2, get(hLivePSC,'XData'), get(hLivePSC,'YData'), ':', 'Color', get(hLivePSC,'Color'), 'LineWidth', 3.0);
@@ -2721,7 +3806,14 @@ function exportTimecoursePngCB(~,~)
         yl = get(axTC,'YLim'); if any(~isfinite(yl)) || yl(2) <= yl(1), yl = [-5 5]; end
         xl = get(axTC,'XLim'); if any(~isfinite(xl)) || xl(2) <= xl(1), xl = [tmin(1) tmin(end)]; end
         set(ax2,'YLim',yl,'XLim',xl);
-        applyExportWindowPatches(ax2, yl);
+        ax2.XLabel.String=axTC.XLabel.String;
+        if sequenceTraceShown()
+            copyobj([hSequenceLabels(:);hSequenceBoundaries(:);hSequenceBaselineBands(:);hBasePatch;hSigPatch;hBaseTxt;hSigTxt],ax2);
+        elseif referenceTraceShown()
+            line(ax2,[0 0],yl,'LineStyle','--','Color',[.8 .85 .9]);
+            copyobj([hReferenceScanTxt hCurrentScanTxt],ax2);
+        end
+        if ~sequenceTraceShown(),applyExportWindowPatches(ax2, yl);end
         print(tf,outPngGrid,'-dpng','-r300','-opengl');
         grid(ax2,'off'); print(tf,outPngNoGrid,'-dpng','-r300','-opengl');
         if isgraphics(tf), close(tf); end
@@ -2863,6 +3955,7 @@ drawnow;
         thrStr  = strtrim(getStr(ebThr));
         caxStr  = strtrim(getStr(ebCax));
         baseStr = strtrim(getStr(ebBase));
+        if fusiBaselineReference('isExternal',baseline),baseStr=fusiBaselineReference('label',baseline);end
         aStr    = sprintf('Alpha=%s%%', strtrim(getStr(txtAlpha)));
         modStr  = sprintf('AlphaMod=%d [%s..%s]', double(state.alphaModOn), ...
             strtrim(getStr(ebModMin)), strtrim(getStr(ebModMax)));
@@ -2893,11 +3986,12 @@ drawnow;
         % Keep source slice numbers in filenames and labels, even for a subset.
         for zSel = exportSlices
             PSCz = getPSCForSlice(zSel);
-            baseMap = deConfUSIon_signal('mean',PSCz(:,:,b0i:b1i),3);
+            baseMap = cachedBaseline(zSel,b0i,b1i);
             maskLocal = getMaskForSlice(zSel);
 
-            bgRGB = renderUnderlayRGB(getBg2DForSlice(zSel));
-            set(hBgT, 'CData', bgRGB);
+            bgRGB = currentUnderlayDisplayRGB(zSel);
+            set(hBgT,'CData',bgRGB,'XData',hBG.XData,'YData',hBG.YData);
+            set(axT,'DataAspectRatio',ax.DataAspectRatio,'XLim',ax.XLim,'YLim',ax.YLim);
 
             tilePNG = {};
             tileLBL = {};
@@ -3336,6 +4430,7 @@ function exportForGroupAnalysisCB(~,~)
         G.animalID = Pexp.animalID; G.session = Pexp.session; G.scanID = Pexp.scanID; G.subjectKey = Pexp.subjectKey;
         G.isAtlasWarped = logical(state.isAtlasWarped); G.atlasTransformFile = state.atlasTransformFile; G.atlasSliceIndex = state.z;
         G.baseWindowStr = getStr(ebBase); G.sigWindowStr = getStr(ebSig); G.baseWindowSec = [b0 b1]; G.sigWindowSec = [s0 s1]; G.sigma = sigma;
+        G.baseline=baseline;
         G.display = struct('threshold',thr,'caxis',state.cax,'alphaPercent',get(slAlpha,'Value'), ...
     'alphaModOn',logical(state.alphaModOn),'modMin',state.modMin,'modMax',state.modMax, ...
     'colormapName',getCurrentPopupStringLocal(popMap),'signMode',state.signMode);
@@ -3362,6 +4457,11 @@ G.display.exportStyle = 'SCM_gui_6tile_black_editable_ppt';
         G.underlayInfo.isColorUnderlay = logical(state.isColorUnderlay);
         G.underlayInfo.regionLabelUnderlay = state.regionLabelUnderlay;
         G.underlayInfo.regionInfo = state.regionInfo;
+        if ~isempty(state.atlasRegionSearch)
+            G.atlasRegionLabels3D=state.atlasRegionSearch.labels;
+            G.atlasInfoRegions=state.atlasRegionSearch.info;
+            G.atlasRegionProvenance=state.atlasRegionSearch.provenance;
+        end
         G.mask2DCurrentSlice = mask2D; G.maskAtlas = passedMask; G.maskIsInclude = passedMaskIsInclude; G.injectionSide = '?';
         [outFile, saveReport] = safeSaveScmGroupBundleLocal(outFile, G);
 
@@ -3973,6 +5073,7 @@ function [outFileFinal, saveReport] = safeSaveScmGroupBundleLocal(outFile, G)
 end
 
 function [ok,msg,actualDest] = tryOneScmBundleSaveLocal(destFile, G, payloadLabel)
+    destFile=fusiAnalysisOutputPath(destFile);
     ok = false;
     msg = '';
     actualDest = destFile;
@@ -4290,6 +5391,9 @@ function applyScmGroupBundleLocal(G, fullf)
     % 1) Load PSC data from bundle
     % ---------------------------------------------------------
     spatial=scmSpatialCalibration(struct()); rulerStep=0; % Never reuse another dataset's physical scale.
+    setappdata(fig,'SCMRulerVisible',false);
+    set(findall(fig,'Tag','SCM_RulerToggle'),'Value',0);
+    state.atlasInPlaneSpacingUm=[NaN NaN NaN];
     PSC = G.pscAtlas4D;
 
     if ~(isnumeric(PSC) || islogical(PSC))
@@ -4301,7 +5405,15 @@ function applyScmGroupBundleLocal(G, fullf)
     end
 
     % Treat loaded bundle as the new native/base state for this SCM session.
+    baselineRaw=[];
+    if isfield(G,'baseline'),baseline=G.baseline;
+    elseif isfield(baseline,'reference'),baseline=rmfield(baseline,'reference');end
+    set(ebBase,'Enable','on');set(lblBase,'String','Baseline window (s)');
+    if fusiBaselineReference('isExternal',baseline),set(ebBase,'Enable','off');set(lblBase,'String','Source baseline (s)');end
+    set(btnBaselineSource,'TooltipString',fusiBaselineReference('label',baseline));
     origPSC = PSC;
+    state.lastUnderlayFile = '';
+    state.pendingAtlasUnderlay3D = [];
 
     % ---------------------------------------------------------
     % 2) Load TR if present
@@ -4465,7 +5577,7 @@ function applyScmGroupBundleLocal(G, fullf)
     mask2D = getMaskForCurrentSlice();
 
     try
-        set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z)));
+        updateSCMUnderlayDisplay(state.z);
     catch
     end
 
@@ -4618,9 +5730,14 @@ function applyExportWindowPatches(ax2, yl)
     if s1s < s0s, tmp=s0s; s0s=s1s; s1s=tmp; end
     yr = yl(2)-yl(1); if ~isfinite(yr) || yr <= 0, yr = 1; end
     yTxt = yl(2) - 0.06*yr;
+    if referenceTraceShown()
+        w=fusiReferenceTraceWindow(baseline.reference,state.referenceMode==2);b0s=w.baselinePlotSec(1);b1s=w.baselinePlotSec(2);
+    end
+    if ~fusiBaselineReference('isExternal',baseline)||referenceTraceShown()
     patch(ax2,[b0s b1s b1s b0s]/60,[yl(1) yl(1) yl(2) yl(2)],[1.0 0.2 0.2],'FaceAlpha',0.16,'EdgeColor','none');
-    patch(ax2,[s0s s1s s1s s0s]/60,[yl(1) yl(1) yl(2) yl(2)],[1.0 0.6 0.15],'FaceAlpha',0.16,'EdgeColor','none');
     text(ax2,mean([b0s b1s])/60,yTxt,'Bas.','Color',[1.00 0.35 0.35],'FontSize',11,'FontWeight','bold','HorizontalAlignment','center','BackgroundColor',[0 0 0],'Margin',1,'Clipping','on');
+    end
+    patch(ax2,[s0s s1s s1s s0s]/60,[yl(1) yl(1) yl(2) yl(2)],[1.0 0.6 0.15],'FaceAlpha',0.16,'EdgeColor','none');
     text(ax2,mean([s0s s1s])/60,yTxt,'Sig.','Color',[1.00 0.80 0.35],'FontSize',11,'FontWeight','bold','HorizontalAlignment','center','BackgroundColor',[0 0 0],'Margin',1,'Clipping','on');
     try, uistack(findobj(ax2,'Type','line'),'top'); catch, end
 end
@@ -4628,26 +5745,66 @@ end
 %% ==========================================================
 % VIDEO GUI
 %% ==========================================================
-function openVideo(~,~)
+function openVideo(~,~,launchCfg)
     try
         bStart = baseStart0; bEnd = baseEnd0;
-        launchCfg = showScmVideoSetupDialogLocal('Video GUI', bStart, bEnd, 1);
+        if fusiBaselineReference('isExternal',baseline),bStart=0;bEnd=min(TR,tsec(end));end
+        if nargin<3,launchCfg=showScmVideoSetupDialogLocal('Video GUI',bStart,bEnd,1);end
         if isempty(launchCfg) || ~isstruct(launchCfg) || ~isfield(launchCfg,'cancelled') || launchCfg.cancelled, return; end
         baselineLocal = baseline;
         if ~isstruct(baselineLocal), baselineLocal = struct(); end
-        baselineLocal.start = launchCfg.baselineStart;
-        baselineLocal.end = launchCfg.baselineEnd;
+        if ~fusiBaselineReference('isExternal',baselineLocal)
+            baselineLocal.start = launchCfg.baselineStart;
+            baselineLocal.end = launchCfg.baselineEnd;
+        end
         baselineLocal.mode = 'sec';
-        parVideo = par;
+        parVideo = par;parVideo.fusiOriginalScanKey=state.originalScanKey;parVideo.scanSequence=state.scanSequence;
+        parVideo.videoInputIsPSC = true;
         parVideo.selectorRoot = getDatasetRootForSelectors();
         parVideo.maskStartPath = getMaskStartPath();
         parVideo.underlayStartPath = getUnderlayStartPathFast();
         parVideo.transformStartPath = getTransformStartPath();
-        play_fusi_video_final(PSC, PSC, PSC, bg, parVideo, 10, 240, TR, (nT-1)*TR, baselineLocal, ...
+        if state.isAtlasWarped&&isfield(state,'atlasUnderlayKey')&&~isempty(state.atlasUnderlayKey)
+            parVideo.fusiAtlasDisplayContext=atlasDisplayContext();
+        elseif isfield(parVideo,'fusiAtlasDisplayContext'),parVideo=rmfield(parVideo,'fusiAtlasDisplayContext');end
+        videoRaw=PSC;
+        if ~isempty(baselineRaw)&&~state.isAtlasWarped,videoRaw=baselineRaw;parVideo.videoInputIsPSC=false;end
+        child=play_fusi_video_final(videoRaw, videoRaw, PSC, bg, parVideo, 10, 240, TR, (nT-1)*TR, baselineLocal, ...
             passedMask, passedMaskIsInclude, nT, false, struct(), fileLabel, state.z);
+        setappdata(fig,'FUSILastOpenedVideo',child);
     catch ME
         errordlg(ME.message, 'Open Video GUI failed');
     end
+end
+
+function ctx=atlasDisplayContext()
+    ctx=struct('bundle',state.pendingAtlasUnderlay3D,'nativePSC',origPSC,'nativePower',baselineRaw,'nativeBG',origBG, ...
+        'nativeMask',origPassedMask,'nativeMaskIsInclude',origPassedMaskIsInclude, ...
+        'slice',state.z,'regionScheme',state.regionScheme,'appearance',uState,'mapping',state.currentROIMapping);
+end
+function restoreAtlasDisplayContext()
+    if ~isfield(par,'fusiAtlasDisplayContext'),return;end
+    ctx=par.fusiAtlasDisplayContext;bundle=ctx.bundle;
+    [bg,meta,Tgrid,grid]=fusiCachedAtlasUnderlayView3D(bundle.underlay,bundle.meta,'atlas');
+    assert(isequal(size(PSC,[1 2 3]),grid.outputSizeYXZ),'deConfUSIon:AtlasGeometryMismatch','Transferred atlas display and PSC grids differ.');
+    origPSC=ctx.nativePSC;origBG=ctx.nativeBG;origPassedMask=ctx.nativeMask;origPassedMaskIsInclude=ctx.nativeMaskIsInclude;
+    if isfield(ctx,'nativePower')&&~isempty(ctx.nativePower),baselineRaw=ctx.nativePower;par.baselineRawIsPSC=false;end
+    state.isAtlasWarped=true;state.atlasUnderlayKey=bundle.meta.registrationKey;
+    state.pendingAtlasUnderlay3D=bundle;state.atlasSliceSampling=grid;
+    transformFile=fusiAtlasPairedTransformFile(meta,bundle.file);
+    state.atlasTransformFile=transformFile;state.lastAtlasTransformFile=transformFile;
+    state.currentROIMapping=struct('kind','3D','transform',Tgrid);
+    if isfield(ctx,'mapping')&&~isempty(ctx.mapping),state.currentROIMapping=ctx.mapping;end
+    roi.viewKey=['atlas|' transformFile];roi.viewShape=[nY nX nZ];roi.viewMapping=state.currentROIMapping;
+    state.z=clamp(ctx.slice,1,nZ);par.atlasVoxelSizeYXZUm=meta.voxelSizeUm;
+    applyUnderlayMeta(meta,bg);refreshAtlasUnderlayChoices('atlas');
+    state.regionScheme=ctx.regionScheme;uState=ctx.appearance;
+    options=get(popRegionScheme,'String');set(popRegionScheme,'Value',find(strcmp(options,state.regionScheme),1));
+    set(slBri,'Value',uState.brightness);set(slCon,'Value',uState.contrast);set(slGam,'Value',uState.gamma);
+    set(txtBri,'String',sprintf('%.2f',uState.brightness));set(txtCon,'String',sprintf('%.2f',uState.contrast));set(txtGam,'String',sprintf('%.2f',uState.gamma));
+    set(btnWarpAtlas,'String','WARP TO ATLAS: CHOOSE TRANSFORM','TooltipString',transformFile);
+    setappdata(fig,'FUSIAtlasAppliedTransformFile',transformFile);
+    updateSCMUnderlayDisplay(state.z);
 end
 
 function cfg = showScmVideoSetupDialogLocal(titleStr, bStart, bEnd, interpDefault)
@@ -4701,7 +5858,16 @@ end
 %% ==========================================================
 % ROI / TIME COURSE HELPERS
 %% ==========================================================
-function tc = computeRoiPSC_atSlice(zSel, x1, x2, y1, y2)
+function tc = computeRoiPSC_atSlice(zSel, x1, x2, y1, y2,roiId)
+    if nargin>=6
+        audit=scmAutomaticROISelections(fig);
+        for ai=1:numel(audit)
+            if audit{ai}.roiId==roiId&&(audit{ai}.slice==zSel||isfield(audit{ai},'roiMaskVolumeIndices')),tc=scmROI('trace',PSC,candidateForBaseline(audit{ai}));return;end
+        end
+        if numel(roi.sizingById)>=roiId&&~isempty(roi.sizingById{roiId})&&isfield(roi.sizingById{roiId},'roiMaskVolumeIndices')
+            c=candidateForBaseline(roi.sizingById{roiId});tc=scmROI('trace',PSC,c);return;
+        end
+    end
     tc=computeRoiPSC_idx(zSel,x1,x2,y1,y2,1:nT);
 end
 
@@ -4786,6 +5952,7 @@ function tc = computeRoiPSC_idx(zSel, x1, x2, y1, y2, idx)
 end
 
 function B=cachedBaseline(z,b0,b1)
+    if fusiBaselineReference('isExternal',baseline),B=zeros(nY,nX,'single');return;end
     key=[z b0 b1];
     if ~isequal(state.baseKey,key)
         state.baseMean=windowMean(z,b0:b1); state.baseKey=key;
@@ -4807,6 +5974,7 @@ function M=windowMean(z,idx)
 end
 
 function [b0i,b1i]=selectedBaselineFrames()
+    if fusiBaselineReference('isExternal',baseline),b0i=1;b1i=1;return;end
     [b0,b1]=parseRangeSafe(getStr(ebBase),baseStart0,baseEnd0);
     if isVolMode, b0i=round(b0); b1i=round(b1);
     else, b0i=round(b0/TR)+1; b1i=round(b1/TR)+1; end
@@ -4816,39 +5984,206 @@ function [b0i,b1i]=selectedBaselineFrames()
 end
 
 function redrawROIsForCurrentSlice()
+    traceGuard=onCleanup(@closeCurveReadProgress); %#ok<NASGU>
     deleteIfValid(roiHandles); roiHandles = gobjects(0);
     deleteIfValid(roiPlotPSC); roiPlotPSC = gobjects(0);
     deleteIfValid(roiTextHandles); roiTextHandles = gobjects(0);
     roi.savedTcBounds=zeros(0,6);
     ROI = ROI_byZ{state.z};
-    if isempty(ROI), applyTimecourseAxisMode(); return; end
+    audit=scmAutomaticROISelections(fig);
     for k = 1:numel(ROI)
-        r = ROI(k);
-        markerLabel=sprintf('%d',r.id);
-        audit=getappdata(fig,'AutomaticROISelections');
-        for ai=1:numel(audit)
-            if audit{ai}.roiId==r.id && audit{ai}.slice==state.z && isfield(audit{ai},'role')
-                markerLabel=sprintf('%d %s',r.id,audit{ai}.role); break;
-            end
-        end
-        roiHandles(end+1) = rectangle(ax,'Position',[r.x1 r.y1 r.x2-r.x1+1 r.y2-r.y1+1], ...
-            'EdgeColor',r.color,'LineWidth',2); %#ok<AGROW>
-        roiTextHandles(end+1) = text(ax,r.x1,max(1,r.y1-2),markerLabel, ...
-            'Color',r.color,'FontWeight','bold','FontSize',12,'Interpreter','none', ...
-            'VerticalAlignment','bottom','BackgroundColor',[0 0 0],'Margin',1); %#ok<AGROW>
-        tc = computeRoiPSC_atSlice(state.z, r.x1, r.x2, r.y1, r.y2);
-        if numel(tc) == nT
-            roi.savedTcBounds(end+1,:)=traceBounds(tmin,tc);
-            roiPlotPSC(end+1) = plot(axTC,tmin,tc,':','Color',r.color,'LineWidth',2.4,'Tag','SCM_SavedROI'); %#ok<AGROW>
-        end
+        setappdata(fig,'FUSICurveReadBatch',[k numel(ROI)]);
+        drawRoiForCurrentSlice(ROI(k),audit);
     end
     applyTimecourseAxisMode();
+end
+
+function drawRoiForCurrentSlice(r,audit,tc)
+    markerLabel=sprintf('%d',r.id);
+    for ai=1:numel(audit)
+        if audit{ai}.roiId==r.id && (audit{ai}.slice==state.z||isfield(audit{ai},'roiMaskVolumeIndices')) && isfield(audit{ai},'role')
+            markerLabel=sprintf('%d %s',r.id,audit{ai}.role); break;
+        end
+    end
+    selection=[];for ai=1:numel(audit),if audit{ai}.roiId==r.id&&(audit{ai}.slice==state.z||isfield(audit{ai},'roiMaskVolumeIndices')),selection=audit{ai};break;end,end
+    if isempty(selection)&&numel(roi.sizingById)>=r.id&&~isempty(roi.sizingById{r.id})&&isfield(roi.sizingById{r.id},'roiMaskVolumeIndices'),selection=roi.sizingById{r.id};end
+    if ~isempty(selection)&&(isfield(selection,'roiMaskIndices')||isfield(selection,'roiMaskVolumeIndices'))
+        m=scmROI('mask',selection,state.z,[nY nX nZ]);padded=zeros(nY+2,nX+2);padded(2:end-1,2:end-1)=double(m);
+        previousPlot=ax.NextPlot;ax.NextPlot='add';restorePlot=onCleanup(@()set(ax,'NextPlot',previousPlot));
+        [~,outline]=contour(ax,0:nX+1,0:nY+1,padded,[.5 .5],'LineColor',r.color,'LineWidth',2);roiHandles(end+1)=outline;
+        clear restorePlot;
+    else
+        roiHandles(end+1) = rectangle(ax,'Position',[r.x1 r.y1 r.x2-r.x1+1 r.y2-r.y1+1], ...
+            'EdgeColor',r.color,'LineWidth',2);
+    end
+    roiTextHandles(end+1) = text(ax,r.x1,max(1,r.y1-2),markerLabel, ...
+        'Color',r.color,'FontWeight','bold','FontSize',12,'Interpreter','none', ...
+        'VerticalAlignment','bottom','BackgroundColor',[0 0 0],'Margin',1); %#ok<AGROW>
+    setappdata(roiHandles(end),'SCMROIId',r.id);setappdata(roiTextHandles(end),'SCMROIId',r.id);
+    if nargin<3,tc=computeRoiPSC_atSlice(state.z,r.x1,r.x2,r.y1,r.y2,r.id);end
+    if numel(tc) == nT
+        c=referenceCandidate(state.z,r.x1,r.x2,r.y1,r.y2,r.id);
+        [xPlot,yPlot]=stitchRoiTrace(tc,tmin,c);
+        roi.savedTcBounds(end+1,:)=traceBounds(xPlot,yPlot);
+        roiPlotPSC(end+1) = plot(axTC,xPlot,yPlot,':','Color',r.color,'LineWidth',2.4,'Tag','SCM_SavedROI'); %#ok<AGROW>
+        setappdata(roiPlotPSC(end),'SCMROIId',r.id);
+    end
 end
 
 function deleteIfValid(h)
     if isempty(h), return; end
     for i = 1:numel(h)
         if isgraphics(h(i)), delete(h(i)); end
+    end
+end
+
+function c=referenceCandidate(z,x1,x2,y1,y2,roiId)
+    c=struct('boundsXY',[x1 x2 y1 y2],'slice',z);
+    if nargin<6,return;end
+    audit=scmAutomaticROISelections(fig);
+    for ai=1:numel(audit)
+        if audit{ai}.roiId==roiId,c=audit{ai};return;end
+    end
+    if numel(roi.sizingById)>=roiId&&~isempty(roi.sizingById{roiId})
+        mask=roi.sizingById{roiId};
+        if isfield(mask,'roiMaskVolumeIndices'),c=mask;end
+    end
+end
+
+function yes=hasReferenceSamples(whole)
+    yes=false;if ~fusiBaselineReference('isExternal',baseline),return;end
+    r=baseline.reference;frames=r.frames(1):r.frames(2);if whole,frames=1:r.nFrames;end
+    if isfield(r,'tracePower')&&isfield(r,'traceFrames')&&all(ismember(frames,r.traceFrames)),yes=true;return;end
+    if isfield(r,'sourceFile')&&~isempty(r.sourceFile),yes=isfile(fusiFindMovedDataPath(r.sourceFile));end
+end
+
+function yes=referenceTraceShown()
+    yes=state.referenceMode<3&&hasReferenceSamples(state.referenceMode==2);
+end
+
+function yes=sequenceTraceShown()
+    yes=state.referenceMode==4&&~isempty(state.scanSequence)&&numel(state.scanSequence.scans)>1&& ...
+        any(fusiScanSequence('included',state.scanSequence))&& ...
+        (fusiBaselineReference('isExternal',baseline)||strcmp(state.scanSequence.normMode,'local'));
+end
+
+function [start,finish,owner]=sequenceWindows()
+    L=fusiScanSequence('layout',state.scanSequence);start=L(state.scanSequence.active).startSec;finish=max([L.endSec],[],'omitnan');owner=[];
+    if strcmp(state.scanSequence.normMode,'local'),owner=state.scanSequence.active;return;end
+    r=baseline.reference;
+    for si=1:numel(L)
+        d=state.scanSequence.scans{si};
+        if (~isempty(r.sourceFile)&&strcmpi(fusiFindMovedDataPath(r.sourceFile),d.file))|| ...
+                (~isempty(r.rawFile)&&strcmpi(fusiFindMovedDataPath(r.rawFile),d.rawFile)),owner=si;break;end
+    end
+end
+
+function referenceTraceModeChanged(~,~)
+    state.referenceMode=get(popReferenceTrace,'Value');state.referenceTraceError='';state.timeWindowKey=[];
+    if state.referenceMode==4&&(isempty(state.scanSequence)||numel(state.scanSequence.scans)<2)
+        state.referenceMode=1;set(popReferenceTrace,'Value',1);set(info1,'String','Use Scans / order... to add scans first.');
+    end
+    if state.referenceMode==2&&~hasReferenceSamples(true)
+        state.referenceMode=1;set(popReferenceTrace,'Value',1);
+        set(info1,'String','The whole reference requires its source file. Showing available baseline samples.');
+    end
+    state.tcFixX=false;set(cbTcFixX,'Value',0);set(ebTcXLim,'Enable','off');
+    set(hLivePSC,'Visible','off');roi.lastHoverXY=[-inf -inf];redrawROIsForCurrentSlice();
+end
+
+function setLiveCurve(tc,z,x1,x2,y1,y2)
+    c=referenceCandidate(z,x1,x2,y1,y2);
+    if ~state.tcLiveAllScans&&(sequenceTraceShown()||referenceTraceShown())
+        xPlot=state.tminHover;if sequenceTraceShown(),[start,~]=sequenceWindows();xPlot=xPlot+start/60;end
+        yPlot=smoothDisplayCurve(xPlot,tc);
+    else,[xPlot,yPlot]=stitchRoiTrace(tc,state.tminHover,c);
+    end
+    set(hLivePSC,'XData',xPlot,'YData',yPlot,'Visible','on');
+end
+function liveAllScansChanged(~,~)
+    state.tcLiveAllScans=logical(get(cbLiveAllScans,'Value'));
+    roi.lastHoverXY=[-inf -inf];set(hLivePSC,'Visible','off');
+end
+
+function [xPlot,yPlot]=stitchRoiTrace(tc,currentTimeMin,c)
+    xPlot=currentTimeMin;yPlot=tc;
+    sequence=sequenceTraceShown();if ~referenceTraceShown()&&~sequence,yPlot=smoothDisplayCurve(xPlot,yPlot);return;end
+    try
+        key=struct('mode',state.referenceMode,'bounds',c.boundsXY,'slice',c.slice,'view',roi.viewKey,'revision',roi.revision);
+        for field={'roiMaskIndices','roiMaskSizeYX','roiMaskVolumeIndices','roiMaskSizeYXZ'}
+            if isfield(c,field{1}),key.(field{1})=c.(field{1});end
+        end
+        series=[];
+        for ci=1:numel(state.referenceTraceCache)
+            item=state.referenceTraceCache{ci};if isequal(item.key,key),series=item.series;break;end
+        end
+        if isempty(series)
+            if state.isAtlasWarped
+                nativeShape=[size(origPSC,1) size(origPSC,2) 1];if ndims(origPSC)==4,nativeShape(3)=size(origPSC,3);end
+                mapped=scmROI('map',{c},[nY nX nZ],nativeShape,roi.viewMapping,true,[NaN NaN NaN]);c=mapped{1};
+            end
+            if sequence
+                progress=getappdata(fig,'FUSICurveReadProgress');
+                if isempty(progress)||~isgraphics(progress)
+                    q=state.scanSequence;labels=fusiScanSequence('labels',q);labels=labels(fusiScanSequence('included',q));
+                    progress=fusiBaselineProgress('open','Loading all-scan ROI time courses',labels);
+                end
+                batch=getappdata(fig,'FUSICurveReadBatch');
+                if isempty(batch),pg=onCleanup(@()fusiBaselineProgress('close',progress)); %#ok<NASGU>
+                else,setappdata(fig,'FUSICurveReadProgress',progress);fusiBaselineProgress('roi',progress,batch(1),batch(2));end
+                [sx,sy,notes]=fusiScanSequence('trace',state.scanSequence,baseline,c, ...
+                    @(fraction,message)fusiBaselineProgress('update',progress,fraction,message),baselineRaw);
+                clear pg;series=struct('x',sx,'y',sy);
+                if ~isempty(notes),set(info1,'String',strjoin(notes,' | '));end
+            else,series=fusiBaselineRoiTrace(baseline.reference,c,state.referenceMode==2);end
+            state.referenceTraceCache{end+1}=struct('key',key,'series',series);
+            while numel(state.referenceTraceCache)>96||sum(cellfun(@referenceSeriesBytes,state.referenceTraceCache))>32*1024^2
+                state.referenceTraceCache(1)=[];
+            end
+        end
+        if sequence,xPlot=series.x;yPlot=series.y;
+        else
+            w=fusiReferenceTraceWindow(baseline.reference,state.referenceMode==2);
+            xPlot=[(series.timeSec+w.shiftSec)/60 NaN currentTimeMin];yPlot=[series.PSC NaN tc];
+        end
+    catch ME
+        if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'),set(info1,'String','ROI curve read cancelled. Select the ROI again to retry.');
+        elseif ~strcmp(state.referenceTraceError,ME.message)
+            state.referenceTraceError=ME.message;set(info1,'String',['Reference curve: ' ME.message]);
+        end
+    end
+    yPlot=smoothDisplayCurve(xPlot,yPlot);
+end
+
+function closeCurveReadProgress()
+    if ~isgraphics(fig),return;end
+    progress=getappdata(fig,'FUSICurveReadProgress');if ~isempty(progress),fusiBaselineProgress('close',progress);rmappdata(fig,'FUSICurveReadProgress');end
+    if isappdata(fig,'FUSICurveReadBatch'),rmappdata(fig,'FUSICurveReadBatch');end
+end
+
+function bytes=referenceSeriesBytes(item)
+    if isfield(item.series,'x'),bytes=16*numel(item.series.x);
+    else,bytes=16*numel(item.series.PSC);end
+end
+
+function y=smoothDisplayCurve(x,y)
+    if state.tcSmoothOn,y=fusiSmoothTimecourse(x,y,state.tcSmoothSeconds);end
+end
+function timecourseSmoothingChanged(~,~)
+    seconds=str2double(getStr(ebTcSmooth));
+    if ~isfinite(seconds)||seconds<=0,set(ebTcSmooth,'String',sprintf('%.9g',state.tcSmoothSeconds));return;end
+    state.tcSmoothSeconds=seconds;state.tcSmoothOn=logical(get(cbTcSmooth,'Value'));
+    enabled='off';if state.tcSmoothOn,enabled='on';end;set(ebTcSmooth,'Enable',enabled);
+    set(hLivePSC,'Visible','off');roi.lastHoverXY=[-inf -inf];state.timeWindowKey=[];redrawROIsForCurrentSlice();
+end
+
+function label=shortScanLabel(context,fallback)
+    label=fallback;
+    for field={'rawFile','loadedFile','sourceFile'}
+        if ~isfield(context,field{1})||isempty(context.(field{1})),continue;end
+        [~,stem]=fileparts(context.(field{1}));
+        token=regexp(stem,'(?:^|_)(scan\d+(?:_[^.]*)?)$','tokens','once','ignorecase');
+        if ~isempty(token),label=token{1};return;end
     end
 end
 
@@ -4870,13 +6205,17 @@ function tcYFromCax(~,~)
 end
 
 function tcXAll(~,~)
-    set(ebTcXLim, 'String', sprintf('%g %g', tmin(1), displayEndMin));
+    first=tmin(1);if referenceTraceShown(),w=fusiReferenceTraceWindow(baseline.reference,state.referenceMode==2);first=w.plotWindowSec(1)/60;end
+    finish=displayEndMin;if sequenceTraceShown(),[~,finish]=sequenceWindows();first=0;finish=finish/60;end
+    set(ebTcXLim, 'String', sprintf('%g %g', first, finish));
     set(cbTcFixX, 'Value', 1);
     tcAxisModeChanged();
 end
 
 function applyTimecourseAxisMode()
     if ~isgraphics(axTC), return; end
+    enabled='off';if fusiBaselineReference('isExternal',baseline)||(~isempty(state.scanSequence)&&numel(state.scanSequence.scans)>1),enabled='on';end
+    set(popReferenceTrace,'Enable',enabled);
     xAuto=state.tcXLim; yAuto=state.tcYLim;
     if ~state.tcFixX || ~state.tcFixY, [xAuto, yAuto] = getAutoTcLimits(); end
     if state.tcFixX, xUse = state.tcXLim; else, xUse = xAuto; end
@@ -4899,6 +6238,8 @@ function [xLimAuto, yLimAuto] = getAutoTcLimits()
         xLimAuto = [tmin(1) tmin(end)];
     end
     xLimAuto(2)=max(xLimAuto(2),displayEndMin);
+    if referenceTraceShown(),w=fusiReferenceTraceWindow(baseline.reference,state.referenceMode==2);xLimAuto(1)=min(xLimAuto(1),w.plotWindowSec(1)/60);end
+    if sequenceTraceShown(),[~,finish]=sequenceWindows();xLimAuto=[0 finish/60];end
     if sum(bounds(:,6)) >= 2
         y0 = min(bounds(:,4)); y1 = max(bounds(:,5));
         if y1 > y0
@@ -4923,12 +6264,19 @@ function applyTimecourseXTicks(xLimNow)
     if ~isfinite(span) || span <= 0
         set(axTC,'XTickMode','auto','XTickLabelMode','auto'); return;
     end
-    if span <= 5, stepMin = 1; elseif span <= 15, stepMin = 2; else, stepMin = 5; end
+    if span <= 5, stepMin = 1; elseif span <= 15, stepMin = 2; elseif span<=40,stepMin=5;
+    else
+        targetStep=span/8;unit=10^floor(log10(targetStep));niceSteps=[1 2 5 10]*unit;
+        stepMin=niceSteps(find(niceSteps>=targetStep,1));
+    end
     ticks = ceil(xLimNow(1)/stepMin)*stepMin : stepMin : floor(xLimNow(2)/stepMin)*stepMin;
     if isempty(ticks), ticks = [xLimNow(1) xLimNow(2)]; end
     if numel(ticks) == 1, ticks = unique([xLimNow(1) ticks xLimNow(2)]); end
+    if referenceTraceShown() && xLimNow(1)<0 && ~any(ticks<0)
+        ticks=unique([round(xLimNow(1),2) ticks]);
+    end
     ticks = ticks(isfinite(ticks));
-    set(axTC,'XTick',ticks,'XTickMode','manual','XTickLabelMode','auto');
+    set(axTC,'XTick',ticks,'XTickMode','manual','XTickLabelMode','auto','XTickLabelRotation',0);
 end
 
 function drawTimeWindows()
@@ -4944,8 +6292,19 @@ function drawTimeWindows()
     if b1s < b0s, tmp=b0s; b0s=b1s; b1s=tmp; end
     if s1s < s0s, tmp=s0s; s0s=s1s; s1s=tmp; end
     yl = get(axTC,'YLim'); if any(~isfinite(yl)) || yl(2) <= yl(1), yl = [-5 5]; set(axTC,'YLim',yl); end
-    key=[b0s b1s s0s s1s yl];
-    if isequal(state.timeWindowKey,key), return; end
+    external=fusiBaselineReference('isExternal',baseline);
+    showReference=referenceTraceShown();
+    sequence=sequenceTraceShown();owner=[];
+    if showReference,w=fusiReferenceTraceWindow(baseline.reference,state.referenceMode==2);b0s=w.baselinePlotSec(1);b1s=w.baselinePlotSec(2);end
+    if sequence
+        [start,~,owner]=sequenceWindows();L=fusiScanSequence('layout',state.scanSequence);s0s=s0s+start;s1s=s1s+start;
+        if ~isempty(owner)
+            window=[baseline.start baseline.end];if external,window=baseline.reference.windowSec;end
+            b0s=window(1)+L(owner).startSec;b1s=window(2)+L(owner).startSec;
+        end
+    end
+    key=[b0s b1s s0s s1s yl external showReference state.referenceMode get(axTC,'XLim')];
+    if isequaln(state.timeWindowKey,key), return; end
     firstDraw=isempty(state.timeWindowKey);
     state.timeWindowKey=key;
     yr = yl(2)-yl(1); if ~isfinite(yr) || yr <= 0, yr = 1; end
@@ -4954,8 +6313,41 @@ function drawTimeWindows()
     set(hBasePatch,'XData',xb,'YData',yb,'FaceColor',[1.00 0.20 0.20],'FaceAlpha',0.16,'Visible','on');
     set(hSigPatch,'XData',xs,'YData',ys,'FaceColor',[1.00 0.60 0.15],'FaceAlpha',0.16,'Visible','on');
     yTxt = yl(2) - 0.06*yr;
+    if showReference||sequence,yTxt=yl(2)-.18*yr;end
     set(hBaseTxt,'Position',[mean(xb) yTxt 0],'String','Bas.','Visible','on','HorizontalAlignment','center','VerticalAlignment','middle','BackgroundColor',[0 0 0],'Margin',1,'Clipping','on');
     set(hSigTxt,'Position',[mean(xs) yTxt 0],'String','Sig.','Visible','on','HorizontalAlignment','center','VerticalAlignment','middle','BackgroundColor',[0 0 0],'Margin',1,'Clipping','on');
+    if external&&~showReference&&(~sequence||isempty(owner)),set([hBasePatch hBaseTxt],'Visible','off');end
+    deleteIfValid(hSequenceLabels);deleteIfValid(hSequenceBoundaries);hSequenceLabels=gobjects(0);hSequenceBoundaries=gobjects(0);
+    deleteIfValid(hSequenceBaselineBands);hSequenceBaselineBands=gobjects(0);
+    if showReference
+        set(hScanBoundary,'XData',[0 0],'YData',yl,'Visible','on');
+        refLabel=shortScanLabel(baseline.reference,'Reference scan');curLabel=shortScanLabel(par,'Current scan');
+        set(hReferenceScanTxt,'Position',[w.plotWindowSec(1)/60 yl(2)-.025*yr 0], ...
+            'String',['Reference: ' refLabel],'Visible','on');
+        set(hCurrentScanTxt,'Position',[max(0,get(axTC,'XLim')*[0;1])/2 yl(2)-.025*yr 0], ...
+            'String',['Current: ' curLabel ' (t = 0)'],'Visible','on');
+        axTC.XLabel.String='Stitched time (min; current scan starts at 0)';
+    elseif sequence
+        set([hScanBoundary hReferenceScanTxt hCurrentScanTxt],'Visible','off');
+        for si=1:numel(L)
+            if ~isfinite(L(si).startSec),continue;end
+            if strcmp(state.scanSequence.normMode,'local')&&si~=owner
+                window=(state.scanSequence.localWindowSec+L(si).startSec)/60;
+                hSequenceBaselineBands(end+1)=patch(axTC,window([1 2 2 1]),yb,[1 .2 .2], ...
+                    'FaceAlpha',.10,'EdgeColor','none','Tag','SCM_SequenceBaseline');
+                try,uistack(hSequenceBaselineBands(end),'bottom');catch,end
+            end
+            color=[.8 .8 .85];label=L(si).label;if si==state.scanSequence.active,color=[.55 .85 1];label=[label ' (overlay)'];end
+            hSequenceLabels(end+1)=text(axTC,mean([L(si).startSec L(si).endSec])/60,yl(2)-.025*yr,label, ...
+                'Color',color,'FontSize',10,'FontWeight','bold','HorizontalAlignment','center','VerticalAlignment','top', ...
+                'BackgroundColor',[.05 .05 .05],'Margin',1,'Clipping','on','Interpreter','none','Tag','SCM_SequenceLabel');
+            if L(si).startSec>0,hSequenceBoundaries(end+1)=line(axTC,[L(si).startSec L(si).startSec]/60,yl, ...
+                    'LineStyle','--','Color',[.8 .85 .9],'Tag','SCM_SequenceBoundary');end
+        end
+        axTC.XLabel.String='Sequence time (min; scans arranged consecutively)';
+    else
+        set([hScanBoundary hReferenceScanTxt hCurrentScanTxt],'Visible','off');axTC.XLabel.String='Time (min)';
+    end
     if firstDraw
         try, uistack(hBasePatch,'bottom'); uistack(hSigPatch,'bottom'); catch, end
     end
@@ -5061,6 +6453,10 @@ end
 function bg2 = getBg2DForSlice(z)
     ensureUnderlayStateFields(); z = clamp(round(z),1,nZ);
     if isempty(bg), bg2 = zeros(nY,nX); return; end
+    if state.isColorUnderlay&&~isempty(state.regionLabelUnderlay)&&ndims(bg)<=3&& ...
+            isequal(size(state.regionLabelUnderlay,[1 2 3]),[nY nX nZ])
+        bg2=state.regionLabelUnderlay(:,:,z);return;
+    end
     if ndims(bg) == 2
         bg2 = fitUnderlayPlaneToCurrentDisplay(bg); return;
     end
@@ -5314,6 +6710,36 @@ function rgb = renderUnderlayRGB(Uin)
     end
 end
 
+function rgb=currentUnderlayDisplayRGB(z)
+    key=struct('slice',z,'revision',state.underlayRevision,'appearance',uState,'scheme',state.regionScheme);
+    for k=1:numel(state.renderedAtlasCache)
+        entry=state.renderedAtlasCache{k};if isequal(entry.key,key),rgb=entry.rgb;return;end
+    end
+    if isempty(state.atlasDisplay3D)
+        U=getBg2DForSlice(z);
+        if state.isColorUnderlay&&~isempty(state.regionLabelUnderlay)&&~strcmp(state.regionScheme,'Atlas')
+            U=fusiRegionLabelRGB(state.regionLabelUnderlay(:,:,min(z,size(state.regionLabelUnderlay,3))),state.regionInfo,state.regionScheme);
+        end
+    else
+        U=state.atlasDisplay3D.getSlice(z);
+        if state.isColorUnderlay&&~strcmp(state.regionScheme,'Atlas')
+            U=fusiRegionLabelRGB(state.atlasDisplay3D.getLabels(z),state.regionInfo,state.regionScheme);
+        end
+    end
+    rgb=single(renderUnderlayRGB(U));
+    bytes=numel(rgb)*4;
+    if bytes<=64*1024^2
+        while ~isempty(state.renderedAtlasCache)&&(numel(state.renderedAtlasCache)>=12|| ...
+                sum(cellfun(@(e)numel(e.rgb)*4,state.renderedAtlasCache))+bytes>64*1024^2),state.renderedAtlasCache(1)=[];end
+        state.renderedAtlasCache{end+1}=struct('key',key,'rgb',rgb);
+    end
+end
+
+function updateSCMUnderlayDisplay(z)
+    set(hBG,'CData',currentUnderlayDisplayRGB(z));
+    syncSCMImageGeometry();updateRegionLabels();
+end
+
 function U = processUnderlay(Uin)
     excluded = ~isfinite(Uin);
     U = double(Uin); U(excluded) = 0;
@@ -5368,11 +6794,11 @@ function rgb = convertUnderlayToColorRGB(U)
     L = double(U); L(~isfinite(L)) = 0;
     maxLab = max(L(:));
     if isempty(state.regionColorLUT) || size(state.regionColorLUT,1) < max(1,maxLab)
-        state.regionColorLUT = makeRegionColorLUT(max(1, maxLab));
+        state.regionColorLUT = fusiRegionColorLUT(state.regionInfo,max(1,maxLab));
     end
     rgb = zeros([size(L,1) size(L,2) 3], 'double');
     zmask = (L == 0);
-    rgb(:,:,1) = 0.85*zmask; rgb(:,:,2) = 0.85*zmask; rgb(:,:,3) = 0.85*zmask;
+    % Region 0 is always black.
     pos = find(L > 0);
     if ~isempty(pos)
         labs = round(L(pos)); labs(labs < 1) = 1; labs(labs > size(state.regionColorLUT,1)) = size(state.regionColorLUT,1);
@@ -5524,42 +6950,32 @@ end
 end
 
     function startPath = getUnderlayStartPathFast()
-% Best folder for LOAD NEW UNDERLAY.
-% For atlas/histology/coregistration underlays, Registration2D should be first.
+    lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+    options=fusiUnderlayPickerOptions(par,getDatasetRootForSelectors(),state.atlasTransformFile,lastFile);
+    startPath=options.startPath;
+end
 
-    % Explicit path passed from fusi_studio has highest priority
-    try
-        if isstruct(par) && isfield(par,'underlayStartPath') && ...
-                ~isempty(par.underlayStartPath) && exist(char(par.underlayStartPath),'dir') == 7
-            startPath = char(par.underlayStartPath);
-            return;
-        end
-    catch
-    end
-
-    root = getDatasetRootForSelectors();
-    cand = {};
-
-    % If already atlas-warped, start where the transform came from
-    try
-        if state.isAtlasWarped && ~isempty(state.atlasTransformFile) && ...
-                exist(state.atlasTransformFile,'file') == 2
-            cand{end+1} = fileparts(char(state.atlasTransformFile)); %#ok<AGROW>
-        end
-    catch
-    end
-
-    cand = [cand { ...
-        fullfile(root,'Registration2D'), ...
-        fullfile(root,'Registration'), ...
-        fullfile(root,'Visualization'), ...
-        fullfile(root,'Masks'), ...
-        fullfile(root,'Mask'), ...
-        root, ...
-        getStartPath(), ...
-        pwd}];
-
-    startPath = firstExistingDir(cand);
+function apply3DAtlasWarp(bundle)
+    meta=bundle.meta;[newBG,viewMeta,Tgrid,gridInfo]=fusiCachedAtlasUnderlayView3D(bundle.underlay,meta,'atlas');
+    reuse=state.isAtlasWarped && isfield(state,'atlasUnderlayKey') && isequal(state.atlasUnderlayKey,meta.registrationKey);
+    if ~reuse,PSC=fusiWarpAtlasForDisplay(origPSC,Tgrid,true);end
+    bg=newBG;passedMask=[];passedMaskIsInclude=true;
+    state.pendingAtlasUnderlay3D=bundle;state.atlasUnderlayKey=meta.registrationKey;state.atlasSliceSampling=gridInfo;
+    state.isAtlasWarped=true;state.isStepMotorAtlasWarped=false;
+    if ~reuse,state.currentROIMapping=struct('kind','3D','transform',Tgrid);end
+    transformFile=fusiAtlasPairedTransformFile(meta,bundle.file);
+    state.atlasTransformFile=transformFile;state.lastAtlasTransformFile=transformFile;
+    par.atlasVoxelSizeYXZUm=viewMeta.voxelSizeUm;
+    applyUnderlayMeta(viewMeta,bg);
+    refreshAtlasUnderlayChoices('atlas');
+    if ~reuse,applyRecommendedUnderlayDisplayForModeLocal(meta.atlasMode);end
+    if ~reuse,resetRoisAndRefreshAfterDataChange(true);else,updateSCMUnderlayDisplay(state.z);computeSCM();end
+    setTitleAtlas(meta.transform);
+    set(btnWarpAtlas,'String','WARP TO ATLAS: CHOOSE TRANSFORM','TooltipString',transformFile);
+    [folder,name,ext]=fileparts(transformFile);[~,version]=fileparts(folder);
+    set(info1,'String',sprintf('Atlas: %s | %s/%s%s | %d acquired slices', ...
+        meta.atlasMode,version,name,ext,size(origPSC,3)),'TooltipString',transformFile);
+    setappdata(fig,'FUSIAtlasAppliedTransformFile',transformFile);
 end
 
 function startPath = getStartPath()
@@ -5638,6 +7054,7 @@ function [U, meta] = readUnderlayFile(f)
     [~,~,e] = fileparts(f); e = lower(e);
     switch e
         case '.mat'
+            [matched,U,meta]=fusiCachedAtlasUnderlay3D(f);if matched,return;end
             S = load(f); [U,meta] = extractUnderlayFromMatStruct(S);
         case '.nii'
             U = double(niftiread(f));
@@ -5653,6 +7070,7 @@ function meta = defaultUnderlayMeta()
 end
 
 function [U, meta] = extractUnderlayFromMatStruct(S)
+    [matched,U,meta]=fusiReadAtlasUnderlay3D(S);if matched,return;end
     meta = defaultUnderlayMeta();
     B = scmReadMaskEditorBundle(S);
     if ~isempty(B)
@@ -5675,6 +7093,7 @@ function [U, meta] = extractUnderlayFromMatStruct(S)
         elseif isfield(S,'atlasUnderlay') && ~isempty(S.atlasUnderlay), meta.regionLabels = double(S.atlasUnderlay); end
         if isfield(S,'atlasInfoRegions') && ~isempty(S.atlasInfoRegions), meta.regionInfo = S.atlasInfoRegions;
         elseif isfield(S,'infoRegions') && ~isempty(S.infoRegions), meta.regionInfo = S.infoRegions; end
+        if ~isempty(meta.regionLabels),U=fusiRegionLabelRGB(meta.regionLabels,meta.regionInfo);end
         return;
     end
  pref = { ...
@@ -5751,7 +7170,7 @@ function signalUnderlayCB(~,~)
     bg = validateAndPrepareUnderlay(U, 'signal projection');
     applyUnderlayMeta(struct(), bg);
     origBG = bg;
-    try, set(hBG, 'CData', renderUnderlayRGB(getBg2DForSlice(state.z))); catch, end
+    try, updateSCMUnderlayDisplay(state.z); catch, end
     try, set(info1, 'String', ['Underlay from signal: ' choices{selIx}]); catch, end
 end
 
@@ -5762,7 +7181,16 @@ function U = validateAndPrepareUnderlay(U, fullf)
 end
 
 function applyUnderlayMeta(meta, U)
+    if isfield(state,'underlayRevision'),state.underlayRevision=state.underlayRevision+1;end
+    state.renderedAtlasCache={};
     ensureUnderlayStateFields();
+    state.atlasDisplay3D=[];
+    if isstruct(meta) && isfield(meta,'displayProvider'),state.atlasDisplay3D=meta.displayProvider;end
+    if ~(isstruct(meta)&&isfield(meta,'registrationBundle3D')&&meta.registrationBundle3D)
+        setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',{});
+        state.atlasRegionSearch=[];
+        if exist('popAtlasChoice','var')&&isgraphics(popAtlasChoice),set(popAtlasChoice,'Enable','off');end
+    end
     if uState.mode == 5
         % Saved-appearance scaling belongs to the loaded processed image.
         applyRecommendedUnderlayDisplayForModeLocal('normal');
@@ -5783,6 +7211,13 @@ function applyUnderlayMeta(meta, U)
         if isfield(meta,'isColor') && meta.isColor, state.isColorUnderlay = true; end
     end
     if nargin < 2 || isempty(U), return; end
+    if isstruct(meta) && isfield(meta,'registrationBundle3D') && meta.registrationBundle3D
+        state.isColorUnderlay=logical(meta.isColor);return;
+    end
+    if isstruct(meta) && isfield(meta,'registrationBundle2D') && meta.registrationBundle2D
+        % Three motor planes are a grayscale stack, not an RGB image.
+        state.isColorUnderlay=logical(meta.isColor);return;
+    end
     U = squeeze(U);
     ambiguousThreeSliceStack = ndims(U) == 3 && size(U,3) == 3 && nZ > 1 && size(U,1) == nY && size(U,2) == nX;
     if explicitRegionMode, state.isColorUnderlay = true; return; end
@@ -6187,7 +7622,8 @@ function Y = warpFunctionalSeriesToAtlas(X, T)
     if ndims(X) == 4 && isequal(size(A), [4 4])
         if isempty(T.outSize) || numel(T.outSize) < 3, error('3D atlas warp requires output size.'); end
         outSize3 = round(T.outSize(1:3)); if any(outSize3 < 1), error('Invalid 3D output size.'); end
-        Y=AtlasRegistration('warp',X,T);
+        Y=fusiWarpAtlasForDisplay(X,T);
+        state.currentROIMapping=struct('kind','3DDirect','transform',T);
         return;
     end
     if isequal(size(A), [3 3])
@@ -6201,6 +7637,12 @@ function Y = warpFunctionalSeriesToAtlas(X, T)
     end
 
     Ause = apply2DWarpDirectionToMatrix(A, T);
+    nativeShape=[size(X,1) size(X,2)];transposed=isfield(T,'sourceSize')&&isequal(nativeShape,fliplr(double(T.sourceSize(1:2))))&&~isequal(nativeShape,double(T.sourceSize(1:2)));
+    sourceSlice=1;if ndims(X)==4
+        sourceSlice=state.z;if isfield(T,'sourceSliceIndex'),sourceSlice=T.sourceSliceIndex;elseif isfield(T,'sourceSlice'),sourceSlice=T.sourceSlice;end
+        sourceSlice=max(1,min(size(X,3),round(sourceSlice)));
+    end
+    state.currentROIMapping=struct('kind','2D','matrices',{{Ause}},'sourceSlices',sourceSlice,'transpose',transposed);
     tform2 = affine2d(Ause);
     Rout2 = imref2d(outSize2);
 
@@ -6382,6 +7824,15 @@ end
 end
 
 report.usedRegList = regList;
+matrices=cell(1,nUse);transposed=false(1,nUse);
+for rr=1:nUse
+ T=regList(rr).T;matrices{rr}=apply2DWarpDirectionToMatrix(double(T.warpA),T);
+ if isfield(T,'sourceSize')&&numel(T.sourceSize)>=2
+  nativeShape=size(X,[1 2]);sourceShape=double(T.sourceSize(1:2));
+  transposed(rr)=isequal(nativeShape,fliplr(sourceShape))&&~isequal(nativeShape,sourceShape);
+ end
+end
+state.currentROIMapping=struct('kind','2D','matrices',{matrices},'sourceSlices',report.sourceIdx,'transpose',transposed);
 end
 
 
@@ -7293,7 +8744,7 @@ function tf = isPointerOverImageAxis()
 end
 
 function analysedRoot = guessAnalysedRoot(p0)
-    p0 = char(p0);
+    p0 = fusiAnalysisOutputPath(p0);
     if exist(p0,'dir') ~= 7
         try, p0 = fileparts(p0); catch, end
     end
@@ -7728,5 +9179,3 @@ if badTR
     end
 end
 end
-
-

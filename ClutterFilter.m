@@ -1,5 +1,6 @@
 function varargout=ClutterFilter(action,varargin)
 % ClutterFilter  Public entry point for SVD clutter filtering and QC GUI.
+deConfUSIon_setup();
 switch lower(char(action))
     case {'run','filter','svd'}
         [varargout{1:nargout}]=deConfUSIon_svd_clutter(varargin{:});

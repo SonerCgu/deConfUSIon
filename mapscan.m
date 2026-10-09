@@ -22,6 +22,7 @@ classdef mapscan < handle
     
     methods
         function M=mapscan(data,cmap,method)
+deConfUSIon_setup();
             M.D=data;
             [M.nx,M.ny,M.nz]=size(data);
             M.x0=round(M.nx/2);

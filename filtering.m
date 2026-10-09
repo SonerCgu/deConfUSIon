@@ -1,6 +1,6 @@
 function [I_filt, stats] = filtering(I, TR, exportPath, opts)
 % =========================================================================
-% fUSI Studio - Robust Butterworth Filtering Engine
+% fUSI Studio - Temporal filtering (IIR, FIR, and discrete FFT)
 % =========================================================================
 % MATLAB 2017b+ compatible.
 %
@@ -13,6 +13,13 @@ function [I_filt, stats] = filtering(I, TR, exportPath, opts)
 %   5) Saves higher-resolution QC PNGs.
 % =========================================================================
 
+deConfUSIon_setup();
+if ischar(I)||isstring(I)
+    if strcmpi(char(I),'setup') && nargin>=2 && isstruct(TR)
+        I_filt=showTemporalFilterSetup(TR); stats=[]; return;
+    end
+    error('Filtering:Action','Unknown filtering action.');
+end
 tStart = tic;
 
 if nargin < 3 || isempty(exportPath)
@@ -45,10 +52,24 @@ end
 % -------------------------------------------------------------------------
 % Options
 % -------------------------------------------------------------------------
+suppliedOptions=opts;
 opts.type        = lower(strtrim(char(getOpt(opts,'type','band'))));
 opts.FcLow       = scalarNum(getOpt(opts,'FcLow',0.01), 0.01);
 opts.FcHigh      = scalarNum(getOpt(opts,'FcHigh',0.20), 0.20);
-opts.order       = scalarNum(getOpt(opts,'order',4), 4);
+opts.method=lower(strtrim(char(getOpt(opts,'method','butter'))));
+aliases={'butterworth','chebyshev i','chebyshev ii','elliptic','fir (hamming)','fft (strict bins)'};
+methods={'butter','cheby1','cheby2','ellip','fir','fft'};
+match=find(strcmpi(aliases,opts.method),1); if ~isempty(match), opts.method=methods{match}; end
+if ~any(strcmp(methods,opts.method)), error('Filtering:Method','Unknown filter method: %s',opts.method); end
+methodNames={'Butterworth','Chebyshev I','Chebyshev II','Elliptic','FIR (Hamming)','FFT (strict bins)'};
+methodName=methodNames{find(strcmp(methods,opts.method),1)};
+defaultOrder=4; if strcmp(opts.method,'fir'), defaultOrder=16; end
+opts.order=scalarNum(getOpt(opts,'order',defaultOrder),defaultOrder);
+opts.passbandRippleDb=scalarNum(getOpt(opts,'passbandRippleDb',.5),.5);
+opts.stopbandAttenuationDb=scalarNum(getOpt(opts,'stopbandAttenuationDb',60),60);
+if opts.passbandRippleDb<=0||opts.stopbandAttenuationDb<=opts.passbandRippleDb
+    error('Filtering:Specification','Ripple must be positive and stopband attenuation must exceed ripple.');
+end
 opts.trimStart   = scalarNum(getOpt(opts,'trimStart',0), 0);
 opts.trimEnd     = scalarNum(getOpt(opts,'trimEnd',0), 0);
 opts.useTaper    = boolScalar(getOpt(opts,'useTaper',true), true);
@@ -56,6 +77,17 @@ opts.saveQC      = boolScalar(getOpt(opts,'saveQC',true), true);
 opts.chunkSize   = scalarNum(getOpt(opts,'chunkSize',50000), 50000);
 opts.tag         = char(getOpt(opts,'tag',datestr(now,'yyyymmdd_HHMMSS')));
 opts.restoreMean = boolScalar(getOpt(opts,'restoreMean',true), true);
+% Reject invalid supplied numbers rather than silently substituting defaults.
+numericFields={'FcLow','FcHigh','order','passbandRippleDb','stopbandAttenuationDb','trimStart','trimEnd','chunkSize'};
+for ni=1:numel(numericFields)
+    field=numericFields{ni};
+    if isfield(suppliedOptions,field) && ~isempty(suppliedOptions.(field))
+        value=suppliedOptions.(field);
+        if ~isnumeric(value)||~isscalar(value)||~isfinite(value)
+            error('Filtering:Specification','%s must be a finite numeric scalar.',field);
+        end
+    end
+end
 
 opts.tag = regexprep(opts.tag,'[^\w\-]','_');
 
@@ -65,15 +97,23 @@ elseif strcmpi(opts.type,'high-pass') || strcmpi(opts.type,'highpass') || strcmp
     opts.type = 'high';
 elseif strcmpi(opts.type,'band-pass') || strcmpi(opts.type,'bandpass') || strcmpi(opts.type,'bpf')
     opts.type = 'band';
+elseif any(strcmpi(opts.type,{'band-stop','bandstop','notch'}))
+    opts.type='stop';
 end
 
-if ~ismember(opts.type, {'low','high','band'})
-    error('Invalid filter type. Use opts.type = low, high, or band.');
+if ~ismember(opts.type, {'low','high','band','stop'})
+    error('Filtering:Type','Use opts.type = low, high, band, or stop.');
 end
 
-opts.order = max(1,min(6,round(opts.order)));
-opts.trimStart = max(0,opts.trimStart);
-opts.trimEnd   = max(0,opts.trimEnd);
+if ~strcmp(opts.method,'fft')
+    maxOrder=12; if strcmp(opts.method,'fir'), maxOrder=2000; end
+    if opts.order<1||opts.order>maxOrder||opts.order~=round(opts.order)
+        error('Filtering:Order','%s order must be an integer between 1 and %d.',methodName,maxOrder);
+    end
+else
+    opts.order=0; % FFT masking has no polynomial filter order.
+end
+if opts.trimStart<0||opts.trimEnd<0, error('Filtering:Trim','Trim times must be nonnegative.'); end
 opts.chunkSize = max(1000,round(opts.chunkSize));
 
 % -------------------------------------------------------------------------
@@ -113,55 +153,22 @@ if Fs <= 0 || Nyq <= 0
 end
 
 % -------------------------------------------------------------------------
-% Cutoff validation with Nyquist-safe clamping
+% Cutoffs are never silently changed. TR determines the actual Nyquist limit.
 % -------------------------------------------------------------------------
-FcLow  = opts.FcLow;
-FcHigh = opts.FcHigh;
-
-minCutoff = max(eps, Nyq * 1e-6);
-maxCutoff = 0.95 * Nyq;
-
+FcLow=opts.FcLow; FcHigh=opts.FcHigh;
 switch opts.type
     case 'low'
-        if ~isfinite(FcHigh) || FcHigh <= 0
-            FcHigh = min(0.20, maxCutoff);
-        end
-        if FcHigh >= Nyq
-            warning('Low-pass FcHigh %.6g Hz is >= Nyquist %.6g Hz. Clamping.', FcHigh, Nyq);
-        end
-        FcHigh = min(max(FcHigh, minCutoff), maxCutoff);
-        FcLow = 0;
-
+        if FcHigh<=0||FcHigh>=Nyq, error('Filtering:Cutoff','High cutoff must be >0 and < Nyquist %.6g Hz.',Nyq); end
+        FcLow=0;
     case 'high'
-        if ~isfinite(FcLow) || FcLow <= 0
-            FcLow = min(0.01, maxCutoff);
-        end
-        if FcLow >= Nyq
-            warning('High-pass FcLow %.6g Hz is >= Nyquist %.6g Hz. Clamping.', FcLow, Nyq);
-        end
-        FcLow = min(max(FcLow, minCutoff), maxCutoff);
-        FcHigh = 0;
-
-    case 'band'
-        if ~isfinite(FcLow) || FcLow <= 0
-            FcLow = 0.01;
-        end
-        if ~isfinite(FcHigh) || FcHigh <= 0
-            FcHigh = 0.20;
-        end
-        if FcHigh >= Nyq
-            warning('Band-pass FcHigh %.6g Hz is >= Nyquist %.6g Hz. Clamping.', FcHigh, Nyq);
-        end
-        FcHigh = min(max(FcHigh, minCutoff*10), maxCutoff);
-        FcLow  = max(FcLow, minCutoff);
-        if FcLow >= FcHigh
-            warning('Band-pass FcLow >= FcHigh after safety checks. Adjusting low cutoff.');
-            FcLow = max(minCutoff, 0.20 * FcHigh);
+        if FcLow<=0||FcLow>=Nyq, error('Filtering:Cutoff','Low cutoff must be >0 and < Nyquist %.6g Hz.',Nyq); end
+        FcHigh=0;
+    otherwise
+        if FcLow<=0||FcLow>=FcHigh||FcHigh>=Nyq
+            error('Filtering:Cutoff','Cutoffs must satisfy 0 < low < high < Nyquist %.6g Hz.',Nyq);
         end
 end
-
-opts.FcLow = FcLow;
-opts.FcHigh = FcHigh;
+opts.FcLow=FcLow; opts.FcHigh=FcHigh;
 
 % -------------------------------------------------------------------------
 % Trimming window
@@ -179,35 +186,50 @@ end
 nFiltFrames = idx2 - idx1 + 1;
 
 % -------------------------------------------------------------------------
-% Filter design
+% Filter design. Forward/backward filtering squares the magnitude response.
+% Ripple and attenuation settings below describe this final response (dB).
 % -------------------------------------------------------------------------
 switch opts.type
-    case 'low'
-        Wn = FcHigh / Nyq;
-        [b,a] = butter(opts.order, Wn, 'low');
-
-    case 'high'
-        Wn = FcLow / Nyq;
-        [b,a] = butter(opts.order, Wn, 'high');
-
-    case 'band'
-        Wn = [FcLow FcHigh] / Nyq;
-        [b,a] = butter(opts.order, Wn, 'bandpass');
+    case 'low', Wn=FcHigh/Nyq; designType='low';
+    case 'high', Wn=FcLow/Nyq; designType='high';
+    case 'band', Wn=[FcLow FcHigh]/Nyq; designType='bandpass';
+    case 'stop', Wn=[FcLow FcHigh]/Nyq; designType='stop';
 end
-
-minFiltLen = 3 * max(length(a), length(b));
-useSinglePassFallback = false;
-if nFiltFrames <= minFiltLen
-    useSinglePassFallback = true;
-    warning(['Filtered segment is short for zero-phase filtfilt ', ...
-        'available frames=%d, recommended minimum=%d. Using single-pass fallback.'], ...
-        nFiltFrames, minFiltLen + 1);
+sos=[]; gain=1; poles=[]; b=[]; a=[];
+if strcmp(opts.method,'fft')
+    minFiltLen=0; frequency=(0:nFiltFrames-1)*(Fs/nFiltFrames);
+    absoluteFrequency=min(frequency,Fs-frequency);
+    switch opts.type
+        case 'low', keepBins=absoluteFrequency<=FcHigh;
+        case 'high', keepBins=absoluteFrequency>=FcLow;
+        case 'band', keepBins=absoluteFrequency>=FcLow & absoluteFrequency<=FcHigh;
+        case 'stop', keepBins=absoluteFrequency<FcLow | absoluteFrequency>FcHigh;
+    end
+    % Symmetric mask preserves real output. This is a periodic DFT projection,
+    % not a causal brick-wall filter or a motion-artifact detector.
+elseif strcmp(opts.method,'fir')
+    if any(strcmp(opts.type,{'high','stop'})) && mod(opts.order,2)
+        error('Filtering:Order','High-pass/band-stop FIR requires an even order.');
+    end
+    b=fir1(opts.order,Wn,designType,hamming(opts.order+1)); a=1;
+    minFiltLen=3*opts.order;
+else
+    switch opts.method
+        case 'butter', [z,poles,gain]=butter(opts.order,Wn,designType);
+        case 'cheby1', [z,poles,gain]=cheby1(opts.order,opts.passbandRippleDb/2,Wn,designType);
+        case 'cheby2', [z,poles,gain]=cheby2(opts.order,opts.stopbandAttenuationDb/2,Wn,designType);
+        case 'ellip', [z,poles,gain]=ellip(opts.order,opts.passbandRippleDb/2,opts.stopbandAttenuationDb/2,Wn,designType);
+    end
+    [sos,gain]=zp2sos(z,poles,gain);
+    [b,a]=zp2tf(z,poles,gain); % For reporting only; filtering uses stable SOS.
+    minFiltLen=3*numel(poles);
 end
-
-unstable = any(abs(roots(a)) >= 1);
-if unstable
-    warning('Butterworth filter may be unstable. Consider reducing filter order.');
+useSinglePassFallback=false;
+if nFiltFrames<=minFiltLen
+    error('Filtering:ShortSignal','%s needs at least %d frames for zero-phase filtering; available: %d. Reduce order/trimming or use FFT.',methodName,minFiltLen+1,nFiltFrames);
 end
+unstable=any(abs(poles)>=1);
+if unstable, error('Filtering:Unstable','Filter poles are unstable. Reduce order or adjust cutoffs.'); end
 
 % -------------------------------------------------------------------------
 % QC folder
@@ -227,12 +249,19 @@ spectrumFile = '';
 % -------------------------------------------------------------------------
 if opts.saveQC
     try
-        [H,F] = freqz(b,a,1024,Fs);
+        if strcmp(opts.method,'fft')
+            F=absoluteFrequency(1:floor(nFiltFrames/2)+1); H=double(keepBins(1:numel(F)));
+        elseif ~isempty(sos)
+            [H,F]=freqz(sos,1024,Fs); H=abs(gain*H).^2;
+        else
+            [H,F]=freqz(b,a,1024,Fs); H=abs(H).^2;
+        end
+        if opts.restoreMean, H(F==0)=1; end
         figResp = figure('Visible','off','Color','w','Position',[100 100 1000 650]);
         plot(F,abs(H),'LineWidth',1.5);
         xlabel('Frequency (Hz)');
-        ylabel('|H(f)|');
-        title('Butterworth Frequency Response');
+        ylabel('Final amplitude gain');
+        title([methodName ' - final zero-phase magnitude response']);
         grid on;
         freqRespFile = fullfile(qcFolder, ['QC_filtering_FrequencyResponse_' tag '.png']);
         safePrintPng(figResp, freqRespFile);
@@ -274,6 +303,7 @@ chunkSize = min(opts.chunkSize,max(1,floor(128*1024^2/(8*nt*12))));
 nChunks   = ceil(nVox / chunkSize);
 nFallbackChunks = 0;
 nFailedChunks   = 0;
+nUnfilteredVoxels=0;
 
 sumBefore = zeros(1, nt); cntBefore = zeros(1, nt);
 sumAfter  = zeros(1, nt); cntAfter  = zeros(1, nt);
@@ -299,15 +329,29 @@ for c = 1:nChunks
     work = bsxfun(@minus, seg, voxelMean);
     work = bsxfun(@times, work, taperVec);
 
-    valid = all(isfinite(work),2) & std(work,0,2) > 1e-8;
+    finiteRows=all(isfinite(work),2);
+    nUnfilteredVoxels=nUnfilteredVoxels+sum(~finiteRows);
+    valid=finiteRows & std(work,0,2)>0;
     if any(valid)
-        [wv, usedFb, failedB] = filterBlock(work(valid,:), b, a, useSinglePassFallback);
+        usedFb=false; failedB=false;
+        if strcmp(opts.method,'fft')
+            spectrum=fft(work(valid,:),[],2);
+            wv=real(ifft(bsxfun(@times,spectrum,keepBins),[],2));
+        elseif ~isempty(sos)
+            wv=filtfilt(sos,gain,work(valid,:)')';
+        else
+            wv=filtfilt(b,a,work(valid,:)')';
+        end
+        if any(~isfinite(wv(:))), error('Filtering:Nonfinite','Filtering produced nonfinite values. Reduce order or revise cutoffs.'); end
         work(valid,:) = wv;
         if usedFb,  nFallbackChunks = nFallbackChunks + 1; end
         if failedB, nFailedChunks   = nFailedChunks + 1;   end
     end
 
     if opts.restoreMean
+        % Keep the Doppler baseline exactly; restored DC is an explicit
+        % exception to high-pass/band-pass rejection below the low cutoff.
+        work(finiteRows,:)=bsxfun(@minus,work(finiteRows,:),mean(work(finiteRows,:),2));
         seg = bsxfun(@plus, work, voxelMean);
     else
         seg = work;
@@ -388,6 +432,7 @@ end
 % -------------------------------------------------------------------------
 stats = struct();
 stats.filterType = opts.type;
+stats.method=opts.method;
 stats.order = opts.order;
 stats.Fs = Fs;
 stats.TR = TR;
@@ -406,6 +451,20 @@ stats.useTaper = opts.useTaper;
 stats.taperLengthFrames = taperLength;
 stats.restoreMean = opts.restoreMean;
 stats.meanRestorationMethod = 'voxelwise temporal mean over filtered segment';
+stats.methodName=methodName;
+stats.designOrder=opts.order;
+if ~isempty(poles), stats.designOrder=numel(poles); end
+stats.effectiveTwoPassOrder=2*stats.designOrder;
+stats.passbandRippleDb=opts.passbandRippleDb;
+stats.stopbandAttenuationDb=opts.stopbandAttenuationDb;
+stats.zeroPhase=true;
+stats.sos=sos; stats.gain=gain;
+stats.nUnfilteredNonfiniteVoxels=nUnfilteredVoxels;
+stats.strictFFT=strcmp(opts.method,'fft');
+stats.frequencyBoundary='FFT masks exact finite-record bins; IIR/FIR have transition bands. Restored DC is exempt.';
+if stats.strictFFT
+    stats.frequencyBinsHz=absoluteFrequency; stats.keptFrequencyBins=keepBins;
+end
 stats.chunkSize = chunkSize;
 stats.nChunks = nChunks;
 stats.nVoxels = nVox;
@@ -481,32 +540,6 @@ end
 
 
 
-function [Y, usedFallback, failedBlock] = filterBlock(X, b, a, forceSinglePass)
-usedFallback = false;
-failedBlock = false;
-if isempty(X)
-    Y = X;
-    return;
-end
-try
-    if forceSinglePass
-        usedFallback = true;
-        Y = filter(b,a,X')';
-    else
-        Y = filtfilt(b,a,X')';
-    end
-catch
-    try
-        usedFallback = true;
-        Y = filter(b,a,X')';
-    catch
-        failedBlock = true;
-        warning('Filtering failed for one chunk. Keeping that chunk unchanged.');
-        Y = X;
-    end
-end
-end
-
 function safePrintPng(figHandle, fileName)
 try
     set(figHandle,'PaperPositionMode','auto');
@@ -520,6 +553,10 @@ function stats = makeSkipStats(tStart, opts, TR, dims, timeDim, nt, origClass, r
 Fs = 1 / TR;
 stats = struct();
 stats.filterType = opts.type;
+stats.method=opts.method;
+families={'butter','cheby1','cheby2','ellip','fir','fft'};
+names={'Butterworth','Chebyshev I','Chebyshev II','Elliptic','FIR (Hamming)','FFT (strict bins)'};
+stats.methodName=names{find(strcmp(families,opts.method),1)};
 stats.order = opts.order;
 stats.Fs = Fs;
 stats.TR = TR;
@@ -555,4 +592,153 @@ stats.skipped = true;
 stats.skipReason = reason;
 stats.processingTime = toc(tStart);
 stats.optsResolved = opts;
+end
+
+function opts=showTemporalFilterSetup(data)
+opts=[]; TR=double(data.TR(end)); Fs=1/TR; Nyq=Fs/2;
+nt=size(data.I,ndims(data.I));
+defaultHigh=min(.20,.8*Nyq); defaultLow=min(.001,.2*defaultHigh);
+bg=[.04 .04 .045]; panel=[.09 .09 .10]; editBg=[.02 .02 .025]; fg=[.96 .96 .96];
+dlg=figure('Name','Temporal Filtering Setup','Tag','deConfUSIonTemporalFilterSetup', ...
+    'Color',bg,'MenuBar','none','ToolBar','none','NumberTitle','off', ...
+    'Units','pixels','Position',[35 40 1480 900],'WindowStyle','modal', ...
+    'Visible','off','CloseRequestFcn',@onCancel,'KeyPressFcn',@onKey);
+uicontrol(dlg,'Style','text','String','Temporal filtering','Units','normalized', ...
+    'Position',[.04 .925 .92 .05],'BackgroundColor',bg,'ForegroundColor',fg,'FontSize',20,'FontWeight','bold');
+uicontrol(dlg,'Style','text','String',sprintf('TR %.4g s | Fs %.6g Hz | Nyquist %.6g Hz | %d samples | %.2f min',TR,Fs,Nyq,nt,(nt-1)*TR/60), ...
+    'Units','normalized','Position',[.04 .875 .92 .04],'BackgroundColor',bg,'ForegroundColor',fg,'FontSize',12);
+left=uipanel(dlg,'Units','normalized','Position',[.04 .225 .46 .63],'Title','Filter settings', ...
+    'BackgroundColor',panel,'ForegroundColor',fg,'FontSize',12);
+right=uipanel(dlg,'Units','normalized','Position',[.52 .225 .44 .63],'Title','Response and interpretation', ...
+    'BackgroundColor',panel,'ForegroundColor',fg,'FontSize',12);
+methods={'butter','cheby1','cheby2','ellip','fir','fft'};
+names={'Butterworth','Chebyshev I','Chebyshev II','Elliptic','FIR (Hamming)','FFT (strict bins)'};
+types={'band','low','high','stop'};
+hType=rowControl('Filter type',.90,'popupmenu',{'Band-pass','Low-pass','High-pass','Band-stop / notch'},1);
+hMethod=rowControl('Filter family',.81,'popupmenu',names,1);
+hOrder=rowControl('Order / prototype',.72,'edit','4',[]);
+set(hOrder,'TooltipString','IIR band-pass/stop has twice the prototype order. Two-pass filtering doubles it again. FIR order is the number of taps minus one.');
+hLow=rowControl('Low cutoff (Hz)',.63,'edit',num2str(defaultLow,'%.6g'),[]);
+hHigh=rowControl('High cutoff (Hz)',.54,'edit',num2str(defaultHigh,'%.6g'),[]);
+hRipple=rowControl('Final passband ripple (dB)',.45,'edit','0.5',[]);
+hAtten=rowControl('Final stopband attenuation (dB)',.36,'edit','60',[]);
+hTrimStart=rowControl('Trim start (s)',.27,'edit','0',[]);
+hTrimEnd=rowControl('Trim end (s)',.18,'edit','0',[]);
+hMean=uicontrol(dlg,'Style','checkbox','String','Preserve voxel mean (Doppler baseline; retains DC)', ...
+    'Value',1,'Units','normalized','Position',[.04 .165 .49 .04],'BackgroundColor',bg,'ForegroundColor',fg,'FontSize',12,'Callback',@refresh);
+hTaper=uicontrol(dlg,'Style','checkbox','String','Taper trim edges','Value',1, ...
+    'Units','normalized','Position',[.55 .165 .19 .04],'BackgroundColor',bg,'ForegroundColor',fg,'FontSize',12);
+hQC=uicontrol(dlg,'Style','checkbox','String','Save QC plots','Value',1, ...
+    'Units','normalized','Position',[.77 .165 .19 .04],'BackgroundColor',bg,'ForegroundColor',fg,'FontSize',12);
+hAdvice=uicontrol(right,'Style','text','Units','normalized','Position',[.05 .57 .90 .38], ...
+    'BackgroundColor',panel,'ForegroundColor',fg,'FontSize',12,'HorizontalAlignment','left');
+ax=axes(right,'Units','normalized','Position',[.13 .13 .82 .37],'Color',panel,'XColor',fg,'YColor',fg,'FontSize',11);
+hStatus=uicontrol(dlg,'Style','text','String','Ready','Units','normalized','Position',[.04 .10 .92 .045], ...
+    'BackgroundColor',bg,'ForegroundColor',[.6 .9 1],'FontSize',12,'HorizontalAlignment','left');
+uicontrol(dlg,'Style','pushbutton','String','Reset defaults','Units','normalized','Position',[.04 .025 .22 .065], ...
+    'BackgroundColor',[.2 .48 .95],'ForegroundColor','w','FontSize',13,'Callback',@onReset);
+uicontrol(dlg,'Style','pushbutton','String','RUN FILTERING','Tag','TemporalFilterRun','Units','normalized','Position',[.52 .025 .24 .065], ...
+    'BackgroundColor',[.12 .68 .35],'ForegroundColor','w','FontSize',13,'FontWeight','bold','Callback',@onRun);
+uicontrol(dlg,'Style','pushbutton','String','Cancel','Tag','TemporalFilterCancel','Units','normalized','Position',[.78 .025 .18 .065], ...
+    'BackgroundColor',[.78 .22 .22],'ForegroundColor','w','FontSize',13,'Callback',@onCancel);
+set(hMethod,'Callback',@methodChanged);
+setappdata(dlg,'FilterControls',struct('type',hType,'method',hMethod,'order',hOrder,'low',hLow, ...
+    'high',hHigh,'ripple',hRipple,'attenuation',hAtten,'restoreMean',hMean, ...
+    'trimStart',hTrimStart,'trimEnd',hTrimEnd,'saveQC',hQC,'status',hStatus,'responseAxes',ax));
+refresh();
+if ~isgraphics(dlg), return; end
+movegui(dlg,'center'); set(dlg,'Visible','on'); drawnow;
+if isgraphics(dlg), waitfor(dlg); end
+
+    function h=rowControl(label,y,style,str,value)
+        uicontrol(left,'Style','text','String',label,'Units','normalized','Position',[.035 y .55 .06], ...
+            'BackgroundColor',panel,'ForegroundColor',fg,'HorizontalAlignment','left','FontSize',12);
+        h=uicontrol(left,'Style',style,'String',str,'Units','normalized','Position',[.59 y .37 .066], ...
+            'BackgroundColor',editBg,'ForegroundColor',fg,'FontSize',12,'Callback',@refresh);
+        if ~isempty(value), set(h,'Value',value); end
+    end
+    function methodChanged(~,~)
+        method=methods{get(hMethod,'Value')};
+        if strcmp(method,'fir'), set(hOrder,'String','16');
+        elseif ~strcmp(method,'fft'), set(hOrder,'String','4'); end
+        refresh();
+    end
+    function o=readOptions()
+        o=struct('type',types{get(hType,'Value')},'method',methods{get(hMethod,'Value')}, ...
+            'order',str2double(get(hOrder,'String')),'FcLow',str2double(get(hLow,'String')), ...
+            'FcHigh',str2double(get(hHigh,'String')),'passbandRippleDb',str2double(get(hRipple,'String')), ...
+            'stopbandAttenuationDb',str2double(get(hAtten,'String')), ...
+            'trimStart',str2double(get(hTrimStart,'String')),'trimEnd',str2double(get(hTrimEnd,'String')), ...
+            'restoreMean',logical(get(hMean,'Value')),'useTaper',logical(get(hTaper,'Value')), ...
+            'saveQC',logical(get(hQC,'Value')),'showProgress',false,'chunkSize',50000);
+        if strcmp(o.type,'low'), o.FcLow=0; elseif strcmp(o.type,'high'), o.FcHigh=0; end
+        if strcmp(o.method,'fft'), o.order=0; end
+        values=[o.order o.FcLow o.FcHigh o.passbandRippleDb o.stopbandAttenuationDb o.trimStart o.trimEnd];
+        if any(~isfinite(values)), error('Filtering:Specification','All active settings must be finite numbers.'); end
+        if o.trimStart<0||o.trimEnd<0, error('Filtering:Trim','Trim times must be nonnegative.'); end
+    end
+    function refresh(~,~)
+        type=types{get(hType,'Value')}; method=methods{get(hMethod,'Value')};
+        set(hLow,'Enable','on'); set(hHigh,'Enable','on');
+        if strcmp(type,'low'), set(hLow,'Enable','off'); elseif strcmp(type,'high'), set(hHigh,'Enable','off'); end
+        set(hOrder,'Enable','on'); if strcmp(method,'fft'), set(hOrder,'Enable','off'); end
+        set(hRipple,'Enable','off'); set(hAtten,'Enable','off');
+        if any(strcmp(method,{'cheby1','ellip'})), set(hRipple,'Enable','on'); end
+        if any(strcmp(method,{'cheby2','ellip'})), set(hAtten,'Enable','on'); end
+        descriptions={ ...
+            'Butterworth: smooth passband; gradual transition. Cutoff gives -6 dB after two passes.', ...
+            'Chebyshev I: steeper transition, with passband ripple. Cutoffs are passband edges.', ...
+            'Chebyshev II: smooth passband, stopband ripple. Cutoffs are stopband edges; desired slow signals should lie farther inside the passband.', ...
+            'Elliptic: sharp transition for a given order, with passband and stopband ripple. Cutoffs are passband edges.', ...
+            'FIR: finite impulse response, Hamming window; increase order for a narrower transition. Needs more time samples. Cutoffs lie inside the transition.', ...
+            'FFT: zero all discrete frequency bins outside the chosen passband. Assumes a periodic record; may ring around spikes or edges. Frequency resolution is Fs / filtered sample count.'};
+        set(hAdvice,'String',{descriptions{get(hMethod,'Value')},' ', ...
+            'Two-pass IIR/FIR filtering is zero phase. Ripple/attenuation are final two-pass values.', ...
+            'Preserve mean retains the DC baseline even with high-pass/band-pass.', ...
+            'Motion spikes contain slow frequencies too. Review Despike / Scrubbing before filtering.'});
+        try
+            o=readOptions(); o.saveQC=false;
+            % Design through the production engine so the preview cannot
+            % disagree with the filter that will actually be applied.
+            probe=zeros(1,1,nt); probe(1,1,ceil(nt/2))=1;
+            [~,st]=filtering(probe,TR,tempdir,o);
+            if st.strictFFT
+                count=floor(st.nFilteredFrames/2)+1;
+                f=st.frequencyBinsHz(1:count); h=double(st.keptFrequencyBins(1:count));
+            elseif ~isempty(st.sos)
+                [h,f]=freqz(st.sos,1024,Fs); h=abs(st.gain*h).^2;
+            else
+                [h,f]=freqz(st.b,st.a,1024,Fs); h=abs(h).^2;
+            end
+            if o.restoreMean, h(f==0)=1; end
+            cla(ax); plot(ax,f,20*log10(max(abs(h),1e-6)),'Color',[.3 .8 1],'LineWidth',1.8);
+            set(ax,'Color',panel,'XColor',fg,'YColor',fg); ylim(ax,[-100 5]); xlim(ax,[0 Nyq]); grid(ax,'on');
+            xlabel(ax,'Frequency (Hz)','Color',fg); ylabel(ax,'Final gain (dB)','Color',fg);
+            message=sprintf('%s | %s | %d filtered samples | settings valid',names{get(hMethod,'Value')},type,st.nFilteredFrames);
+            set(hStatus,'String',message,'ForegroundColor',[.6 .9 1]);
+        catch ME
+            cla(ax); set(hStatus,'String',ME.message,'ForegroundColor',[1 .65 .25]);
+        end
+    end
+    function onRun(~,~)
+        try
+            o=readOptions(); o.saveQC=false;
+            [~,~]=filtering(zeros(1,1,nt),TR,tempdir,o); % Validate before closing.
+            o.saveQC=logical(get(hQC,'Value')); o.showProgress=true; o.cancelled=false;
+            opts=o; delete(dlg);
+        catch ME
+            set(hStatus,'String',ME.message,'ForegroundColor',[1 .65 .25]);
+        end
+    end
+    function onReset(~,~)
+        set(hType,'Value',1); set(hMethod,'Value',1); set(hOrder,'String','4');
+        set(hLow,'String',num2str(defaultLow,'%.6g')); set(hHigh,'String',num2str(defaultHigh,'%.6g'));
+        set(hRipple,'String','.5'); set(hAtten,'String','60');
+        set(hTrimStart,'String','0'); set(hTrimEnd,'String','0');
+        set(hMean,'Value',1); set(hTaper,'Value',1); set(hQC,'Value',1); refresh();
+    end
+    function onCancel(~,~), opts=[]; delete(dlg); end
+    function onKey(~,event)
+        if strcmp(event.Key,'escape'), onCancel([],[]); end
+    end
 end

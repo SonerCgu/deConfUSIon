@@ -976,7 +976,7 @@ function loadDataCallback(~,~)
         end
     end
     setappdata(fig,'LoadInProgress',true);
-    previousStudio=guidata(fig);
+    previousStudio=fusiRebaseMovedStudioFiles(guidata(fig));
     setappdata(fig,'LoadTransaction',struct('previousStudio',previousStudio,'committed',false));
     % finishLoad is a sibling callback, not nested in this callback. MATLAB
     % destroys nested local variables before invoking some onCleanup paths.
@@ -986,12 +986,22 @@ function loadDataCallback(~,~)
     startPath = studio_default_load_start_path(studio);
 
     [file,path] = uigetfile( ...
-        {'*.mat;*.nii;*.nii.gz','fUSI Data (*.mat, *.nii, *.nii.gz)'}, ...
-        'Select fUSI dataset', startPath);
+        {'*.mat;*.nii;*.nii.gz','fUSI / fMRI data (*.mat, *.nii, *.nii.gz)'}, ...
+        'Select fUSI / fMRI time-series dataset', startPath);
 
     if isequal(file,0)
         addLog('Load cancelled.');
         return;
+    end
+
+    % Load means Raw dataset import. Spatial summaries must not divert it to
+    % a viewer or be interpreted as temporal samples.
+    try
+        selectedFile=studioRequireTimeSeriesFile(fullfile(path,file));
+        if isempty(selectedFile), addLog('Load cancelled.'); return; end
+        [path,stem,ext]=fileparts(selectedFile); path=[path filesep]; file=[stem ext];
+    catch ME
+        errordlg(ME.message,'Load dataset'); return;
     end
 
     % Finish saving the previous animal before its in-memory state is replaced.
@@ -1070,6 +1080,10 @@ studio.pipeline = struct( ...
     % starts in Custom TR mode so the user can confirm or replace it.
     chosenTR = defaultTR;
     [fileTRCandidate, fileTRSource] = studio_get_file_tr_candidate(data, meta);
+    if isfield(meta,'rawMetadata') && isfield(meta.rawMetadata,'nifti') && ...
+            ~isempty(fileTRCandidate) && isfinite(fileTRCandidate) && fileTRCandidate>0
+        chosenTR=fileTRCandidate;
+    end
     try
         if ~isfield(meta,'rawMetadata') || isempty(meta.rawMetadata)
             meta.rawMetadata = struct();
@@ -1095,35 +1109,12 @@ studio.pipeline = struct( ...
     meta.rawMetadata.defaultTRUserPromptSec = defaultTR;
     meta.rawMetadata.selectedTRUserSec = chosenTR;
 
-        [rawRoot, analysedRoot] = studio_auto_roots_from_input(path);
-
+        resolvedPaths=fusiResolveAnalysisFolder(fullInputFile);
+        analysedRoot=resolvedPaths.analysedRoot;
+        datasetName=resolvedPaths.datasetName;
+        datasetFolder=resolvedPaths.datasetFolder;
+        rawFileInfo=dir(fullInputFile);data.datasetSortTime=rawFileInfo.datenum;
         deConfUSIon_utils('studio_mkdir',analysedRoot);
-
-        datasetName = regexprep(file, '\.nii\.gz$', '', 'ignorecase');
-        datasetName = regexprep(datasetName, '\.nii$', '', 'ignorecase');
-        datasetName = regexprep(datasetName, '\.mat$', '', 'ignorecase');
-        datasetName = char(datasetName);
-        datasetName = strrep(datasetName, filesep, '_');
-        datasetName = regexprep(datasetName,'[^\w\-]+','_');
-        datasetName = regexprep(datasetName,'_+','_');
-        datasetName = regexprep(datasetName,'^_+','');
-        datasetName = regexprep(datasetName,'_+$','');
-        if isempty(datasetName)
-            datasetName = 'item';
-        end
-
-        rawRootNorm = strrep(rawRoot, '/', filesep);
-        pathNorm = strrep(path, '/', filesep);
-
-        if numel(pathNorm) >= numel(rawRootNorm) && strcmpi(pathNorm(1:numel(rawRootNorm)), rawRootNorm)
-            relPath = pathNorm(numel(rawRootNorm)+1:end);
-            while ~isempty(relPath) && any(relPath(1) == [filesep '/' '\'])
-                relPath = relPath(2:end);
-            end
-            datasetFolder = fullfile(analysedRoot, relPath, datasetName);
-        else
-            datasetFolder = fullfile(analysedRoot, datasetName);
-        end
 
         if ~exist('TR','var') || isempty(TR) || ~isnumeric(TR) || ~isfinite(TR) || TR <= 0
             TR = studio_get_last_tr_default();
@@ -1185,7 +1176,6 @@ end
         studio = guidata(fig);
 
        data.displayNameFull = deConfUSIon_utils('deConfUSIon_make_loaded_display_name',datasetName, path, file);
-       data.datasetSortTime = now;
         data.sourceFileName = file;
         data.sourcePath = path;
 
@@ -1880,7 +1870,7 @@ function imregdemonsCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-        DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+        studio=studioSaveDataset(fig,studio,keyName);
         addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
@@ -1895,7 +1885,9 @@ function imregdemonsCallback(~,~)
         addLog(sprintf('Output TR: %.6g s | Output volumes: %d | Output duration: %.2f min', ...
             newData.TR, newData.nVols, newData.TotalTimeMin));
 
-        if opts.saveQC
+        if isfield(out.QC,'error')
+            addLog(['Registration saved; QC export needs retry: ' out.QC.error]);
+        elseif opts.saveQC
             addLog(['Imregdemons QC saved -> ' opts.qcDir]);
         end
 
@@ -1905,6 +1897,7 @@ function imregdemonsCallback(~,~)
         closeNewFigures(figsBefore);
         closeLingeringQCFigures();
 
+        refreshDatasetDropdown();
         addLog(['IMREGDEMONS ERROR: ' ME.message]);
         errordlg(ME.message,'Imregdemons Failure');
     end
@@ -2795,7 +2788,7 @@ function stepMotorCallback(~,~)
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
                 studio.datasets.(keyName) = newData;
-                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                studio=studioSaveDataset(fig,studio,keyName);
                 addLog(['Saved and verified -> ' savePath]);
 
         guidata(fig, studio);
@@ -2806,6 +2799,7 @@ function stepMotorCallback(~,~)
         addLog(['Motor reconstruction complete -> ' fullName]);
 
     catch ME
+        refreshDatasetDropdown();
         addLog(['MOTOR ERROR: ' ME.message]);
         errordlg(ME.message,'Motor Failure');
     end
@@ -4111,7 +4105,7 @@ end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                studio=studioSaveDataset(fig,studio,keyName);
                 addLog(['Saved and verified -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
@@ -4181,7 +4175,7 @@ end
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                DataIO('save',savePath,struct('newData',newData,'displayNameFull',displayNameFull,'preprocDisplayName',preprocDisplayName,'datasetSortTime',datasetSortTime));
+                studio=studioSaveDataset(fig,studio,keyName);
                 addLog(['Saved and verified -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
@@ -4198,6 +4192,7 @@ end
                 return;
         end
     catch ME
+        refreshDatasetDropdown();
         addLog(['PCA / ICA ERROR: ' ME.message]);
         errordlg(ME.message,'PCA / ICA Failure');
     end
@@ -4340,6 +4335,8 @@ function filteringCallback(~,~)
             opts.type = 'low';
         elseif ft == 3
             opts.type = 'high';
+        elseif ft == 4
+            opts.type = 'stop';
         else
             opts.type = 'band';
         end
@@ -4362,7 +4359,7 @@ function filteringCallback(~,~)
     if isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'Filtering')
         opts = struct(); ft = 1;
         if isfield(stdStep,'filterType') && isfinite(double(stdStep.filterType)), ft = round(double(stdStep.filterType)); end
-        if ft == 2, opts.type = 'low'; elseif ft == 3, opts.type = 'high'; else, opts.type = 'band'; end
+        if ft == 2, opts.type = 'low'; elseif ft == 3, opts.type = 'high'; elseif ft==4, opts.type='stop'; else, opts.type = 'band'; end
         opts.FcLow = 0.001; opts.FcHigh = 0.20; opts.order = 4;
         if isfield(stdStep,'fcLow') && isfinite(double(stdStep.fcLow)), opts.FcLow = double(stdStep.fcLow); end
         if isfield(stdStep,'fcHigh') && isfinite(double(stdStep.fcHigh)), opts.FcHigh = double(stdStep.fcHigh); end
@@ -4382,12 +4379,29 @@ function filteringCallback(~,~)
         return;
     end
 
+    if isstruct(stdStep) && isfield(stdStep,'filterMethod') && isfinite(stdStep.filterMethod)
+        families={'butter','cheby1','cheby2','ellip','fir','fft'};
+        familyIndex=round(stdStep.filterMethod);
+        if familyIndex<1||familyIndex>6, error('Filtering:Method','Workflow filter family must be 1-6.'); end
+        opts.method=families{familyIndex};
+    end
+    if isstruct(stdStep)
+        sourceFields={'filterRippleDb','filterAttenuationDb','filterPreserveMean'};
+        targetFields={'passbandRippleDb','stopbandAttenuationDb','restoreMean'};
+        for fi=1:numel(sourceFields)
+            if isfield(stdStep,sourceFields{fi}) && isfinite(stdStep.(sourceFields{fi}))
+                opts.(targetFields{fi})=stdStep.(sourceFields{fi});
+            end
+        end
+    end
+    if isfield(opts,'method')&&strcmp(opts.method,'fft'), opts.order=0; end
     ts = datestr(now,'yyyymmdd_HHMMSS');
     opts.tag = ['filter_' ts];
 
     filterTag = makeFilterTag(opts);
 
-    addLog('Running Butterworth filtering...');
+    if ~isfield(opts,'method'), opts.method='butter'; end
+    addLog(['Running temporal filtering (' opts.method ')...']);
     addLog(sprintf('Type: %s | FcLow: %.6g Hz | FcHigh: %.6g Hz | Order: %d', ...
         upper(opts.type), opts.FcLow, opts.FcHigh, round(opts.order)));
     addLog(sprintf('Trim start: %.3g s | Trim end: %.3g s | Taper: %s', ...
@@ -4398,6 +4412,7 @@ function filteringCallback(~,~)
 
     try
         [I_filt, stats] = filtering(data.I, data.TR, studio.exportPath, opts);
+        filterTag=makeFilterTag(stats.optsResolved);
 
         newData = data;
         newData.I = single(I_filt);
@@ -4414,21 +4429,21 @@ function filteringCallback(~,~)
         switch lower(stats.filterType)
             case 'low'
                 newData.preprocessing = sprintf( ...
-                    'Butterworth low-pass filtering, Fc=%.6g Hz, order=%d', ...
-                    stats.FcHigh, stats.order);
+                    '%s low-pass filtering, Fc=%.6g Hz, order=%d', ...
+                    stats.methodName, stats.FcHigh, stats.order);
 
             case 'high'
                 newData.preprocessing = sprintf( ...
-                    'Butterworth high-pass filtering, Fc=%.6g Hz, order=%d', ...
-                    stats.FcLow, stats.order);
+                    '%s high-pass filtering, Fc=%.6g Hz, order=%d', ...
+                    stats.methodName, stats.FcLow, stats.order);
 
             case 'band'
                 newData.preprocessing = sprintf( ...
-                    'Butterworth band-pass filtering, %.6g-%.6g Hz, order=%d', ...
-                    stats.FcLow, stats.FcHigh, stats.order);
+                    '%s band-pass filtering, %.6g-%.6g Hz, order=%d', ...
+                    stats.methodName, stats.FcLow, stats.FcHigh, stats.order);
 
             otherwise
-                newData.preprocessing = 'Butterworth filtering';
+                newData.preprocessing = [stats.methodName ' ' stats.filterType ' filtering'];
         end
 
         baseStem = getCurrentNamingStem(studio);
@@ -4485,615 +4500,89 @@ function filteringCallback(~,~)
 end
 
 function opts = showFilteringSetupDialog(data)
-% One-window dark setup dialog for Butterworth filtering.
-% MATLAB 2017b compatible.
-
-    opts = [];
-
-    TR = data.TR;
-    if numel(TR) > 1
-        TR = TR(end);
-    end
-    TR = double(TR);
-
-    nt = size(data.I, ndims(data.I));
-
-    Fs = 1 / TR;
-    Nyq = Fs / 2;
-    totalSec = nt * TR;
-
-    defaultHighPass = 0.001;   % default high-pass cutoff
-defaultLowPass  = 0.20;    % default low-pass cutoff
-
-defaultLow  = defaultHighPass;   % for band-pass low edge
-defaultHigh = defaultLowPass;    % for band-pass high edge
-
-    if defaultHigh >= Nyq
-        defaultHigh = 0.80 * Nyq;
-    end
-
-    if defaultLow >= defaultHigh
-        defaultLow = max(0.001, 0.20 * defaultHigh);
-    end
-
-    bg      = [0.04 0.04 0.045];
-    panel   = [0.09 0.09 0.10];
-    panel2  = [0.12 0.12 0.13];
-    fg      = [0.96 0.96 0.96];
-    fgDim   = [0.74 0.74 0.78];
-    blue    = [0.20 0.48 0.95];
-    green   = [0.12 0.68 0.35];
-    red     = [0.78 0.22 0.22];
-    orange  = [0.95 0.55 0.18];
-
-    dlg = figure( ...
-        'Name','Butterworth Filtering Setup', ...
-        'Color',bg, ...
-        'MenuBar','none', ...
-        'ToolBar','none', ...
-        'NumberTitle','off', ...
-        'Resize','off', ...
-        'Units','pixels', ...
-        'Position',[35 40 1600 940],   ...
-        'WindowStyle','modal', ...
-        'Visible','off', ...
-        'CloseRequestFcn',@onCancel, ...
-        'KeyPressFcn',@onKey);
-try, deConfUSIon_popup_polish_now(gcf); catch, end
-
-
-    try
-        movegui(dlg,'center');
-    catch
-    end
-
-    % ---------------------------------------------------------------------
-    % Title
-    % ---------------------------------------------------------------------
-    uicontrol('Parent',dlg,'Style','text', ...
-        'Units','normalized', ...
-        'Position',[0.04 0.925 0.92 0.055], ...
-        'String','Butterworth Filtering', ...
-        'BackgroundColor',bg, ...
-        'ForegroundColor',fg, ...
-        'FontName','Helvetica', ...
-        'FontSize',20, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    infoStr = sprintf([ ...
-        'TR = %.0f ms   |   Fs = %.4g Hz   |   Nyquist = %.4g Hz   |   Volumes = %d   |   Duration = %.2f min'], ...
-        TR*1000, Fs, Nyq, nt, totalSec/60);
-
-    uicontrol('Parent',dlg,'Style','text', ...
-        'Units','normalized', ...
-        'Position',[0.04 0.875 0.92 0.035], ...
-        'String',infoStr, ...
-        'BackgroundColor',bg, ...
-        'ForegroundColor',fgDim, ...
-        'FontName','Helvetica', ...
-        'FontSize',11, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    % ---------------------------------------------------------------------
-    % Main panel
-    % ---------------------------------------------------------------------
-    mainPanel = uipanel('Parent',dlg, ...
-        'Units','normalized', ...
-        'Position',[0.04 0.18 0.92 0.67], ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',[0.35 0.35 0.35], ...
-        'BorderType','line');
-
-    % Guidance box
-   uicontrol('Parent',mainPanel,'Style','text', ...
-    'Units','normalized', ...
-    'Position',[0.04 0.805 0.92 0.145], ...
-    'String',{ ...
-        'Recommended default for fUSI preprocessing:', ...
-        'Band-pass 0.001-0.20 Hz, order 4, no trimming.', ...
-        'Use trimming only if the beginning/end contains unstable frames.'}, ...
-    'BackgroundColor',panel2, ...
-    'ForegroundColor',[0.95 0.88 0.55], ...
-    'FontName','Helvetica', ...
-    'FontSize',10, ...
-    'FontWeight','bold', ...
-    'HorizontalAlignment','left');
-
-    % Filter type
-    addLabel(mainPanel, 'Filter type', 0.06, 0.72);
-    hType = uicontrol('Parent',mainPanel,'Style','popupmenu', ...
-        'Units','normalized', ...
-        'Position',[0.28 0.715 0.28 0.065], ...
-        'String',{'Band-pass','Low-pass','High-pass'}, ...
-        'Value',1, ...
-        'BackgroundColor',[0.16 0.16 0.17], ...
-        'ForegroundColor','w', ...
-        'FontName','Helvetica', ...
-        'FontSize',16, ...
-        'FontWeight','bold', ...
-        'Callback',@onTypeChanged);
-
-    % Order
-    addLabel(mainPanel, 'Order', 0.60, 0.72);
-    hOrder = uicontrol('Parent',mainPanel,'Style','popupmenu', ...
-        'Units','normalized', ...
-        'Position',[0.73 0.715 0.20 0.065], ...
-        'String',{'1','2','3','4','5','6'}, ...
-        'Value',4, ...
-        'BackgroundColor',[0.16 0.16 0.17], ...
-        'ForegroundColor','w', ...
-        'FontName','Helvetica', ...
-        'FontSize',16, ...
-        'FontWeight','bold');
-
-    % Cutoffs
-    addLabel(mainPanel, 'Low cutoff FcLow (Hz)', 0.06, 0.59);
-    hLow = uicontrol('Parent',mainPanel,'Style','edit', ...
-        'Units','normalized', ...
-        'Position',[0.36 0.585 0.20 0.065], ...
-        'String',num2str(defaultLow,'%.6g'), ...
-        'BackgroundColor',[0.02 0.02 0.025], ...
-        'ForegroundColor','w', ...
-        'FontName','Helvetica', ...
-        'FontSize',13, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    addLabel(mainPanel, 'High cutoff FcHigh (Hz)', 0.06, 0.47);
-    hHigh = uicontrol('Parent',mainPanel,'Style','edit', ...
-        'Units','normalized', ...
-        'Position',[0.36 0.465 0.20 0.065], ...
-        'String',num2str(defaultHigh,'%.6g'), ...
-        'BackgroundColor',[0.02 0.02 0.025], ...
-        'ForegroundColor','w', ...
-        'FontName','Helvetica', ...
-        'FontSize',13, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    uicontrol('Parent',mainPanel,'Style','text', ...
-        'Units','normalized', ...
-        'Position',[0.60 0.47 0.34 0.17], ...
-        'String',{ ...
-            'Band-pass uses both cutoffs.', ...
-            'Low-pass uses only high cutoff.', ...
-            'High-pass uses only low cutoff.'}, ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fgDim, ...
-        'FontName','Helvetica', ...
-        'FontSize',10, ...
-        'HorizontalAlignment','left');
-
-    % Trimming
-    addLabel(mainPanel, 'Trim start (sec)', 0.06, 0.33);
-    hTrimStart = uicontrol('Parent',mainPanel,'Style','edit', ...
-        'Units','normalized', ...
-        'Position',[0.36 0.325 0.20 0.065], ...
-        'String','0', ...
-        'BackgroundColor',[0.02 0.02 0.025], ...
-        'ForegroundColor','w', ...
-        'FontName','Helvetica', ...
-        'FontSize',13, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    addLabel(mainPanel, 'Trim end (sec)', 0.06, 0.21);
-    hTrimEnd = uicontrol('Parent',mainPanel,'Style','edit', ...
-        'Units','normalized', ...
-        'Position',[0.36 0.205 0.20 0.065], ...
-        'String','0', ...
-        'BackgroundColor',[0.02 0.02 0.025], ...
-        'ForegroundColor','w', ...
-        'FontName','Helvetica', ...
-        'FontSize',13, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    hTaper = uicontrol('Parent',mainPanel,'Style','checkbox', ...
-        'Units','normalized', ...
-        'Position',[0.60 0.315 0.34 0.07], ...
-        'String','Use Gaussian taper at trim edges', ...
-        'Value',1, ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'FontName','Helvetica', ...
-        'FontSize',11, ...
-        'FontWeight','bold');
-
-    hSaveQC = uicontrol('Parent',mainPanel,'Style','checkbox', ...
-        'Units','normalized', ...
-        'Position',[0.60 0.235 0.34 0.07], ...
-        'String','Save filtering QC plots', ...
-        'Value',1, ...
-        'BackgroundColor',panel, ...
-        'ForegroundColor',fg, ...
-        'FontName','Helvetica', ...
-        'FontSize',11, ...
-        'FontWeight','bold');
-
-    addLabel(mainPanel, 'Chunk size voxels', 0.60, 0.13);
-    hChunk = uicontrol('Parent',mainPanel,'Style','edit', ...
-        'Units','normalized', ...
-        'Position',[0.80 0.125 0.14 0.06], ...
-        'String','50000', ...
-        'BackgroundColor',[0.02 0.02 0.025], ...
-        'ForegroundColor','w', ...
-        'FontName','Helvetica', ...
-        'FontSize',16, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    hStatus = uicontrol('Parent',dlg,'Style','text', ...
-        'Units','normalized', ...
-        'Position',[0.04 0.105 0.92 0.04], ...
-        'String','Ready. Defaults are pre-selected.', ...
-        'BackgroundColor',bg, ...
-        'ForegroundColor',[0.60 0.90 1.00], ...
-        'FontName','Helvetica', ...
-        'FontSize',16, ...
-        'FontWeight','bold', ...
-        'HorizontalAlignment','center');
-
-    % Buttons
-    uicontrol('Parent',dlg,'Style','pushbutton', ...
-        'String','RESET DEFAULTS', ...
-        'Units','normalized', ...
-        'Position',[0.04 0.035 0.20 0.06], ...
-        'FontName','Helvetica', ...
-        'FontWeight','bold', ...
-        'FontSize',16, ...
-        'BackgroundColor',blue, ...
-        'ForegroundColor','w', ...
-        'Callback',@onReset);
-
-    uicontrol('Parent',dlg,'Style','pushbutton', ...
-        'String','RUN FILTERING', ...
-        'Units','normalized', ...
-        'Position',[0.52 0.035 0.24 0.065], ...
-        'FontName','Helvetica', ...
-        'FontWeight','bold', ...
-        'FontSize',13, ...
-        'BackgroundColor',green, ...
-        'ForegroundColor','w', ...
-        'Callback',@onRun);
-
-    uicontrol('Parent',dlg,'Style','pushbutton', ...
-        'String','CANCEL', ...
-        'Units','normalized', ...
-        'Position',[0.78 0.035 0.18 0.065], ...
-        'FontName','Helvetica', ...
-        'FontWeight','bold', ...
-        'FontSize',13, ...
-        'BackgroundColor',red, ...
-        'ForegroundColor','w', ...
-        'Callback',@onCancel);
-
-    onTypeChanged();
-
-    set(dlg,'Visible','on');
-    drawnow;
-    try, deConfUSIon_popup_autofit_apply(dlg); catch, end
-try, deConfUSIon_fix_scm_video_dialog_fonts(dlg); catch, end % HUMOR_V27_SCM_VIDEO_FONT_FIX
-waitfor(dlg);
-
-    % ---------------------------------------------------------------------
-    % Nested helpers
-    % ---------------------------------------------------------------------
-    function addLabel(parent, str, x, y)
-        uicontrol('Parent',parent,'Style','text', ...
-            'Units','normalized', ...
-            'Position',[x y 0.28 0.055], ...
-            'String',str, ...
-            'BackgroundColor',panel, ...
-            'ForegroundColor',fg, ...
-            'FontName','Helvetica', ...
-            'FontSize',11, ...
-            'FontWeight','bold', ...
-            'HorizontalAlignment','left');
-    end
-
-    function onTypeChanged(~,~)
-
-    typeIdx = get(hType,'Value');
-
-    switch typeIdx
-
-        case 1
-            % Band-pass: use both cutoffs
-            set(hLow,  'String', num2str(defaultHighPass,'%.6g'));
-            set(hHigh, 'String', num2str(defaultLowPass,'%.6g'));
-
-            set(hLow,  'Enable','on');
-            set(hHigh, 'Enable','on');
-
-            msg = 'Band-pass selected: 0.001-0.20 Hz will be used.';
-            col = [0.60 0.90 1.00];
-
-        case 2
-            % Low-pass: use only high cutoff
-            set(hLow,  'String','0');
-            set(hHigh, 'String', num2str(defaultLowPass,'%.6g'));
-
-            set(hLow,  'Enable','off');
-            set(hHigh, 'Enable','on');
-
-            msg = 'Low-pass selected: only FcHigh = 0.20 Hz will be used.';
-            col = [0.95 0.82 0.35];
-
-        case 3
-            % High-pass: use only low cutoff
-            set(hLow,  'String', num2str(defaultHighPass,'%.6g'));
-            set(hHigh, 'String','0');
-
-            set(hLow,  'Enable','on');
-            set(hHigh, 'Enable','off');
-
-            msg = 'High-pass selected: only FcLow = 0.001 Hz will be used.';
-            col = [0.95 0.60 0.35];
-
-        otherwise
-            msg = 'Ready.';
-            col = [0.60 0.90 1.00];
-    end
-
-    if ishandle(hStatus)
-        set(hStatus,'String',msg,'ForegroundColor',col);
-    end
-end
-    function onReset(~,~)
-
-        set(hType,'Value',1);
-        set(hOrder,'Value',4);
-      set(hLow,'String',num2str(defaultHighPass,'%.6g'));
-set(hHigh,'String',num2str(defaultLowPass,'%.6g'));
-        set(hTrimStart,'String','0');
-        set(hTrimEnd,'String','0');
-        set(hTaper,'Value',1);
-        set(hSaveQC,'Value',1);
-        set(hChunk,'String','50000');
-
-        set(hStatus, ...
-            'String','Defaults restored: Band-pass 0.001-0.20 Hz, order 4, no trimming.', ...
-            'ForegroundColor',[0.60 0.90 1.00]);
-
-        onTypeChanged();
-    end
-
-    function onRun(~,~)
-
-        typeStrings = get(hType,'String');
-        typeChoice = typeStrings{get(hType,'Value')};
-
-        switch typeChoice
-            case 'Band-pass'
-                filtType = 'band';
-            case 'Low-pass'
-                filtType = 'low';
-            case 'High-pass'
-                filtType = 'high';
-            otherwise
-                filtType = 'band';
-        end
-
-        FcLow = str2double(strtrim(get(hLow,'String')));
-        FcHigh = str2double(strtrim(get(hHigh,'String')));
-
-        orderStrings = get(hOrder,'String');
-        orderVal = str2double(orderStrings{get(hOrder,'Value')});
-
-        trimStart = str2double(strtrim(get(hTrimStart,'String')));
-        trimEnd = str2double(strtrim(get(hTrimEnd,'String')));
-        chunkSize = str2double(strtrim(get(hChunk,'String')));
-
-        if ~isfinite(FcLow)
-            showBad('FcLow must be numeric.');
-            return;
-        end
-
-        if ~isfinite(FcHigh)
-            showBad('FcHigh must be numeric.');
-            return;
-        end
-
-        if ~isfinite(orderVal) || orderVal < 1 || orderVal > 6
-            showBad('Order must be between 1 and 6.');
-            return;
-        end
-
-        if ~isfinite(trimStart) || trimStart < 0
-            showBad('Trim start must be >= 0 sec.');
-            return;
-        end
-
-        if ~isfinite(trimEnd) || trimEnd < 0
-            showBad('Trim end must be >= 0 sec.');
-            return;
-        end
-
-        if ~isfinite(chunkSize) || chunkSize < 1000
-            showBad('Chunk size must be at least 1000 voxels.');
-            return;
-        end
-
-        trimStartFrames = round(trimStart / TR);
-        trimEndFrames = round(trimEnd / TR);
-
-        if 1 + trimStartFrames >= nt - trimEndFrames
-            showBad('Trimming removes the whole signal. Reduce trim values.');
-            return;
-        end
-
-        switch filtType
-            case 'low'
-                if FcHigh <= 0 || FcHigh >= Nyq
-                    showBad(sprintf('Low-pass FcHigh must be > 0 and < Nyquist %.6g Hz.', Nyq));
-                    return;
-                end
-                FcLow = 0;
-
-            case 'high'
-                if FcLow <= 0 || FcLow >= Nyq
-                    showBad(sprintf('High-pass FcLow must be > 0 and < Nyquist %.6g Hz.', Nyq));
-                    return;
-                end
-                FcHigh = 0;
-
-            case 'band'
-                if FcLow <= 0
-                    showBad('Band-pass FcLow must be > 0.');
-                    return;
-                end
-                if FcHigh <= 0 || FcHigh >= Nyq
-                    showBad(sprintf('Band-pass FcHigh must be > 0 and < Nyquist %.6g Hz.', Nyq));
-                    return;
-                end
-                if FcLow >= FcHigh
-                    showBad('Band-pass requires FcLow < FcHigh.');
-                    return;
-                end
-        end
-
-        opts = struct();
-        opts.type = filtType;
-        opts.FcLow = FcLow;
-        opts.FcHigh = FcHigh;
-        opts.order = round(orderVal);
-        opts.trimStart = trimStart;
-        opts.trimEnd = trimEnd;
-        opts.useTaper = logical(get(hTaper,'Value'));
-        opts.saveQC = logical(get(hSaveQC,'Value'));
-        opts.chunkSize = round(chunkSize);
-        opts.cancelled = false;
-
-        if ishandle(dlg)
-            delete(dlg);
-        end
-    end
-
-    function showBad(msg)
-        if ishandle(hStatus)
-            set(hStatus, ...
-                'String',msg, ...
-                'ForegroundColor',orange);
-        end
-    end
-
-    function onCancel(~,~)
-        opts = [];
-        if ishandle(dlg)
-            delete(dlg);
-        end
-    end
-
-    function onKey(~,ev)
-        try
-            if strcmpi(ev.Key,'escape')
-                onCancel();
-            elseif strcmpi(ev.Key,'return')
-                onRun();
-            end
-        catch
-        end
-    end
+opts=filtering('setup',data);
 end
 
 %% =========================================================
-%  COREGISTRATION
+%  ATLAS REGISTRATION
 % =========================================================
-    function coregCallback(~,~)
-
+function coregCallback(~,~)
     studio = guidata(fig);
-    addLog('--- Atlas Coregistration ---');
-
     if ~isfield(studio,'isLoaded') || ~studio.isLoaded
-        errordlg('Load data first.');
+        errordlg('Load data first.','Atlas Registration');
         return;
     end
 
+    addLog('--- Atlas Registration ---');
     closeLingeringQCFigures();
-
     setProgramStatus(false);
+    readyCleanup = onCleanup(@()setProgramStatus(true)); %#ok<NASGU>
     drawnow;
 
     try
+        % Lazy selections still need their geometry available to the launcher.
+        active = studio.datasets.(studio.activeDataset);
+        if isfield(active,'isLazy') && active.isLazy
+            getActiveData();
+            studio = guidata(fig);
+            setProgramStatus(false);
+        end
+        % Both registration launchers receive an analysed output directory.
+        studio.exportPath = fusiModelAnalysisFolder(studio);
+        if ~isfolder(studio.exportPath), mkdir(studio.exportPath); end
         RegOut = coreg(studio);
-
+        if ~isgraphics(fig,'figure'), return; end
         if isempty(RegOut)
-            addLog('Coregistration cancelled.');
-            setProgramStatus(true);
+            addLog('Atlas registration cancelled; previous alignment retained.');
             return;
         end
 
-        % -----------------------------------------------------
-        % 2D coronal registration output
-        % -----------------------------------------------------
+        % Read back current Studio state after the registration window closes.
+        studio = guidata(fig);
         if isstruct(RegOut) && ...
-                ((isfield(RegOut,'type') && ~isempty(strfind(lower(RegOut.type),'coronal_2d'))) || ...
-                 (isfield(RegOut,'A') && isfield(RegOut,'outputSize') && isfield(RegOut,'atlasSliceIndex')))
-
+                ((isfield(RegOut,'type') && contains(lower(RegOut.type),'coronal_2d')) || ...
+                 (isfield(RegOut,'A') && isfield(RegOut,'outputSize') && isfield(RegOut,'atlasSliceIndex')) || ...
+                 isfield(RegOut,'Reg2DList'))
             studio.atlasReg2D = RegOut;
             studio.atlasRegistrationMode = '2D coronal';
-
-            if isfield(RegOut,'savedFile') && ~isempty(RegOut.savedFile)
-                studio.atlasReg2DFile = RegOut.savedFile;
-            else
-                studio.atlasReg2DFile = '';
-            end
-
-            % Avoid confusing 2D Reg2D with old 3D Transf
+            studio.atlasReg2DFile = '';
+            if isfield(RegOut,'savedFile'), studio.atlasReg2DFile = RegOut.savedFile; end
             studio.atlasTransform = [];
             studio.atlasTransformFile = '';
-
-            guidata(fig, studio);
-
+            guidata(fig,studio);
             addLog('2D coronal atlas registration completed.');
-            addLog('Reg2D stored in studio.atlasReg2D.');
-
             if ~isempty(studio.atlasReg2DFile)
-                addLog(['Reg2D file: ' studio.atlasReg2DFile]);
+                addLog(['Registration file: ' studio.atlasReg2DFile]);
             end
-
-        % -----------------------------------------------------
-        % 3D registration output
-        % -----------------------------------------------------
         elseif isstruct(RegOut) && isfield(RegOut,'M')
-
             studio.atlasTransform = RegOut;
             studio.atlasRegistrationMode = '3D';
-
-            if isfield(studio,'exportPath') && ~isempty(studio.exportPath)
-                studio.atlasTransformFile = fullfile(studio.exportPath,'Registration','Transformation.mat');
-            else
-                studio.atlasTransformFile = 'Transformation.mat';
+            studio.atlasTransformFile = '';
+            if isfield(RegOut,'atlasUnderlays') && isstruct(RegOut.atlasUnderlays) && ...
+                    isfield(RegOut.atlasUnderlays,'transformFile')
+                studio.atlasTransformFile = RegOut.atlasUnderlays.transformFile;
+            elseif isfield(RegOut,'savedFile') && ~isempty(RegOut.savedFile)
+                studio.atlasTransformFile = RegOut.savedFile;
+            elseif isfield(studio,'exportPath') && ~isempty(studio.exportPath)
+                candidate = fullfile(studio.exportPath,'Registration','Transformation.mat');
+                if isfile(candidate), studio.atlasTransformFile = candidate; end
             end
-
-            % Avoid stale 2D registration after new 3D registration
             studio.atlasReg2D = [];
             studio.atlasReg2DFile = '';
-
-            guidata(fig, studio);
-
-            addLog('3D atlas coregistration completed.');
-            addLog('3D transformation stored in studio.atlasTransform.');
-            addLog(['Transformation file: ' studio.atlasTransformFile]);
-
+            guidata(fig,studio);
+            addLog('3D atlas registration completed.');
+            if ~isempty(studio.atlasTransformFile)
+                addLog(['Transformation file: ' studio.atlasTransformFile]);
+            end
         else
-            guidata(fig, studio);
-            addLog('Coregistration finished, but output type was not recognized.');
+            addLog('Atlas registration returned no recognized transformation; previous alignment retained.');
         end
-
     catch ME
         addLog(['COREG ERROR: ' ME.message]);
-        errordlg(ME.message,'Coregistration Failed');
+        if isgraphics(fig,'figure'), errordlg(ME.message,'Atlas Registration Failed'); end
     end
-
-    setProgramStatus(true);
 end
-%% =========================================================
-%  SEGMENTATION
-% =========================================================
+
 function segmentationCallback(~,~)
 
     studio = guidata(fig);
@@ -5104,6 +4593,8 @@ function segmentationCallback(~,~)
         return;
     end
 
+    setappdata(fig,'SegmentationRunning',true);
+    readyGuard=onCleanup(@finishSegmentation); %#ok<NASGU>
     setProgramStatus(false);
     drawnow;
 
@@ -5137,11 +4628,17 @@ function segmentationCallback(~,~)
         end
 
     catch ME
+        if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'),addLog('Segmentation cancelled.');return;end
         addLog(['SEGMENTATION ERROR: ' ME.message]);
         errordlg(ME.message,'Segmentation Failed');
     end
 
     setProgramStatus(true);
+end
+
+function finishSegmentation()
+    if ~isgraphics(fig),return;end
+    setappdata(fig,'SegmentationRunning',false);setProgramStatus(true);
 end
 
 %% =========================================================
@@ -5248,6 +4745,10 @@ function functionalConnectivityCallback(~,~)
     end
 
     % Display / bookkeeping
+    for key={'meta','metadata','md','voxelSizeUm','voxelSize','voxelSizeUnit'}
+        if isfield(data,key{1}),dataFC.(key{1})=data.(key{1});end
+    end
+    if isfield(studio,'loadedFile'),dataFC.sourceFile=studio.loadedFile;end
     dataFC.name = getDatasetDisplayName(studio, studio.activeDataset);
     dataFC.analysisDir = saveRoot;
 dataFC.exportPath = studio.exportPath;
@@ -6586,6 +6087,17 @@ end
 %   7) pwd
 
     startDir = pwd;
+    try
+        active=getActiveData();
+        if isfield(active,'I')&&ndims(active.I)==4&&size(active.I,3)>1
+            subject=struct('I4',active.I,'analysisDir',studio.exportPath,'sourceFile','');
+            if isfield(studio,'loadedFile'),subject.sourceFile=studio.loadedFile;end
+            startDir=fusiFCStartDir(subject,studio);return;
+        end
+    catch ME
+        addLog(['3D atlas folder lookup: ' ME.message]);
+    end
+
 
     % -----------------------------------------------------
     % 1) Preferred: analysed dataset Registration2D folder

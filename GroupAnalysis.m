@@ -23,6 +23,7 @@ function hFig = GroupAnalysis(varargin)
 %%% =====================================================================
 %%% INPUT PARSING
 %%% =====================================================================
+deConfUSIon_setup();
 posStudio = [];
 posOnClose = [];
 args = varargin;
@@ -199,12 +200,12 @@ S.lastMapDisplay = struct();
 S.activeTab = 'ROI';
 S.mode = 'ROI Timecourse';
 
-S.groupList = {'PACAP','Vehicle','Control','GroupA','GroupB'};
+S.groupList = {'PACAP','Control','Vehicle','GroupA','GroupB'};
 S.condList  = {'CondA','CondB','Baseline','Post'};
 S.defaultGroup = 'PACAP';
 S.defaultCond  = 'CondA';
 S.tableMinRows = 2;
-S.tableColWidths = {36 118 54 88 88 74 72 62 62 92};
+S.tableColWidths = {36 118 54 88 88 74 260 62 62 92};
 
 S.applyAllIfNoneSelected = true;
 
@@ -236,12 +237,17 @@ S.tc_injMin0         = 5;
 S.tc_injMin1         = 15;
 S.tc_plateauMin0     = 6;
 S.tc_plateauMin1     = 9;
+S.tc_plateauWinMin   = 1;
 S.tc_peakSearchMin0  = 6;
 S.tc_peakSearchMin1  = 9;
 S.tc_peakWinMin      = 1;
 S.tc_trimPct         = 10;
-S.tc_metric          = 'Robust Peak';
+S.tc_metric          = 'Maximum plateau';
 S.tc_showSEM         = true;
+S.tc_errorBand       = 'SEM';
+S.tc_timecourseView  = 'Group mean';
+S.tc_selectedAnimalKeys = {};
+S.tc_animalCondition = 'Both conditions';
 S.tc_showInjectionBox = true;
 S.displaySemAlpha    = 0.35;
 S.exportSemAlpha     = 0.20;
@@ -287,13 +293,13 @@ S.fcRowFiles = cell(0,1);
 S.fcDisplayValue = 'Pearson r';
 S.fcThreshold = 0;
 S.fcGroupA = 'PACAP';
-S.fcGroupB = 'Vehicle';
+S.fcGroupB = 'Control';
 
 %%% style
 S.colorMode     = 'Scheme';
-S.colorScheme   = 'PACAP/Vehicle';
+S.colorScheme   = 'PACAP/Control';
 S.manualGroupA  = 'PACAP';
-S.manualGroupB  = 'Vehicle';
+S.manualGroupB  = 'Control';
 S.manualColorA  = 1;
 S.manualColorB  = 2;
 
@@ -319,8 +325,11 @@ S.showPText = true;
 S.outlierMethod = 'None';
 S.outMADthr     = 3.5;
 S.outIQRk       = 1.5;
+S.outSDthr      = 3;
 S.outlierKeys   = {};
 S.outlierInfo   = {};
+S.outlierScreen = struct();
+S.outlierHistory = {};
 
 S.outDir = defaultOutDir(opt);
 
@@ -350,7 +359,7 @@ pRight = uipanel(hFig, ...
 %%% =====================================================================
 %%% LEFT TABLE
 %%% =====================================================================
-colNames = {'Use','Animal ID','Session','Scan ID','Group','Condition','ROI File','Bundle File','FC GA','Status'};
+colNames = {'Use','Animal ID','Session','Scan ID','Group','Condition','ROI path (double-click to open)','Bundle File','FC GA','Status'};
 colEdit  = [true true false false true true false false false false];
 colFmt   = {'logical','char','char','char',S.groupList,S.condList,'char','char','char','char'};
 
@@ -419,6 +428,8 @@ S.hApplyBoth  = mkBtn(pQuick,'Apply Both',[0.05 0.405 0.90 0.075],C.btnPrimary,@
 
 S.hAddGroup = mkBtn(pQuick,'Add Group',[0.05 0.305 0.43 0.070],C.btnSecondary,@onAddGroup);
 S.hAddCond  = mkBtn(pQuick,'Add Cond',[0.52 0.305 0.43 0.070],C.btnSecondary,@onAddCond);
+S.hAutoAssign = mkBtn(pQuick,'Auto assign from ROI / file',[0.05 0.225 0.90 0.060],C.btnSecondary,@onAutoAssign);
+set(S.hAutoAssign,'TooltipString','Re-detect selected rows, or all used rows when none are selected. Replaces group and condition on those rows.');
 S.hRevertExcluded = mkBtn(pQuick,'Revert Excluded',[0.05 0.145 0.90 0.075],C.btnSecondary,@onRevertExcluded);
 
 S.hAutoPair = uicontrol(pQuick,'Style','checkbox','String','Auto PairID = Subject', ...
@@ -428,6 +439,18 @@ S.hAutoPair = uicontrol(pQuick,'Style','checkbox','String','Auto PairID = Subjec
 %%% =====================================================================
 %%% LEFT ACTIONS
 %%% =====================================================================
+uicontrol(pLeft,'Style','text','String','Selected ROI path (click to open folder)', ...
+    'Units','normalized','Position',[0.03 0.397 0.94 0.020], ...
+    'BackgroundColor',C.panel,'ForegroundColor',C.muted, ...
+    'HorizontalAlignment','left');
+S.hROIPath = uicontrol(pLeft,'Style','pushbutton','String','Select an ROI row to see its full path.', ...
+    'Units','normalized','Position',[0.03 0.350 0.73 0.047], ...
+    'Enable','off','HorizontalAlignment','left', ...
+    'BackgroundColor',C.editBg,'ForegroundColor',[0.55 0.85 1], ...
+    'FontName','Consolas','FontSize',F.base,'Callback',@onOpenROIFolder);
+S.hOpenROIFolder = mkBtn(pLeft,'Open ROI folder',[0.78 0.352 0.19 0.045],C.btnSecondary,@onOpenROIFolder);
+set(S.hOpenROIFolder,'Enable','off');
+
 S.hAddBundles = mkBtn(pLeft,'Add Bundles',[0.03 0.285 0.22 0.060],C.btnAction,@onAddBundles);
 S.hAddFiles   = mkBtn(pLeft,'Add ROI / DATA',[0.27 0.285 0.22 0.060],C.btnSecondary,@onAddFiles);
 S.hAddFolder  = mkBtn(pLeft,'Add Folder',[0.51 0.285 0.14 0.060],C.btnSecondary,@onAddFolder);
@@ -513,36 +536,25 @@ S.hInj1 = uicontrol(pROI,'Style','edit','String',num2str(S.tc_injMin1), ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
 
 [S.hBase0,S.hBase1] = addPairEditsDark(pROI,0.62,'Baseline (min):',S.tc_baseMin0,S.tc_baseMin1,C,@onROIChanged);
-[S.hPkS0,S.hPkS1]   = addPairEditsDark(pROI,0.42,'Peak search (min):',S.tc_peakSearchMin0,S.tc_peakSearchMin1,C,@onROIChanged);
-[S.hPlat0,S.hPlat1] = addPairEditsDark(pROI,0.22,'Plateau (min):',S.tc_plateauMin0,S.tc_plateauMin1,C,@onROIChanged);
-
-uicontrol(pROI,'Style','text','String','Peak win (min):', ...
-    'Units','normalized','Position',[0.66 0.62 0.18 0.12], ...
-    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-
-S.hTC_PeakWin = uicontrol(pROI,'Style','edit','String',num2str(S.tc_peakWinMin), ...
-    'Units','normalized','Position',[0.84 0.62 0.12 0.12], ...
-    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
-
-uicontrol(pROI,'Style','text','String','Trim %:', ...
-    'Units','normalized','Position',[0.66 0.42 0.18 0.12], ...
-    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-
-S.hTC_Trim = uicontrol(pROI,'Style','edit','String',num2str(S.tc_trimPct), ...
-    'Units','normalized','Position',[0.84 0.42 0.12 0.12], ...
-    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
-
+[S.hPlat0,S.hPlat1] = addPairEditsDark(pROI,0.42,'Search / interval (min):',S.tc_plateauMin0,S.tc_plateauMin1,C,@onROIChanged);
+uicontrol(pROI,'Style','text','String','Plateau duration (min):', ...
+    'Units','normalized','Position',[0.02 0.22 0.38 0.12], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left');
+S.hPlatWin = uicontrol(pROI,'Style','edit','String',num2str(S.tc_plateauWinMin), ...
+    'Units','normalized','Position',[0.42 0.22 0.12 0.12], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged, ...
+    'TooltipString','Maximum arithmetic mean over a complete window, using original samples, as in automatic SCM.');
+uicontrol(pROI,'Style','text','String', ...
+    {'Maximum plateau: best window mean (SCM).'; 'Fixed interval: mean of the entire interval.'; 'Metrics use original acquired samples.'}, ...
+    'Units','normalized','Position',[0.65 0.22 0.33 0.52], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left');
 uicontrol(pROI,'Style','text','String','Metric:', ...
-    'Units','normalized','Position',[0.66 0.22 0.18 0.12], ...
+    'Units','normalized','Position',[0.02 0.02 0.16 0.12], ...
     'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
-
-S.hTC_Metric = uicontrol(pROI,'Style','popupmenu','String',{'Plateau','Robust Peak'}, ...
-    'Value',2, ...
-    'Units','normalized','Position',[0.84 0.22 0.12 0.12], ...
+S.hTC_Metric = uicontrol(pROI,'Style','popupmenu','String',{'Maximum plateau','Fixed interval mean'}, ...
+    'Value',1,'Units','normalized','Position',[0.22 0.02 0.74 0.12], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onROIChanged);
-% GA_FORCE_ROBUST_PEAK_POPUP_START
-try, set(S.hTC_Metric,'Value',2); catch, end
-% GA_FORCE_ROBUST_PEAK_POPUP_END
+set(S.hTC_Metric,'TooltipString','Default Maximum plateau matches automatic SCM window averaging. Fixed interval mean does not search for a maximum.');
 
 pStyle = uipanel(pROIBG,'Units','normalized','Position',[0.02 0.36 0.96 0.22], ...
     'Title','Display style','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
@@ -552,11 +564,11 @@ uicontrol(pStyle,'Style','text','String','Color scheme:', ...
     'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
 
 S.hColorScheme = uicontrol(pStyle,'Style','popupmenu', ...
-    'String',{'PACAP/Vehicle','Blue/Red','Green/Magenta','A/B green-magenta','Cyan/Orange','Purple/Green','Gray/Orange','Red/Blue','Distinct','Tableau 10','Bright 12'}, ...
+    'String',{'PACAP/Control','Blue/Red','Green/Magenta','A/B green-magenta','Cyan/Orange','Purple/Green','Gray/Orange','Red/Blue','Distinct','Tableau 10','Bright 12'}, ...
     'Units','normalized','Position',[0.20 0.66 0.22 0.22], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStyleChanged);
 
-S.hShowSEM = uicontrol(pStyle,'Style','checkbox','String','Show SEM', ...
+S.hShowSEM = uicontrol(pStyle,'Style','checkbox','String','Show band', ...
     'Units','normalized','Position',[0.45 0.66 0.16 0.22], ...
     'Value',double(S.tc_showSEM), ...
     'BackgroundColor',bg2,'ForegroundColor','w','Callback',@onStyleChanged);
@@ -981,6 +993,9 @@ try
         'BackgroundColor',C.editBg,'ForegroundColor','w', ...
         'Callback',@updateFCTabPreview);
 
+    S.hFCPeriod=uicontrol(pFCTop,'Style','popupmenu','String',{'Current export','Whole','Pre','During','Post'}, ...
+        'Tag','FCGroupPeriod','Units','normalized','Position',[.45 .01 .15 .10], ...
+        'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',11,'TooltipString','Saved time period for every animal','Callback',@onFCPeriod);
     S.hFCAnimals = mkBtn(pFCTop,'Animals...',[0.735 0.155 0.080 0.205],C.btnSecondary,@(~,~) selectFCAnimals_SAFE_20260617(hFig));
     S.hFCNames   = mkBtn(pFCTop,'Names',[0.825 0.155 0.065 0.205],C.btnSecondary,@(~,~) showFCRegionNames_SAFE_20260617(hFig));
     S.hFCExportPNG = mkBtn(pFCTop,'PNG',[0.900 0.155 0.065 0.205],C.btnAction,@(~,~) exportFCHighResPNG_ADV_20260617(hFig));
@@ -1046,10 +1061,13 @@ uicontrol(pStats,'Style','text','String','Test:', ...
     'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
 
 S.hTest = uicontrol(pStats,'Style','popupmenu', ...
-    'String',{'None','One-sample t-test (vs 0)','Two-sample t-test (Student, equal var)','Two-sample t-test (Welch)','One-way ANOVA (groups)'}, ...
+    'String',{'None','One-sample t-test (vs 0)','Two-sample t-test (Student, equal var)','Two-sample t-test (Welch)','One-way ANOVA (groups)','Paired t-test (matched PairID / animal)'}, ...
     'Units','normalized','Position',[0.14 0.74 0.50 0.20], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStatsChanged, ...
     'Value',3);
+
+set(S.hTest,'TooltipString',['Student is the default (independent animals, equal variance). All t-tests are two-sided. Welch allows unequal variance. ' ...
+    'Paired uses matching PairID (or Animal ID). Aggregate repeated ROIs/sessions per animal before testing.']);
 
 uicontrol(pStats,'Style','text','String','Alpha:', ...
     'Units','normalized','Position',[0.66 0.72 0.10 0.20], ...
@@ -1075,23 +1093,34 @@ S.hShowPText = uicontrol(pStats,'Style','checkbox','String','Show p-value text',
     'BackgroundColor',bg2,'ForegroundColor','w','Callback',@onStatsChanged);
 
 pOut = uipanel(pStats,'Units','normalized','Position',[0.02 0.02 0.96 0.46], ...
-    'Title','Outlier detection','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
+    'Title','Outlier screening (within Group x Condition)','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
 
-S.hOutMethod = uicontrol(pOut,'Style','popupmenu','String',{'None','MAD robust z-score','IQR rule'}, ...
+S.hOutMethod = uicontrol(pOut,'Style','popupmenu','String',{'None','MAD robust z-score','IQR rule','SD z-score (exploratory)'}, ...
     'Units','normalized','Position',[0.02 0.79 0.22 0.16], ...
-    'BackgroundColor',C.editBg,'ForegroundColor','w');
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onOutlierChanged);
 
 S.hOutParam = uicontrol(pOut,'Style','edit','String',num2str(S.outMADthr), ...
     'Units','normalized','Position',[0.26 0.79 0.08 0.16], ...
-    'BackgroundColor',C.editBg,'ForegroundColor','w');
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onOutlierChanged);
+set(S.hOutMethod,'TooltipString',['Default None retains all animals. MAD: modified |z| > 3.5; IQR: 1.5 x quartile fences. ' ...
+    'SD: distance from mean / sample SD (default 3); sensitive to extreme values and ineffective with small n. ' ...
+    'These are screening rules, not outlier significance tests.']);
+set(S.hOutParam,'TooltipString','Threshold for the selected method; it is not a p-value or alpha. Choose the rule before inspecting treatment differences.');
 
 S.hDetectOut  = mkBtn(pOut,'Detect',[0.38 0.79 0.11 0.16],C.btnAction,@onDetectOutliers);
-S.hExcludeOut = mkBtn(pOut,'Exclude',[0.51 0.79 0.11 0.16],C.btnDanger,@onExcludeOutliers);
-S.hRevertOut  = mkBtn(pOut,'Revert',[0.64 0.79 0.11 0.16],C.btnSecondary,@onRevertExcluded);
+S.hExcludeOut = mkBtn(pOut,'Exclude flagged',[0.51 0.79 0.19 0.16],C.btnDanger,@onExcludeOutliers);
+S.hRevertOut  = mkBtn(pOut,'Revert',[0.73 0.79 0.11 0.16],C.btnSecondary,@onRevertExcluded);
+uicontrol(pOut,'Style','text','String','Reason:', ...
+    'Units','normalized','Position',[0.02 0.61 0.14 0.13], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left');
+S.hOutReason=uicontrol(pOut,'Style','edit','String','', ...
+    'Units','normalized','Position',[0.17 0.61 0.81 0.13], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','HorizontalAlignment','left', ...
+    'TooltipString','Required for exclusion: document a prespecified criterion or technical/QC failure. An unusual biological response alone is not evidence of a faulty recording.');
 
 S.hOutInfo = uicontrol(pOut,'Style','listbox', ...
-    'Units','normalized','Position',[0.02 0.06 0.96 0.60], ...
-    'String',{'No outliers detected yet.'}, ...
+    'Units','normalized','Position',[0.02 0.04 0.96 0.51], ...
+    'String',{'All animals retained by default. Flags require review; exclusions need a documented reason.'}, ...
     'BackgroundColor',C.axisBg,'ForegroundColor','w', ...
     'FontName','Consolas','FontSize',11);
 
@@ -1162,14 +1191,14 @@ try
     uicontrol(S.hPrevTop,'Style','text','String','A color','Units','normalized', ...
         'Position',[0.560 0.470 0.065 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
         'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
-    S.hPrevColorA = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Vehicle gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black','White'}, ...
+    S.hPrevColorA = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Control gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black','White'}, ...
         'Value',1,'Units','normalized','Position',[0.630 0.445 0.125 0.180], ...
         'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_COLOR_A');
 
     uicontrol(S.hPrevTop,'Style','text','String','B color','Units','normalized', ...
         'Position',[0.775 0.470 0.065 0.120],'BackgroundColor',bg2,'ForegroundColor','w', ...
         'HorizontalAlignment','left','FontWeight','bold','FontSize',11,'Tag','GA_RPV_DYNAMIC');
-    S.hPrevColorB = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Vehicle gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black','White'}, ...
+    S.hPrevColorB = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'PACAP blue','Control gray','Teal','Dark blue','Orange','Red','Green','Purple','Cyan','Magenta','Yellow','Dark green','Dark red','Black','White'}, ...
         'Value',2,'Units','normalized','Position',[0.845 0.445 0.125 0.180], ...
         'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',11,'Callback',@onSmoothChanged,'Tag','GA_RPV_COLOR_B');
 
@@ -1245,11 +1274,40 @@ catch ME_ga_roi_visual_ui
 end
 
 
+% Upper time-course display controls; selection affects display only.
+S.hPrevROIControls=uipanel(S.hPrevBG,'Units','normalized','Position',[.02 .665 .96 .055], ...
+    'BackgroundColor',bg2,'BorderType','none');
+S.hPrevROILabel=uicontrol(S.hPrevROIControls,'Style','text','String','Upper:', ...
+    'Units','normalized','Position',[.01 .15 .065 .7],'BackgroundColor',bg2, ...
+    'ForegroundColor','w','HorizontalAlignment','left','FontSize',11);
+S.hPrevErrorBand=uicontrol(S.hPrevROIControls,'Style','popupmenu','String',{'SEM','SD','None'}, ...
+    'Units','normalized','Position',[.08 .14 .10 .76],'BackgroundColor',C.editBg, ...
+    'ForegroundColor','w','FontSize',11,'Callback',@onROIPlotDisplayChanged, ...
+    'TooltipString','SEM = SD / sqrt(n); SD shows between-animal spread. Display only.');
+S.hPrevTCView=uicontrol(S.hPrevROIControls,'Style','popupmenu', ...
+    'String',{'Group mean','Group mean + animals','Animals only'}, ...
+    'Units','normalized','Position',[.19 .14 .23 .76],'BackgroundColor',C.editBg, ...
+    'ForegroundColor','w','FontSize',11,'Callback',@onROIPlotDisplayChanged);
+S.hPrevAnimalCondition=uicontrol(S.hPrevROIControls,'Style','popupmenu', ...
+    'String',{'Both conditions','Condition A only','Condition B only'}, ...
+    'UserData',{'Both conditions','CondA','CondB'},'Tag','GroupROI_AnimalCondition', ...
+    'Units','normalized','Position',[.43 .14 .22 .76],'BackgroundColor',C.editBg, ...
+    'ForegroundColor','w','FontSize',11,'Callback',@onROIPlotDisplayChanged, ...
+    'TooltipString',['Filters individual animal curves by the row Condition. Blank conditions use the Group assignment. ' ...
+        'Group means, bottom dots and statistics stay unchanged.']);
+S.hPrevChooseAnimals=mkBtn(S.hPrevROIControls,'Choose animals...',[.66 .12 .20 .78], ...
+    C.btnSecondary,@onChooseROIAnimals);
+S.hPrevAnimalSelection=uicontrol(S.hPrevROIControls,'Style','text','String','All animals', ...
+    'Units','normalized','Position',[.87 .15 .12 .7],'BackgroundColor',bg2, ...
+    'ForegroundColor','w','FontSize',10,'HorizontalAlignment','left');
+set(S.ax1,'Position',[.095 .40 .850 .245]);
+
 %%% =====================================================================
 %%% INITIALIZE
 %%% =====================================================================
 try, fcGACleanFinalLayout_20260624(S); fcGAFixRow2Overlap_FORCE_20260624(S); catch, end%INIT_FCGA_LAYOUT
 guidata(hFig,S);
+setappdata(hFig,'FUSIFCLoadBundles',@loadFCFileListIntoState);
 try, set(hFig,'WindowScrollWheelFcn',@onMapScrollWheel); catch, end
 updateManualTabs();
 refreshTable();
@@ -1260,6 +1318,7 @@ setStatusText('Ready. Modular main loaded.');
 
 try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
 drawnow;
+gaInstallEditSelection(hFig);
 
 %%% =====================================================================
 %%% CALLBACKS
@@ -1292,18 +1351,90 @@ drawnow;
 
     function onCellSelect(~,evt)
         S0 = guidata(hFig);
-        if isempty(evt) || ~isfield(evt,'Indices') || isempty(evt.Indices)
+        % MATLAB may supply an event object rather than a struct.
+        indices = [];
+        try, indices = evt.Indices; catch, end
+        if isempty(indices)
             S0.selectedRows = [];
         else
-            S0.selectedRows = unique(evt.Indices(:,1));
+            S0.selectedRows = unique(indices(:,1));
         end
         guidata(hFig,S0);
         updateSelLabel();
     end
 
-    function onCellEdit(~,~)
+    function onOpenROIFolder(~,~)
+        S0 = guidata(hFig);
+        sel = clampSelRows(S0.selectedRows,size(S0.subj,1));
+        if numel(sel)~=1, return; end
+        openROIFolderForRow(sel);
+    end
+
+    function openROIFolderForRow(row)
+        S0 = guidata(hFig);
+        if row<1 || row>size(S0.subj,1), return; end
+        roiPath = strtrimSafe(S0.subj{row,7});
+        if isempty(roiPath), return; end
+        folder = fileparts(roiPath);
+        if isempty(folder), folder = pwd; end
+        if ~isfolder(folder)
+            setStatusText(['ROI folder is unavailable: ' folder]);
+            return;
+        end
+        try
+            winopen(folder);
+            setStatusText(['Opened ROI folder: ' folder]);
+        catch ME
+            setStatusText(['Could not open ROI folder: ' ME.message]);
+        end
+    end
+
+    function installROIPathDoubleClick()
+        % CellSelectionCallback does not fire when a selected cell is clicked
+        % again. Listen to actual mouse clicks on the classic table instead.
+        S0 = guidata(hFig);
+        try
+            drawnow nocallbacks;
+            peer = matlab.graphics.internal.getFigureJavaFrame(hFig);
+            jt = findROIPathJavaTable(peer.getFigurePanelContainer);
+            if isempty(jt), return; end
+            mouse = handle(jt,'CallbackProperties');
+            set(mouse,'MouseClickedCallback',@onROIPathDoubleClick);
+            setappdata(S0.hTable,'GA_ROIPathMouseBridge',mouse);
+        catch ME
+            setappdata(S0.hTable,'GA_ROIPathMouseError',ME.message);
+        end
+    end
+
+    function onROIPathDoubleClick(~,evt)
+        if ~isgraphics(hFig), return; end
+        if double(evt.getClickCount())~=2 || double(evt.getButton())~=1, return; end
+        jt = evt.getSource();
+        column = double(jt.columnAtPoint(evt.getPoint()));
+        row = double(jt.rowAtPoint(evt.getPoint()));
+        if row<0 || column<0, return; end
+        % Resolve model indices even if columns have been moved or scrolled.
+        if double(jt.convertColumnIndexToModel(column))~=6, return; end
+        row = double(jt.convertRowIndexToModel(row))+1;
+        S0 = guidata(hFig);
+        if row>size(S0.subj,1), return; end
+        S0.selectedRows = row;
+        guidata(hFig,S0);
+        updateSelLabel();
+        openROIFolderForRow(row);
+    end
+
+    function onCellEdit(~,evt)
         syncSubjFromTable();
         S0 = guidata(hFig);
+        % Editing Group in the table must update its default A/B condition too.
+        if ~isempty(evt) && numel(evt.Indices)==2 && evt.Indices(2)==5
+            r=evt.Indices(1);
+            if r<=size(S0.subj,1)
+                c=mapConditionFromGroup(S0,S0.subj{r,3});
+                if ~isempty(c), S0.subj{r,4}=c; end
+            end
+        end
         S0 = sanitizeTableStruct(S0);
         S0 = ensureFCRowFilesSizeGA_TARGETED(S0);
         guidata(hFig,S0);
@@ -1393,6 +1524,22 @@ drawnow;
         refreshTable();
     end
 
+    function onAutoAssign(~,~)
+        syncSubjFromTable(); S0=guidata(hFig); rows=getTargetRows(S0);
+        for r=rows(:)'
+            fp=strtrimSafe(S0.subj{r,7});
+            if isempty(fp), fp=strtrimSafe(S0.subj{r,8}); end
+            if isempty(fp), fp=strtrimSafe(S0.subj{r,6}); end
+            if isempty(fp) && isfield(S0,'fcRowFiles') && numel(S0.fcRowFiles)>=r, fp=S0.fcRowFiles{r}; end
+            [g,c]=gaInferAssignment(fp);
+            S0.subj{r,3}=g; S0.subj{r,4}=c;
+        end
+        S0.lastROI=struct(); S0.lastMAP=struct(); S0.lastFC=struct();
+        S0=syncFCGroupsFromTable_TARGETED(S0);
+        guidata(hFig,S0); refreshTable(); clearPreview();
+        setStatusText(sprintf('Reassigned %d row(s). Unassigned labels need manual Group / Condition selection.',numel(rows)));
+    end
+
     function onAddCond(~,~)
         S0 = guidata(hFig);
         answ = inputdlg({'New condition name:'},'Add condition',1,{''});
@@ -1428,6 +1575,7 @@ drawnow;
         syncSubjFromTable();
         S0 = guidata(hFig);
         startPath = getSmartBrowseDir(S0);
+        if isfield(S0,'lastROIAddDir') && isfolder(S0.lastROIAddDir), startPath=S0.lastROIAddDir; end
         [f,p] = uigetfile({'*.mat;*.txt','MAT or TXT (*.mat, *.txt)'}, ...
             'Select DATA / ROI / bundle files',startPath,'MultiSelect','on');
         if isequal(f,0), return; end
@@ -1436,6 +1584,7 @@ drawnow;
             S0 = addFileSmartLight(S0,fullfile(p,f{i}));
         end
         S0.opt.startDir = p;
+        S0.lastROIAddDir = p;
         guidata(hFig,S0);
         refreshTable();
         setStatusText(sprintf('Added %d file(s).',numel(f)));
@@ -1648,10 +1797,50 @@ drawnow;
         updateManualTabs();
     end
 
-    function onROIChanged(~,~)
+    function onROIChanged(src,~)
+        % Editing the plateau duration explicitly selects the metric that
+        % uses it; otherwise the old default Robust Peak silently ignored it.
+        S0=guidata(hFig);
+        if isequal(src,S0.hPlatWin), set(S0.hTC_Metric,'Value',1); end
         S0 = readROISettingsFromUI(guidata(hFig));
+        windowEnable='off'; if strcmpi(S0.tc_metric,'Maximum plateau'), windowEnable='on'; end
+        if ~strcmp(get(S0.hPlatWin,'Enable'),windowEnable)
+            set(S0.hPlatWin,'Enable',windowEnable);
+        end
+        S0.lastROI=struct(); S0.outlierKeys={}; S0.outlierInfo={};
         guidata(hFig,S0);
         updatePreview();
+    end
+
+    function onROIPlotDisplayChanged(~,~)
+        S0=guidata(hFig);
+        items=get(S0.hPrevErrorBand,'String'); S0.tc_errorBand=items{get(S0.hPrevErrorBand,'Value')};
+        S0.tc_showSEM=~strcmpi(S0.tc_errorBand,'None'); set(S0.hShowSEM,'Value',S0.tc_showSEM);
+        items=get(S0.hPrevTCView,'String'); S0.tc_timecourseView=items{get(S0.hPrevTCView,'Value')};
+        choices=get(S0.hPrevAnimalCondition,'UserData');
+        S0.tc_animalCondition=choices{get(S0.hPrevAnimalCondition,'Value')};
+        guidata(hFig,S0); updatePreview();
+    end
+
+    function onChooseROIAnimals(~,~)
+        S0=guidata(hFig); T=S0.subj;
+        if ~isempty(T), T=T(cellfun(@(v)logical(v),T(:,1)),:); end
+        cat=GroupAnalysis_Common('roiAnimalCatalog',T);
+        if isempty(cat.keys), setStatusText('Add ROI data first to choose animals.'); return; end
+        initial=find(ismember(cat.keys,S0.tc_selectedAnimalKeys))+1;
+        if isempty(S0.tc_selectedAnimalKeys), initial=1; end
+        [pick,ok]=listdlg('ListString',[{'All animals'} cat.labels],'InitialValue',initial, ...
+            'SelectionMode','multiple','PromptString','Choose animals for the upper plot (statistics stay unchanged)', ...
+            'ListSize',[480 360],'Name','Animal time courses');
+        if ~ok||isempty(pick), return; end
+        if any(pick==1)
+            S0.tc_selectedAnimalKeys={}; label='All animals';
+        else
+            S0.tc_selectedAnimalKeys=cat.keys(pick-1); label=sprintf('%d selected',numel(pick));
+        end
+        set(S0.hPrevAnimalSelection,'String',label);
+        if get(S0.hPrevTCView,'Value')==1, set(S0.hPrevTCView,'Value',2); end
+        guidata(hFig,S0); onROIPlotDisplayChanged([],[]);
     end
 
     function onStyleChanged(~,~)
@@ -1661,7 +1850,15 @@ drawnow;
             S0.colorScheme = items{get(S0.hColorScheme,'Value')};
         catch
         end
-        try, S0.tc_showSEM = logical(get(S0.hShowSEM,'Value')); catch, end
+        try
+            S0.tc_showSEM=logical(get(S0.hShowSEM,'Value'));
+            if ~S0.tc_showSEM
+                set(S0.hPrevErrorBand,'Value',3); S0.tc_errorBand='None';
+            elseif get(S0.hPrevErrorBand,'Value')==3
+                set(S0.hPrevErrorBand,'Value',1); S0.tc_errorBand='SEM';
+            end
+        catch
+        end
         try, S0.tc_showInjectionBox = logical(get(S0.hShowInjBox,'Value')); catch, end
         guidata(hFig,S0);
         updatePreview();
@@ -2079,6 +2276,8 @@ S0.activeTab = 'MAP';
     function loadFCFileListIntoState(fileList)
         S0 = guidata(hFig);
         try, prevFCRowFiles_20260624 = S0.fcRowFiles; catch, prevFCRowFiles_20260624 = {}; end
+        originalSubjects=getappdata(hFig,'FCPeriodOriginalSubjects');
+        if ~isempty(originalSubjects)&&isfield(S0,'FC'),S0.FC.subjects=originalSubjects;end
         try, prevFCState_20260624 = S0.FC; catch, prevFCState_20260624 = struct(); end
         setStatus(false);
         setStatusText('Loading FC bundles...');
@@ -2088,7 +2287,8 @@ drawnow;
             [FC,cacheOut] = callFC('loadFCGroupBundlesFromFiles',fileList,S0.cache);
             S0.cache = cacheOut;
             S0.FC = fcga_merge_fc_state_keep_previous_20260624(prevFCState_20260624,FC);
-            S0.FC.loaded = true;
+            S0.FC.loaded = true;setappdata(hFig,'FCPeriodOriginalSubjects',S0.FC.subjects);
+            if isfield(S0,'hFCPeriod'),S0.hFCPeriod.Value=1;end
             S0 = attachFCGABundlesToTable_USE_ROW_20260624(S0,fileList,FC);
             S0 = fcga_restore_previous_fc_rows_20260624(S0,prevFCRowFiles_20260624);
             S0 = sanitizeTableStruct(S0);
@@ -2135,7 +2335,7 @@ drawnow;
         set(S0.hFCGroupA,'String',groups);
         set(S0.hFCGroupB,'String',groups);
         setPopupToString(S0.hFCGroupA,'PACAP');
-        setPopupToString(S0.hFCGroupB,'Vehicle');
+        setPopupToString(S0.hFCGroupB,'Control');
     end
 
     function onComputeGroupFC(~,~)
@@ -2157,6 +2357,17 @@ drawnow;
             try, GA_printErrorLocal(ME,'caught error in single-group FC compute'); catch, end
             try, set(S0.hFCInfo,'String',['FC ERROR: ' ME.message]); catch, end
             setStatusText(['FC ERROR: ' ME.message]);
+        end
+    end
+
+    function onFCPeriod(src,~)
+        S0=guidata(hFig);base=getappdata(hFig,'FCPeriodOriginalSubjects');if isempty(base),return;end
+        items=src.String;
+        try
+            S0.FC.subjects=fusiFCGroupSelectPeriod(base,items{src.Value});S0.lastFC=struct();guidata(hFig,S0);
+            refreshFCSlicePopup_CLEAN_20260617(hFig);refreshFCRegionPopups_SAFE_20260617(hFig);updateFCTabPreview([],[]);
+        catch ME
+            src.Value=1;S0.FC.subjects=base;guidata(hFig,S0);errordlg(ME.message,'FC time period');
         end
     end
 
@@ -2219,6 +2430,7 @@ drawnow;
 
     function onStatsChanged(~,~)
         S0 = guidata(hFig);
+        previousTest=S0.testType;previousAlpha=S0.alpha;
         try
             items = get(S0.hTest,'String');
             S0.testType = items{get(S0.hTest,'Value')};
@@ -2234,38 +2446,83 @@ drawnow;
         catch
         end
         try, S0.showPText = logical(get(S0.hShowPText,'Value')); catch, end
+        if ~strcmp(previousTest,S0.testType) || ~isequal(previousAlpha,S0.alpha)
+            S0.lastROI=struct(); % Export must not reuse a result from the previous test.
+        end
         guidata(hFig,S0);
         updatePreview();
     end
 
-    function onDetectOutliers(~,~)
-        S0 = guidata(hFig);
+    function onOutlierChanged(src,~)
+        S0=guidata(hFig);
+        items=get(S0.hOutMethod,'String'); method=items{get(S0.hOutMethod,'Value')};
+        if isequal(src,S0.hOutMethod)
+            if strcmpi(method,'IQR rule'),v=S0.outIQRk;
+            elseif strcmpi(method,'SD z-score (exploratory)'),v=S0.outSDthr;
+            else,v=S0.outMADthr;end
+            set(S0.hOutParam,'String',num2str(v));
+        end
+        S0.outlierMethod=method;
+        v=str2double(get(S0.hOutParam,'String'));
+        if strcmpi(method,'IQR rule'),S0.outIQRk=v;
+        elseif strcmpi(method,'SD z-score (exploratory)'),S0.outSDthr=v;
+        else,S0.outMADthr=v;end
+        S0.outlierKeys={}; S0.outlierInfo={};
+        guidata(hFig,S0); updateOutlierBox();
+    end
+
+    function ok=onDetectOutliers(~,~)
+        ok=false;
+        syncSubjFromTable(); onOutlierChanged([],[]);
+        S0 = readStatsSettingsFromUI(readROISettingsFromUI(guidata(hFig)));
         try
-            [keysOut,info] = callCommon('detectOutliers',double(S0.lastROI.metricVals(:)),S0.lastROI.subjTable,S0);
+            rows=findActiveROIRowsLocal(S0.subj);
+            if isempty(rows), error('No active ROI rows.'); end
+            screenSettings=S0;screenSettings.testType='None';
+            [S0.lastROI,S0.cache]=callCommon('runROITimecourseAnalysis',screenSettings,S0.subj(rows,:),S0.cache);
+            % Screening does not depend on being able to fit the selected test.
+            try
+                S0.lastROI.stats=callCommon('computeStats',S0.lastROI.metricVals,S0.lastROI.subjTable(:,3),S0,S0.lastROI.subjTable);
+                S0.lastROI.stats.pReport=gaFormatPValue(S0.lastROI.stats.p);
+            catch ME_stats
+                S0.lastROI.stats.warnings{end+1}=['Selected test unavailable during screening: ' ME_stats.message];
+            end
+            [keysOut,info,screen] = callCommon('detectOutliers',double(S0.lastROI.metricVals(:)),S0.lastROI.subjTable,S0);
             S0.outlierKeys = keysOut;
             S0.outlierInfo = info;
+            screen.statsBefore=S0.lastROI.stats;screen.metricSettings=S0.lastROI.metricSettings;
+            S0.outlierScreen=screen;
             guidata(hFig,S0);
-            updateOutlierBox();
-            updatePreview();
+            updateOutlierBox(); updatePreview();
+            ok=true;
         catch ME
-            try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
             errordlg(ME.message,'Outliers');
         end
     end
 
     function onExcludeOutliers(~,~)
+        % A failed recalculation must never exclude stale flags.
+        if ~onDetectOutliers([],[]),return;end
         syncSubjFromTable();
         S0 = guidata(hFig);
         if isempty(S0.outlierKeys)
             errordlg('No outliers detected.','Exclude outliers');
             return;
         end
+        reason=strtrim(get(S0.hOutReason,'String'));
+        if isempty(reason)
+            setStatusText('Enter an exclusion reason (prespecified criterion or technical/QC failure) before excluding flagged rows.');
+            uicontrol(S0.hOutReason);return;
+        end
+        event=S0.outlierScreen;event.exclusionReason=reason;
+        event.excludedAt=datestr(now,31);event.excludedKeys=S0.outlierKeys;
+        S0.outlierHistory{end+1}=event;
         keysAll = makeRowKeysLocal(S0.subj);
         for i = 1:numel(S0.outlierKeys)
             hit = find(strcmp(keysAll,S0.outlierKeys{i}),1,'first');
             if ~isempty(hit)
                 S0.subj{hit,1} = false;
-                S0.subj{hit,9} = 'EXCLUDED (outlier)';
+                S0.subj{hit,9} = sprintf('EXCLUDED (%s, threshold %g; %s)',event.method,event.threshold,reason);
             end
         end
         S0.lastROI = struct();
@@ -2273,7 +2530,7 @@ drawnow;
         guidata(hFig,S0);
         refreshTable();
         clearPreview();
-        setStatusText('Outliers excluded. Run analysis again.');
+        setStatusText('Reviewed flags excluded and screening snapshot retained. Run again; report the analysis with all animals too.');
     end
 
     function onRun(~,~)
@@ -2316,7 +2573,18 @@ S0.activeTab = 'PREV';
             guidata(hFig,S0);
             updateManualTabs();
             updatePreview();
-            setStatusText('ROI analysis complete.');
+            if isempty(R.missingMetricSubjects)
+                message=['ROI analysis complete. ' R.stats.type ' | ' R.stats.pReport];
+                if all(isfinite(R.stats.ci))
+                    message=[message sprintf(' | %s: %.3g (%.0f%% CI %.3g to %.3g)', ...
+                        R.stats.effectLabel,R.stats.effect,100*R.stats.confidenceLevel,R.stats.ci)];
+                end
+                setStatusText(message);
+            else
+                setStatusText(sprintf('ROI analysis complete; %d row(s) lack a valid metric window: %s', ...
+                    numel(R.missingMetricSubjects),strjoin(R.missingMetricSubjects,', ')));
+            end
+            if ~isempty(R.stats.warnings),setStatusText(strjoin(R.stats.warnings,' '));end
         catch ME
             if ~any(strcmp(ME.identifier,{'GroupAnalysis:MetricWindow','GroupAnalysis:MetricCoverage'}))
                 try, GA_printErrorLocal(ME,'caught error in GroupAnalysis.m'); catch, end
@@ -2440,6 +2708,7 @@ S0.activeTab = 'PREV';
                 set(S0.tabPREV,'Visible','on');
                 set(S0.hTabPREV,'BackgroundColor',tabOn);
         end
+        gaInstallEditSelection(hFig);
     end
 
     function refreshTable()
@@ -2474,6 +2743,7 @@ S0.activeTab = 'PREV';
         guidata(hFig,S0);
         updateSelLabel();
         updateMapSideSummaryTable();
+        installROIPathDoubleClick();
     end
 
     function syncSubjFromTable()
@@ -2499,12 +2769,28 @@ S0.activeTab = 'PREV';
         else
             set(S0.hSelInfo,'String',sprintf('Selected: %d row(s)',numel(sel)));
         end
+        roiPath = '';
+        if numel(sel)==1, roiPath = strtrimSafe(S0.subj{sel,7}); end
+        if ~isempty(roiPath)
+            set(S0.hROIPath,'String',roiPath,'TooltipString',roiPath,'Enable','on');
+            set(S0.hOpenROIFolder,'Enable','on','TooltipString',fileparts(roiPath));
+        else
+            if numel(sel)>1
+                message = 'Select one ROI row to see its full path.';
+            elseif ~isempty(sel)
+                message = 'This row has no ROI file.';
+            else
+                message = 'Select an ROI row to see its full path.';
+            end
+            set(S0.hROIPath,'String',message,'TooltipString','','Enable','off');
+            set(S0.hOpenROIFolder,'Enable','off','TooltipString','');
+        end
     end
 
     function updateOutlierBox()
         S0 = guidata(hFig);
         if isempty(S0.outlierInfo)
-            msg = {'No outliers detected yet.'};
+            msg = {'All animals retained by default. Flags require review; exclusions need a documented reason.'};
         else
             msg = S0.outlierInfo(:);
         end
@@ -2609,6 +2895,10 @@ try, S0 = readPlotScaleSettingsFromUI(S0); catch, end
                     end
                 end
                 setStatusText(message);
+                previewResult=getappdata(S0.ax2,'GroupROIResult');
+                if isstruct(previewResult)&&isfield(previewResult,'stats')&&isfield(previewResult.stats,'warnings')&&~isempty(previewResult.stats.warnings)
+                    setStatusText(strjoin(previewResult.stats.warnings,' '));
+                end
             catch
             end
 
@@ -3041,6 +3331,78 @@ h1 = uicontrol(parent,'Style','edit','String',num2str(v1), ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',cb);
 end
 
+function gaInstallEditSelection(fig)
+% Keep native mouse dragging / Ctrl+A; double-click selects the whole number,
+% including its sign and decimal part. Hidden tabs create their Java peers
+% when shown, so install once per peer without a timer or a preview redraw.
+edits=findall(fig,'Type','uicontrol','Style','edit');
+for k=1:numel(edits)
+    h=edits(k);
+    if ~isempty(getappdata(h,'GA_EditSelectionReady')),continue;end
+    set(h,'HorizontalAlignment','left');
+    tip=get(h,'TooltipString');
+    hint='Drag to select text; double-click or Ctrl+A selects the entire value. Press Enter to apply.';
+    if isempty(tip),tip=hint;else,tip=sprintf('%s\n%s',tip,hint);end
+    set(h,'TooltipString',tip);
+    setappdata(h,'GA_EditSelectionReady',true);
+end
+if ~usejava('swing'),return;end
+try
+    drawnow nocallbacks;
+    peer=matlab.graphics.internal.getFigureJavaFrame(fig);
+    bridges=gaBindEditSelection(peer.getFigurePanelContainer);
+    if ~isempty(bridges)
+        previous=getappdata(fig,'GA_EditSelectionBridges');
+        setappdata(fig,'GA_EditSelectionBridges',[previous bridges]);
+    end
+catch ME
+    % Native selection remains available if this MATLAB release has no peer.
+    setappdata(fig,'GA_EditSelectionError',ME.message);
+end
+end
+
+function bridges=gaBindEditSelection(component)
+bridges={};
+if isa(component,'javax.swing.JTextField') && ...
+        startsWith(class(component),'com.mathworks.hg.peer.EditTextPeer')
+    if isempty(component.getClientProperty('GA_EditSelectionInstalled'))
+        bridge=handle(component,'CallbackProperties');
+        if isempty(get(bridge,'MouseClickedCallback'))
+            set(bridge,'MouseClickedCallback',@gaEditSelectWholeValue);
+            component.putClientProperty('GA_EditSelectionInstalled',true);
+            bridges={bridge};
+        end
+    end
+    return;
+end
+try
+    children=component.getComponents();
+    for k=1:numel(children)
+        bridges=[bridges gaBindEditSelection(children(k))]; %#ok<AGROW>
+    end
+catch
+end
+end
+
+function gaEditSelectWholeValue(~,evt)
+if double(evt.getButton())~=1 || double(evt.getClickCount())~=2,return;end
+field=evt.getSource();
+if field.isEnabled() && field.isEditable()
+    field.selectAll();
+end
+end
+
+function gaSetEditString(h,value)
+% Reassigning String, even to the same value, clears the native selection.
+% Keep equivalent numeric formatting while syncing the other axis controls.
+text=num2str(value);current=get(h,'String');
+if ischar(current) && (strcmp(current,text) || ...
+        (isscalar(value) && isfinite(value) && isequal(str2double(current),value)))
+    return;
+end
+set(h,'String',text);
+end
+
 function s = strtrimSafe(x)
 try
     if isempty(x)
@@ -3207,6 +3569,21 @@ for i = 1:n
 end
 end
 
+function jt = findROIPathJavaTable(component)
+% Identify the subject table among the other tables in the Group Analysis GUI.
+jt = [];
+if isa(component,'javax.swing.JTable') && component.getColumnCount()==10 ...
+        && contains(char(component.getColumnName(6)),'ROI path')
+    jt = component;
+    return;
+end
+try, children = component.getComponents; catch, return; end
+for k = 1:numel(children)
+    jt = findROIPathJavaTable(children(k));
+    if ~isempty(jt), return; end
+end
+end
+
 function V = makeUITableDisplayData(subj,minRows,fcRowFiles)
 if nargin < 2, minRows = 0; end
 if nargin < 3, fcRowFiles = cell(size(subj,1),1); end
@@ -3242,7 +3619,7 @@ for i = 1:n
     V{i,4}  = displayScanID(meta.scanID);
     V{i,5}  = strtrimSafe(subj{i,3});
     V{i,6}  = strtrimSafe(subj{i,4});
-    V{i,7}  = simplifyFileLabel(strtrimSafe(subj{i,7}));
+    V{i,7}  = strtrimSafe(subj{i,7});
     V{i,8}  = bundlePresenceLabel(strtrimSafe(subj{i,8}));
     V{i,9}  = bundlePresenceLabel(strtrimSafe(fcRowFiles{i}));
     V{i,10} = deriveRowStatusWithFC_TARGETED(subj(i,:),fcRowFiles{i});
@@ -3360,6 +3737,7 @@ end
 function c = mapConditionFromGroup(S,g)
 c = '';
 g0 = upper(strtrimSafe(g));
+if strcmp(g0,'UNASSIGNED'), c='Unassigned'; return; end
 try
     if isa(S.groupToCondMap,'containers.Map') && isKey(S.groupToCondMap,g0)
         c = S.groupToCondMap(g0);
@@ -3367,11 +3745,8 @@ try
     end
 catch
 end
-if contains(g0,'PACAP') || contains(g0,'GROUPA') || strcmp(g0,'A')
-    c = 'CondA';
-elseif contains(g0,'VEH') || contains(g0,'CONTROL') || contains(g0,'GROUPB') || strcmp(g0,'B')
-    c = 'CondB';
-end
+[~,inferred] = gaInferAssignment(g0);
+if ~strcmp(inferred,'Unassigned'), c=inferred; end
 end
 
 function d = getSmartBrowseDir(S)
@@ -3415,6 +3790,7 @@ gdef = getDefaultGroupLocal(S);
 cdef = getDefaultCondLocal(S);
 
 if strcmp(ext,'.txt')
+    [gdef,cdef]=gaInferAssignment(fp);
     row = {true,subj,gdef,cdef,subj,'',fp,'',''};
     S.subj(end+1,:) = row;
 elseif strcmp(ext,'.mat')
@@ -3555,6 +3931,9 @@ end
 end
 
 function S = readPreviewAxisControlsLocal(S)
+try, items=get(S.hPrevErrorBand,'String'); S.tc_errorBand=items{get(S.hPrevErrorBand,'Value')}; catch, end
+try, items=get(S.hPrevTCView,'String'); S.tc_timecourseView=items{get(S.hPrevTCView,'Value')}; catch, end
+try, choices=get(S.hPrevAnimalCondition,'UserData'); S.tc_animalCondition=choices{get(S.hPrevAnimalCondition,'Value')}; catch, end
 try, S.previewConnectAnimals=logical(get(S.hPrevConnectAnimals,'Value')); catch, end
 % Reads ROI-tab Y controls first, then optional compact Preview-tab overrides.
 try, S.plotTop.auto      = logical(get(S.hTopAuto,'Value')); catch, end
@@ -3579,13 +3958,13 @@ if isfinite(v)
     S.plotTop.auto = false;
     S.plotTop.ymax = v;
     try, set(S.hTopAuto,'Value',0); catch, end
-    try, set(S.hTopYmax,'String',num2str(v)); catch, end
+    try, gaSetEditString(S.hTopYmax,v); catch, end
 end
 
 v = previewAxisNumLocal(S,'hPrevTopStep');
 if isfinite(v) && v >= 0
     S.plotTop.step = v;
-    try, set(S.hTopStep,'String',num2str(v)); catch, end
+    try, gaSetEditString(S.hTopStep,v); catch, end
 end
 
 v = previewAxisNumLocal(S,'hPrevBotYmax');
@@ -3593,13 +3972,13 @@ if isfinite(v)
     S.plotBot.auto = false;
     S.plotBot.ymax = v;
     try, set(S.hBotAuto,'Value',0); catch, end
-    try, set(S.hBotYmax,'String',num2str(v)); catch, end
+    try, gaSetEditString(S.hBotYmax,v); catch, end
 end
 
 v = previewAxisNumLocal(S,'hPrevBotStep');
 if isfinite(v) && v >= 0
     S.plotBot.step = v;
-    try, set(S.hBotStep,'String',num2str(v)); catch, end
+    try, gaSetEditString(S.hBotStep,v); catch, end
 end
 
 x0 = previewAxisNumLocal(S,'hPrevXMin');
@@ -3658,11 +4037,13 @@ try, S.tc_peakSearchMin0 = safeNum(get(S.hPkS0,'String'),S.tc_peakSearchMin0); c
 try, S.tc_peakSearchMin1 = safeNum(get(S.hPkS1,'String'),S.tc_peakSearchMin1); catch, end
 try, S.tc_plateauMin0 = safeNum(get(S.hPlat0,'String'),S.tc_plateauMin0); catch, end
 try, S.tc_plateauMin1 = safeNum(get(S.hPlat1,'String'),S.tc_plateauMin1); catch, end
+try, S.tc_plateauWinMin = str2double(get(S.hPlatWin,'String')); catch, end
 try, S.tc_peakWinMin = safeNum(get(S.hTC_PeakWin,'String'),S.tc_peakWinMin); catch, end
 try, S.tc_trimPct = safeNum(get(S.hTC_Trim,'String'),S.tc_trimPct); catch, end
 try
     items = get(S.hTC_Metric,'String');
     S.tc_metric = items{get(S.hTC_Metric,'Value')};
+    if strcmp(S.tc_metric,'Fixed interval mean'), S.tc_metric='Plateau'; end
 catch
 end
 end
@@ -3718,12 +4099,12 @@ if S.plotBot.ymax <= S.plotBot.ymin
     S.plotBot.ymax = S.plotBot.ymin + max(1,S.plotBot.step);
 end
 
-try, set(S.hTopStep,'String',num2str(S.plotTop.step)); catch, end
-try, set(S.hTopYmin,'String',num2str(S.plotTop.ymin)); catch, end
-try, set(S.hTopYmax,'String',num2str(S.plotTop.ymax)); catch, end
-try, set(S.hBotStep,'String',num2str(S.plotBot.step)); catch, end
-try, set(S.hBotYmin,'String',num2str(S.plotBot.ymin)); catch, end
-try, set(S.hBotYmax,'String',num2str(S.plotBot.ymax)); catch, end
+try, gaSetEditString(S.hTopStep,S.plotTop.step); catch, end
+try, gaSetEditString(S.hTopYmin,S.plotTop.ymin); catch, end
+try, gaSetEditString(S.hTopYmax,S.plotTop.ymax); catch, end
+try, gaSetEditString(S.hBotStep,S.plotBot.step); catch, end
+try, gaSetEditString(S.hBotYmin,S.plotBot.ymin); catch, end
+try, gaSetEditString(S.hBotYmax,S.plotBot.ymax); catch, end
 end
 
 function applyPreviewLightDarkToUI(S)
@@ -3747,10 +4128,11 @@ end
 
 try, set(S.hPrevBG,'BackgroundColor',bgMain); catch, end
 try, set(S.hPrevTop,'BackgroundColor',bgTop,'ForegroundColor',fg); catch, end
+try, set(S.hPrevROIControls,'BackgroundColor',bgTop); catch, end
 try, set(S.ax1,'Color',bgMain,'XColor',fg,'YColor',fg); catch, end
 try, set(S.ax2,'Color',bgMain,'XColor',fg,'YColor',fg); catch, end
 
-btns = {'hPrevExportTop','hPrevExportBot','hPrevExportBoth'};
+btns = {'hPrevExportTop','hPrevExportBot','hPrevExportBoth','hPrevChooseAnimals'};
 for kk = 1:numel(btns)
     try
         h = S.(btns{kk});
@@ -3761,7 +4143,7 @@ for kk = 1:numel(btns)
     end
 end
 
-texts = {'hPrevLblView','hPrevLblWin'};
+texts = {'hPrevLblView','hPrevLblWin','hPrevROILabel','hPrevAnimalSelection'};
 for kk = 1:numel(texts)
     try
         h = S.(texts{kk});
@@ -3772,7 +4154,7 @@ for kk = 1:numel(texts)
     end
 end
 
-edits = {'hPrevStyle','hSmoothWin','hPrevColorA','hPrevColorB','hPrevPairColor'};
+edits = {'hPrevStyle','hSmoothWin','hPrevColorA','hPrevColorB','hPrevPairColor','hPrevErrorBand','hPrevTCView','hPrevAnimalCondition'};
 for kk = 1:numel(edits)
     try
         h = S.(edits{kk});
@@ -3981,7 +4363,7 @@ function keys = makeRowKeysLocal(tbl)
 n = size(tbl,1);
 keys = cell(n,1);
 for i = 1:n
-    keys{i} = [strtrimSafe(tbl{i,2}) '|' strtrimSafe(tbl{i,3}) '|' strtrimSafe(tbl{i,4}) '|' strtrimSafe(tbl{i,5})];
+    keys{i} = strjoin(cellfun(@strtrimSafe,tbl(i,2:8),'UniformOutput',false),'|');
 end
 end
 
@@ -4284,6 +4666,7 @@ try, set(get(ax,'XLabel'),'Color',fgCol,'FontName','Arial','FontWeight','bold');
 try, set(get(ax,'YLabel'),'Color',fgCol,'FontName','Arial','FontWeight','bold'); catch, end
 
 R = ga_get_roi_preview_data(S);
+setappdata(ax,'GroupROIResult',R);
 
 if isempty(R) || ~isstruct(R)
     text(ax,0.5,0.5,{'No ROI data found.','Check that active rows have ROI TXT files in the ROI File column.'}, ...
@@ -4304,179 +4687,11 @@ drawnow limitrate; catch, end
 end
 
 function R = ga_get_roi_preview_data(S)
-R = [];
-try
-    if isfield(S,'lastROI') && isstruct(S.lastROI) && ~isempty(fieldnames(S.lastROI))
-        LR = S.lastROI;
-        if isfield(LR,'tMin') && isfield(LR,'group') && ~isempty(LR.group)
-            R = LR;
-            return;
-        end
-    end
-catch
-end
-
-R = ga_build_roi_preview_from_txt(S);
-end
-
-function R = ga_build_roi_preview_from_txt(S)
-R = [];
-if ~isfield(S,'subj') || isempty(S.subj)
-    return;
-end
-subj = S.subj;
-if ~iscell(subj) || size(subj,2) < 7
-    return;
-end
-
-rows = [];
-for r = 1:size(subj,1)
-    useRow = true;
-    try, useRow = ga_bool(subj{r,1}); catch, useRow = true; end
-    roiFile = '';
-    try, roiFile = strtrim(char(subj{r,7})); catch, roiFile = ''; end
-    if useRow && ~isempty(roiFile) && exist(roiFile,'file') == 2
-        rows(end+1) = r; %#ok<AGROW>
-    end
-end
-
-if isempty(rows)
-    return;
-end
-
-n = numel(rows);
-tCell = cell(n,1);
-yCell = cell(n,1);
-grp = cell(n,1);
-subjName = cell(n,1);
-
-for i = 1:n
-    r = rows(i);
-    roiFile = strtrim(char(subj{r,7}));
-    [ok,tMin,psc] = ga_read_roi_txt(roiFile);
-    if ~ok
-        tCell{i} = [];
-        yCell{i} = [];
-    else
-        tCell{i} = tMin(:)';
-        yCell{i} = psc(:)';
-    end
-
-    try, grp{i} = strtrim(char(subj{r,3})); catch, grp{i} = ''; end
-    if isempty(grp{i}), grp{i} = 'GroupA'; end
-
-    try, subjName{i} = strtrim(char(subj{r,2})); catch, subjName{i} = ''; end
-    if isempty(subjName{i}), subjName{i} = sprintf('S%d',i); end
-end
-
-okTrace = false(n,1);
-for i = 1:n
-    okTrace(i) = numel(tCell{i}) >= 3 && numel(yCell{i}) == numel(tCell{i});
-end
-
-if ~any(okTrace)
-    return;
-end
-
-rows = rows(okTrace);
-tCell = tCell(okTrace);
-yCell = yCell(okTrace);
-grp = grp(okTrace);
-subjName = subjName(okTrace);
-n = numel(tCell);
-
-t0 = inf;
-% GA_UNEQUAL_SCAN_LENGTH_PREVIEW_FIX_20260903
-% Match analysis: preserve the full available range, with NaN outside each scan.
-t1 = -inf;
-dtList = [];
-for i = 1:n
-    t = tCell{i};
-    t0 = min(t0,min(t));
-    % Keep the latest available endpoint across subjects.
-t1 = max(t1,max(t));
-    d = diff(t);
-    d = d(isfinite(d) & d > 0);
-    dtList = [dtList d(:)']; %#ok<AGROW>
-end
-
-if ~isfinite(t0) || ~isfinite(t1) || t1 <= t0
-    tCommon = tCell{1};
-else
-    dt = median(dtList);
-    if ~isfinite(dt) || dt <= 0
-        dt = 0.1;
-    end
-    tCommon = t0:dt:t1;
-end
-
-X = nan(n,numel(tCommon));
-for i = 1:n
-    try
-        X(i,:) = interp1(tCell{i},yCell{i},tCommon,'linear',NaN);
-    catch
-    end
-end
-
-gNames = ga_unique_stable(grp);
-gNames = ga_sort_groups(gNames);
-
-G = struct([]);
-for g = 1:numel(gNames)
-    idx = strcmpi(grp,gNames{g});
-    mu = ga_nanmean(X(idx,:),1);
-    sd = ga_nanstd(X(idx,:),0,1);
-    nn = sum(isfinite(X(idx,:)),1);
-    se = sd ./ sqrt(max(1,nn));
-    se(nn<2) = NaN;
-    G(g).name = gNames{g};
-    G(g).mean = mu;
-    G(g).sem = se;
-    G(g).n = sum(idx);
-end
-
-m0 = NaN; m1 = NaN;
-try, if isfield(S,'tc_plateauMin0'), m0 = double(S.tc_plateauMin0); end, catch, end
-try, if isfield(S,'tc_plateauMin1'), m1 = double(S.tc_plateauMin1); end, catch, end
-if ~isfinite(m0) || ~isfinite(m1) || m1 <= m0
-    m0 = 6; m1 = 9;
-end
-metricVals = nan(size(X,1),1);
-usePeak = strcmpi(gaPrevField(S,'tc_metric','Robust Peak'),'Robust Peak');
-for ii=1:size(X,1)
-    if usePeak
-        metricVals(ii)=GroupAnalysis_Common('robustPeak',X(ii,:),tCommon, ...
-            gaPrevField(S,'tc_peakSearchMin0',6),gaPrevField(S,'tc_peakSearchMin1',9), ...
-            gaPrevField(S,'tc_peakWinMin',1),gaPrevField(S,'tc_trimPct',10));
-    else
-        metricVals(ii)=GroupAnalysis_Common('plateauMean',X(ii,:),tCommon,m0,m1);
-    end
-end
-
-stats = struct('p',NaN,'alpha',0.05,'type','Welch fallback');
-if numel(gNames) >= 2
-    a = metricVals(strcmpi(grp,gNames{1}));
-    b = metricVals(strcmpi(grp,gNames{2}));
-    stats.p = ga_welch_p(a,b);
-end
-
-R = struct();
-R.mode = 'ROI Timecourse';
-R.tMin = tCommon;
-R.group = G;
-R.groupNames = gNames;
-R.groupDisplayNames = ga_display_group_names(gNames);
-R.metricVals = metricVals;
-if usePeak
-    R.metricName = sprintf('Robust peak (%.1f-%.1f min)',gaPrevField(S,'tc_peakSearchMin0',6),gaPrevField(S,'tc_peakSearchMin1',9));
-else
-    R.metricName = sprintf('Plateau mean (%.1f-%.1f min)',m0,m1);
-end
-R.stats = stats;
-R.subjTable = subj(rows,:);
-R.subjectNames = subjName;
-R.rawX = X;
-R.rawGroups = grp;
+% Preview and Run use the same normalization, grid, metrics and statistics.
+R=[];
+rows=findActiveROIRowsLocal(S.subj);
+if isempty(rows), return; end
+[R,~]=GroupAnalysis_Common('runROITimecourseAnalysis',S,S.subj(rows,:),S.cache);
 end
 
 function ga_plot_roi_top(ax,R,S,fgCol,bgCol,lineW,shadeA,colA,colB)
@@ -4486,57 +4701,19 @@ if isempty(t) || ~isfield(R,'group') || isempty(R.group)
     return;
 end
 
-allY = [];
-lineHs = [];
-leg = {};
-
-for g = 1:numel(R.group)
-    if g == 1, cc = colA; else, cc = colB; end
-    try
-        nm = lower(char(R.group(g).name));
-        if ~isempty(strfind(nm,'veh')) || ~isempty(strfind(nm,'control')), cc = colB; end
-        if ~isempty(strfind(nm,'pacap')), cc = colA; end
-    catch
-    end
-
-    y = double(R.group(g).mean(:)');
-    e = double(R.group(g).sem(:)');
-    if isempty(y) || numel(y) ~= numel(t)
-        continue;
-    end
-
-    if gaPrevField(S,'tc_previewSmooth',false)
-        try
-            dtSec = median(diff(t))*60;
-            y = gaPrevSmooth(y,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
-            e = gaPrevSmooth(e,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
-        catch
-        end
-    end
-
-    if gaPrevField(S,'tc_showSEM',true) && ~isempty(e) && numel(e) == numel(y)
-        up = y + e;
-        dn = y - e;
-        GroupAnalysis_Common('drawSEM',ax,t,y,e,cc,shadeA);
-        allY = [allY up(:)' dn(:)']; %#ok<AGROW>
-    end
-
-    dispName = R.group(g).name;
-    try
-        if isfield(R,'groupDisplayNames') && numel(R.groupDisplayNames) >= g
-            dispName = R.groupDisplayNames{g};
-        end
-    catch
-    end
-
-    hLine = plot(ax,t,y,'Color',cc,'LineWidth',lineW,'DisplayName',dispName);
-    lineHs = [lineHs hLine]; %#ok<AGROW>
-    leg{end+1} = sprintf('%s (n=%d)',dispName,R.group(g).n); %#ok<AGROW>
-    allY = [allY y(:)']; %#ok<AGROW>
+colors=zeros(numel(R.group),3);
+for g=1:numel(R.group)
+    if g==1, cc=colA; else, cc=colB; end
+    nm=lower(char(R.group(g).name));
+    if contains(nm,'control')||contains(nm,'veh'), cc=colB; end
+    if contains(nm,'pacap'), cc=colA; end
+    colors(g,:)=cc;
 end
+[allY,lineHs,leg]=GroupAnalysis_Common('drawROITimecourseCurves',ax,R,S,colors,lineW,shadeA);
 
 xlabel(ax,'Time (min)','Color',fgCol,'FontWeight','bold');
-ylabel(ax,'PSC (%)','Color',fgCol,'FontWeight','bold');
+if R.unitsPercent, yLabel='PSC (%)'; else, yLabel='Signal'; end
+ylabel(ax,yLabel,'Color',fgCol,'FontWeight','bold');
 title(ax,'','Color',fgCol,'FontWeight','bold');
 
 ga_apply_preview_x(ax,t,S);
@@ -4545,7 +4722,7 @@ ga_draw_injection_box_final(ax,S,fgCol,bgCol);
 
 try
     if ~isempty(lineHs)
-        lg = legend(ax,lineHs,leg,'Location','northeast','Box','off');
+        lg = legend(ax,lineHs,leg,'Location','northeast','Box','off','Interpreter','none');
         set(lg,'TextColor',fgCol,'Color',bgCol,'EdgeColor','none');
     end
 catch
@@ -4654,7 +4831,8 @@ end
 set(ax,'XTick',1:numel(gNames),'XTickLabel',dispNames,'FontSize',11);
 try, xtickangle(ax,20); catch, end
 xlabel(ax,'','Color',fgCol);
-ylabel(ax,'PSC (%)','Color',fgCol,'FontWeight','bold');
+if R.unitsPercent, yLabel='PSC (%)'; else, yLabel='Signal'; end
+ylabel(ax,yLabel,'Color',fgCol,'FontWeight','bold');
 title(ax,'','Color',fgCol,'FontWeight','bold');
 xlim(ax,[0.4 numel(gNames)+0.6]);
 
@@ -4662,19 +4840,6 @@ gaPrevApplyY(ax,allY,gaPrevField(S,'plotBot',struct('auto',true,'forceZero',fals
 
 try, legend(ax,'off'); catch, end
 try, delete(findall(ax,'Type','errorbar')); catch, end
-
-try
-    if isfield(R,'stats') && isfield(R.stats,'p') && isfinite(R.stats.p) && numel(gNames) >= 2
-        yl = ylim(ax);
-        y = yl(2) - 0.08*(yl(2)-yl(1));
-        p = R.stats.p;
-        stars = ga_stars(p);
-        text(ax,mean([1 2]),y,sprintf('%s   p = %.3g',stars,p), ...
-            'Color',fgCol,'FontName','Arial','FontSize',12,'FontWeight','bold', ...
-            'HorizontalAlignment','center','VerticalAlignment','top');
-    end
-catch
-end
 
 try
     ga_draw_sig_bar_lower_plot(ax,R,S,fgCol,numel(gNames));
@@ -4716,6 +4881,7 @@ if fid < 0, return; end
 cleanupObj = onCleanup(@()fclose(fid)); %#ok<NASGU>
 
 inData = false;
+isThreeColumn = false;
 isRebased = false;
 baselineSec = [NaN NaN];
 
@@ -4766,8 +4932,9 @@ while true
     vals = sscanf(ln,'%f');
 
     if numel(vals) >= 3
-        % SCM format: time_sec, time_min, PSC
-        tMin(end+1,1) = vals(2); %#ok<AGROW>
+        % SCM format: time_sec, time_min, PSC (seconds retain more precision).
+        isThreeColumn = true;
+        tMin(end+1,1) = vals(1)/60; %#ok<AGROW>
         psc(end+1,1)  = vals(3); %#ok<AGROW>
     elseif numel(vals) == 2
         % Legacy two-column fallback.
@@ -4776,7 +4943,7 @@ while true
     end
 end
 
-keep = isfinite(tMin) & isfinite(psc);
+keep = isfinite(tMin);
 tMin = double(tMin(keep));
 psc  = double(psc(keep));
 
@@ -4785,7 +4952,7 @@ if isempty(tMin)
 end
 
 % Two-column files may occasionally store seconds.
-if max(tMin) > 300
+if ~isThreeColumn && max(tMin) > 300
     tMin = tMin ./ 60;
 end
 
@@ -4958,7 +5125,7 @@ for i = 1:numel(g)
     if ~isempty(strfind(s,'PACAP'))
         d{i} = 'PACAP';
     elseif ~isempty(strfind(s,'VEH')) || ~isempty(strfind(s,'CONTROL'))
-        d{i} = 'Vehicle';
+        d{i} = 'Control';
     end
 end
 end
@@ -5052,23 +5219,7 @@ function gaPrevTop(ax,R,S,styleName)
 [~,fg] = gaPrevColors(styleName);
 hold(ax,'on');
 t = double(R.tMin(:)');
-allY = [];
-for g = 1:numel(R.group)
-    y = double(R.group(g).mean(:)');
-    e = double(R.group(g).sem(:)');
-    if gaPrevField(S,'tc_previewSmooth',false)
-        dtSec = median(diff(t))*60;
-        y = gaPrevSmooth(y,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
-        e = gaPrevSmooth(e,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
-    end
-    col = gaPrevGroupColor(R,R.group(g).name,g);
-    if gaPrevField(S,'tc_showSEM',true) && numel(e)==numel(y)
-        GroupAnalysis_Common('drawSEM',ax,t,y,e,col,gaPrevField(S,'displaySemAlpha',0.25));
-        allY = [allY y+e y-e];
-    end
-    plot(ax,t,y,'Color',col,'LineWidth',2.4,'DisplayName',gaPrevDisplayName(R,g));
-    allY = [allY y(:)'];
-end
+[allY,lineHs,leg]=GroupAnalysis_Common('drawROITimecourseCurves',ax,R,S,[],2.4,gaPrevField(S,'displaySemAlpha',0.25));
 xlabel(ax,'Time (min)','Color',fg,'FontWeight','bold');
 if isfield(R,'unitsPercent') && R.unitsPercent, ylabel(ax,'% signal change','Color',fg,'FontWeight','bold'); else, ylabel(ax,'Signal','Color',fg,'FontWeight','bold'); end
 title(ax,'','Color',fg,'FontWeight','bold');
@@ -5086,7 +5237,7 @@ if gaPrevField(S,'tc_showInjectionBox',true)
         try, uistack(hp,'bottom'); catch, end
     end
 end
-try, legend(ax,'Location','best','TextColor',fg,'Color','none','Box','off'); catch, end
+try, if ~isempty(lineHs), legend(ax,lineHs,leg,'Location','best','TextColor',fg,'Color','none','Box','off','Interpreter','none'); end; catch, end
 hold(ax,'off');
 end
 
@@ -5119,13 +5270,7 @@ end
 
 function gaPrevStatsText(ax,R,S,styleName)
 [~,fg] = gaPrevColors(styleName);
-if ~isfield(R,'stats') || ~isfield(R.stats,'p'), return; end
-p = R.stats.p;
-if ~isfinite(p), return; end
-yl = ylim(ax); dy = yl(2)-yl(1); if ~isfinite(dy) || dy<=0, dy=1; end
-stars = gaPrevStars(p);
-x = mean(xlim(ax));
-text(ax,x,yl(2)-0.06*dy,sprintf('%s   p = %.3g',stars,p),'Color',fg,'FontWeight','bold','FontSize',12,'HorizontalAlignment','center','VerticalAlignment','top');
+gaDrawROISignificance(ax,R,S,fg);
 end
 
 function gaPrevClear(ax,styleName,showGrid)
@@ -5983,48 +6128,8 @@ catch
 end
 end
 
-function ga_draw_sig_bar_lower_plot(ax,R,S,fgCol,nGroups)
-% Replace old lower-plot "* p=..." text with a normal bracket between group A and B.
-if nargin < 5 || isempty(nGroups), nGroups = 2; end
-if isempty(ax) || ~ishandle(ax) || nGroups < 2, return; end
-if ~isstruct(R) || ~isfield(R,'stats') || ~isfield(R.stats,'p'), return; end
-p = double(R.stats.p);
-if ~isfinite(p), return; end
-txts = findall(ax,'Type','text');
-for ii = 1:numel(txts)
-    try
-        s = get(txts(ii),'String');
-        if iscell(s), s = strjoin(s,' '); end
-        s = strtrim(char(s));
-        sl = lower(s);
-        if ~isempty(strfind(sl,'p =')) || ~isempty(strfind(sl,'p=')) || strcmp(s,'*') || strcmp(s,'**') || strcmp(s,'***') || strcmpi(s,'n.s.')
-            delete(txts(ii));
-        end
-    catch
-    end
-end
-holdState = ishold(ax);
-hold(ax,'on');
-yl = ylim(ax);
-dy = yl(2) - yl(1);
-if ~isfinite(dy) || dy <= 0, dy = 1; end
-x1 = 1;
-x2 = 2;
-yBar = yl(2) - 0.16*dy;
-tickH = 0.035*dy;
-plot(ax,[x1 x1 x2 x2],[yBar-tickH yBar yBar yBar-tickH],'-','Color',fgCol,'LineWidth',1.8,'HandleVisibility','off');
-stars = ga_sig_stars_local(p);
-text(ax,(x1+x2)/2,yBar+0.060*dy,stars, ...
-    'Color',fgCol,'FontName','Arial','FontSize',15,'FontWeight','bold', ...
-    'HorizontalAlignment','center','VerticalAlignment','middle','HandleVisibility','off');
-showP = true;
-try, if isfield(S,'showPText'), showP = logical(S.showPText); end, catch, end
-if showP
-    text(ax,(x1+x2)/2,yBar+0.028*dy,sprintf('p = %.3g',p), ...
-        'Color',fgCol,'FontName','Arial','FontSize',10,'FontWeight','bold', ...
-        'HorizontalAlignment','center','VerticalAlignment','middle','HandleVisibility','off');
-end
-if ~holdState, hold(ax,'off'); end
+function ga_draw_sig_bar_lower_plot(ax,R,S,fgCol,nGroups) %#ok<INUSD>
+gaDrawROISignificance(ax,R,S,fgCol);
 end
 
 function s = ga_sig_stars_local(p)
@@ -7812,6 +7917,8 @@ if contains(st,'excluded')
     s = 'Excluded';
 elseif ~use
     s = 'Not used';
+elseif strcmpi(strtrimSafe(row{3}),'Unassigned') || strcmpi(strtrimSafe(row{4}),'Unassigned')
+    s = 'Needs assignment';
 elseif ~isempty(roi) || ~isempty(bundle) || ~isempty(fcFile)
     s = 'OK';
 else
@@ -7848,13 +7955,7 @@ end
 end
 
 function g = inferGroupFromText_TARGETED(txt)
-g = 'Unassigned';
-u = upper(strtrimSafe(txt));
-if contains(u,'PACAP') || contains(u,'GROUPA') || contains(u,'CONDA')
-    g = 'PACAP';
-elseif contains(u,'VEH') || contains(u,'VEHICLE') || contains(u,'CONTROL') || contains(u,'PBS') || contains(u,'ACSF') || contains(u,'GROUPB') || contains(u,'CONDB')
-    g = 'Vehicle';
-end
+[g,~] = gaInferAssignment(strtrimSafe(txt));
 end
 
 function S = syncFCGroupsFromTable_TARGETED(S)
@@ -8070,6 +8171,7 @@ end
 
 % GA_FC_CALLFC_AUTOCOMPUTE_20260617_START
 function G = alignFCSubjectsToCommonROIs_SINGLE_DIRECT_20260617(FC)
+fusiFCValidateAtlasGroup(FC.subjects);
 % Local/direct equivalent of GroupAnalysis_FC('alignFCSubjectsToCommonROIs',FC).
 % Needed because appended helper functions cannot see nested callFC().
 if ~isfield(FC,'subjects') || isempty(FC.subjects)
@@ -8262,6 +8364,7 @@ end
 
 function G = alignFCSubjectsWithOptions_ADV_20260617(S)
 FC = S.FC;
+if isfield(FC,'subjects'),fusiFCValidateAtlasGroup(FC.subjects);end
 if ~isfield(FC,'subjects') || isempty(FC.subjects), error('No FC subjects loaded.'); end
 sliceMode = popupString_SINGLE_20260616(S,'hFCSlice','All slices');
 nSub = numel(FC.subjects);
@@ -8317,37 +8420,7 @@ end
 end
 
 function [Rmat,Zmat] = getFCMatricesForSlice_ADV_20260617(subj,sliceMode)
-% Uses subject-level R/Z by default; if sliceResults exist, can select/average slices.
-if nargin < 2 || isempty(sliceMode), sliceMode = 'All slices'; end
-useSlice = NaN;
-tok = regexp(sliceMode,'(\d+)','tokens','once');
-if ~isempty(tok), useSlice = str2double(tok{1}); end
-hasSlices = isfield(subj,'sliceResults') && ~isempty(subj.sliceResults);
-if hasSlices
-    SR = subj.sliceResults;
-    if isfinite(useSlice)
-        z = max(1,min(round(useSlice),numel(SR)));
-        [Rmat,Zmat] = getMatrixFromStruct_ADV_20260617(SR(z));
-        if ~isempty(Rmat), return; end
-    else
-        Zs = {};
-        Rs = {};
-        for zz = 1:numel(SR)
-            [Rz,Zz] = getMatrixFromStruct_ADV_20260617(SR(zz));
-            if ~isempty(Rz) && ~isempty(Zz)
-                Rs{end+1} = Rz; %#ok<AGROW>
-                Zs{end+1} = Zz; %#ok<AGROW>
-            end
-        end
-        if ~isempty(Zs)
-            Zcat = cat(3,Zs{:});
-            Zmat = mean3nan_SINGLE_20260616(Zcat);
-            Rmat = tanh(Zmat);
-            return;
-        end
-    end
-end
-[Rmat,Zmat] = getFCMatrices_SINGLE_DIRECT_20260617(subj);
+[Rmat,Zmat]=fusiFCGroupMatrix(subj,sliceMode);
 end
 
 function [Rmat,Zmat] = getMatrixFromStruct_ADV_20260617(X)
@@ -9267,6 +9340,7 @@ try
     fcGASetLabelPos_20260624(pTop,'Slice:',[0.735 row3 0.055 hLab],fsLab);
     try, if isfield(S,'hFCSlice') && ishghandle(S.hFCSlice), set(S.hFCSlice,'Parent',pTop,'Units','normalized','Position',[0.795 row3+0.010 0.125 hCtl],'FontSize',fsCtl); end, catch, end
 
+    if isfield(S,'hFCPeriod')&&isgraphics(S.hFCPeriod),fcGASetCtrlPos_20260624(S.hFCPeriod,pStrip,[.45 .165 .145 .650]);end
     % Bottom strip controls.
     hYLab = fcGAFindControlText_20260624(fig,'Y:','text');
     fcGASetCtrlPos_20260624(hYLab,pStrip,[0.010 0.170 0.030 0.650]);

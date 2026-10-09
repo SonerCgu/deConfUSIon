@@ -1,5 +1,6 @@
 function out = standardizedAnalysis(studioFig)
 % Programmatic preset query: steps = standardizedAnalysis('A') through ('G').
+deConfUSIon_setup();
 out=[];
 if nargin>0 && ischar(studioFig) && numel(studioFig)==1 && any(upper(studioFig)=='ABCDEFG')
     out=presetSteps(upper(studioFig)); return;
@@ -359,11 +360,20 @@ else
             'Units','normalized','Position',[0.04 y 0.55 0.062], ...
             'BackgroundColor',[0.060 0.065 0.095],'ForegroundColor',[0.95 0.98 1.00], ...
             'FontSize',13,'FontWeight','bold','HorizontalAlignment','left');
-        uicontrol(S.paramPanel,'Style','edit','String',num2str(st.(f)), ...
-            'Units','normalized','Position',[0.61 y 0.33 0.067], ...
-            'BackgroundColor',[0.12 0.13 0.17],'ForegroundColor',[1 1 1], ...
-            'FontSize',13,'FontWeight','bold', ...
-            'Callback',@(src,evt) editParam(src,evt,f));
+        if strcmp(f,'filterMethod')
+            family=st.(f); if ~isfinite(family), family=1; end
+            uicontrol(S.paramPanel,'Style','popupmenu','Tag','WorkflowFilterFamily', ...
+                'String',{'Butterworth','Chebyshev I','Chebyshev II','Elliptic','FIR','FFT'}, ...
+                'Value',max(1,min(6,round(family))),'Units','normalized','Position',[0.61 y 0.33 0.067], ...
+                'BackgroundColor',[0.12 0.13 0.17],'ForegroundColor',[1 1 1], ...
+                'FontSize',13,'Callback',@editFilterFamily);
+        else
+            uicontrol(S.paramPanel,'Style','edit','String',num2str(st.(f)), ...
+                'Units','normalized','Position',[0.61 y 0.33 0.067], ...
+                'BackgroundColor',[0.12 0.13 0.17],'ForegroundColor',[1 1 1], ...
+                'FontSize',13,'FontWeight','bold', ...
+                'Callback',@(src,evt) editParam(src,evt,f));
+        end
         y = y - dy;
     end
 end
@@ -380,10 +390,19 @@ if ~isfinite(v)
     set(src,'String',num2str(S.steps(r).(fieldName)));
     return;
 end
+
 S.steps(r).(fieldName) = sanitizeValue(fieldName,v);
 guidata(fig,S);
 refreshSelectedPanel(fig);
 refreshRows(fig);
+end
+
+function editFilterFamily(src,~)
+fig=ancestor(src,'figure'); S=guidata(fig);
+value=get(src,'Value'); S.steps(S.selectedRow).filterMethod=value;
+if value==5, S.steps(S.selectedRow).filterOrder=16;
+elseif value<5 && S.steps(S.selectedRow).filterOrder>12, S.steps(S.selectedRow).filterOrder=4; end
+guidata(fig,S); refreshSelectedPanel(fig); refreshRows(fig);
 end
 
 function onRunWorkflow(src,~)
@@ -590,6 +609,7 @@ end
 
 % Presets are kept editable even when the step is unticked.
 steps(5).filterType = 1; steps(5).fcLow = 0.001; steps(5).fcHigh = 0.20; steps(5).filterOrder = 4;
+steps(5).filterMethod=1; steps(5).filterRippleDb=.5; steps(5).filterAttenuationDb=60; steps(5).filterPreserveMean=1;
 steps(6).tempMode = 1; steps(6).tempWinSec = 60; steps(6).tempNsub = 50; steps(6).tempMethod = 1;
 steps(7).pcaicaMethod = 1; steps(7).pcaNcomp = 50; steps(7).icaNcomp = 30;
 % DECONF_OPTA_V1 : signal window + PCA auto-drop presets
@@ -619,6 +639,7 @@ st = struct('run',false,'order',0,'name','','desc','', ...
     'slices',NaN,'nsub',NaN,'base1',NaN,'base2',NaN, ...
     'cmin',NaN,'cmax',NaN,'amin',NaN,'amax',NaN, ...
     'filterType',NaN,'fcLow',NaN,'fcHigh',NaN,'filterOrder',NaN, ...
+    'filterMethod',NaN,'filterRippleDb',NaN,'filterAttenuationDb',NaN,'filterPreserveMean',NaN, ...
     'tempMode',NaN,'tempWinSec',NaN,'tempNsub',NaN,'tempMethod',NaN, ...
     'pcaicaMethod',NaN,'pcaNcomp',NaN,'icaNcomp',NaN, ...
     'sig1',NaN,'sig2',NaN,'pcaDropPC',NaN,'pcaAutoApply',NaN); % DECONF_OPTA_V1
@@ -667,7 +688,7 @@ switch lower(strtrim(st.name))
     case 'imregdemons'
         fields = {'nsub'};
     case 'filtering'
-        fields = {'filterType','fcLow','fcHigh','filterOrder'};
+        fields = {'filterType','filterMethod','fcLow','fcHigh','filterOrder','filterRippleDb','filterAttenuationDb','filterPreserveMean'};
     case 'temporal smoothing'
         fields = {'tempMode','tempWinSec','tempNsub','tempMethod'};
     case 'pca / ica'
@@ -691,7 +712,11 @@ labels.cmin = 'Display min (%)';
 labels.cmax = 'Display max (%)';
 labels.amin = 'Alpha mod min (%)';
 labels.amax = 'Alpha mod max (%)';
-labels.filterType = 'Filter type 1=band 2=low 3=high';
+labels.filterType = 'Type: 1=band 2=low 3=high 4=stop';
+labels.filterMethod = 'Filter family';
+labels.filterRippleDb='Final passband ripple (dB)';
+labels.filterAttenuationDb='Final stopband attenuation (dB)';
+labels.filterPreserveMean='Preserve baseline mean: 1=yes 0=no';
 labels.fcLow = 'Low cutoff Hz';
 labels.fcHigh = 'High cutoff Hz';
 labels.filterOrder = 'Filter order';
@@ -715,9 +740,15 @@ switch fieldName
     case 'nsub'
         v = round(max(1,min(1000,v)));
     case 'filterType'
-        v = round(max(1,min(3,v)));
+        v = round(max(1,min(4,v)));
+    case 'filterMethod'
+        v=round(max(1,min(6,v)));
+    case 'filterPreserveMean'
+        v=round(max(0,min(1,v)));
+    case {'filterRippleDb','filterAttenuationDb'}
+        v=max(.001,v);
     case 'filterOrder'
-        v = round(max(1,min(6,v)));
+        v = round(max(1,min(2000,v))); % Engine enforces family-specific limits.
     case 'tempMode'
         v = round(max(1,min(2,v)));
     case 'tempMethod'

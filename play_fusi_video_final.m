@@ -8,6 +8,7 @@ function fig = play_fusi_video_final( ...
 % ASCII only
 % =========================================================
 
+deConfUSIon_setup();
 disp('fps ='); disp(fps);
 disp('maxFPS ='); disp(maxFPS);
 
@@ -95,10 +96,21 @@ bgFileFull   = [];
 origI             = I;
 origI_interp      = I_interp;
 origPSC           = PSC;
+localBaselineReset=baseline;
+if isfield(baseline,'localBaseline'),localBaselineReset=baseline.localBaseline;end
 origBgDefaultFull = bgDefaultFull;
 
 % atlas state (SCM-style)
 state = struct();
+state.scanSequence=[];
+videoSequencePlan=[];sequenceStarted=false;videoExporting=false;
+state.videoUnderlayKey='';
+state.currentROIMapping=[];state.retainedUnderlay=[];state.originalScanKey='';
+if isfield(par,'scanSequence')||~(isfield(par,'videoInputIsPSC')&&par.videoInputIsPSC)
+    state.scanSequence=fusiScanSequence('init',par,origI,TR,fileLabel);
+    state.originalScanKey=state.scanSequence.originalKey;
+end
+state.physicalScale=true;state.sharpPixels=true;
 playbackUnderlayCache=[];
 playbackUnderlaySlice=0;
 displayGeometryKey=[];
@@ -116,6 +128,7 @@ state.stepMotorAtlasAtlasIdx = [];
 % 2D affine direction setting
 state.atlas2DWarpDirection = 'ask';
 state.isColorUnderlay = false;
+state.defaultUnderlayProcessed = false;
 if (nZ == 1) && ndims(bgDefaultFull) == 3 && size(bgDefaultFull,3) == 3
     state.isColorUnderlay = true;   % true RGB image for single-slice data
 elseif ndims(bgDefaultFull) == 4 && size(bgDefaultFull,3) == 3
@@ -124,6 +137,7 @@ end
 state.regionLabelUnderlay = [];
 state.regionColorLUT      = [];
 state.regionInfo          = struct();
+state.atlasDisplay3D=[];
 
 uState.mode       = 3;
 uState.brightness = -0.04;
@@ -205,7 +219,7 @@ statusLine = '';
 
 if exist('loadedMask','var') && ~isempty(loadedMask)
     try
-        [mask, maskIsInclude, bgDefaultFull, statusLine] = normalizeMaskInputForVideo( ...
+        [mask, maskIsInclude, bgDefaultFull, statusLine, state.defaultUnderlayProcessed] = normalizeMaskInputForVideo( ...
             loadedMask, loadedMaskIsInclude, bgDefaultFull, ...
             ny, nx, nZ, nVols, sliceIdx);
     catch ME
@@ -217,6 +231,7 @@ end
 origMask = mask;
 origMaskIsInclude = maskIsInclude;
 origBgDefaultFull = bgDefaultFull;
+origUnderlayProcessed = state.defaultUnderlayProcessed;
 
 if ndims(bgDefaultFull) == 3 && size(bgDefaultFull,3) == 3
     state.isColorUnderlay = true;
@@ -262,7 +277,7 @@ try, deConfUSIon_utils('deConfUSIon_force_fullscreen_fig',fig); catch, end
 
 set(fig,'DefaultUicontrolFontName','Arial');
 set(fig,'DefaultUicontrolFontSize',13);
-set(fig,'CloseRequestFcn',@onCloseVideo);
+set(fig,'CloseRequestFcn',@onCloseVideo,'DeleteFcn',@disposeVideoTimer);
 
 try
     delete(findall(fig,'Type','ColorBar'));
@@ -301,10 +316,11 @@ txtTitle = uicontrol(fig,'Style','text','Units','pixels', ...
     'FontSize',15,'FontWeight','bold', ...
     'HorizontalAlignment','center');
 
-info = uicontrol(fig,'Style','text','Units','pixels', ...
+hVideoInfo = uicontrol(fig,'Style','text','Units','pixels', ...
+    'Tag','VideoSequenceInfo', ...
     'ForegroundColor','w', ...
     'BackgroundColor','k', ...
-    'FontName','Courier New', ...
+    'FontName','Arial', ...
     'FontSize',13, ...
     'HorizontalAlignment','left');
 
@@ -456,10 +472,11 @@ mkBtn = @(pp,lbl,cbk,bgcol,fs) uicontrol(pp,'Style','pushbutton','String',lbl, .
 % -----------------------------
 lblFPS   = mkLbl(pVideo,'FPS');
 slFPS    = mkSlider(pVideo,1,maxFPS,fps,@fpsSliderChanged);
+set(slFPS,'Tag','VideoFPS');
 txtFPS   = mkValBox(pVideo,sprintf('%d',fps));
 
 lblVol   = mkLbl(pVideo,'Volume');
-slVol    = mkSlider(pVideo,1,nVols,1,@volSliderChanged);
+slVol    = mkSlider(pVideo,1,nVols,1,@volSliderChanged);set(slVol,'Tag','FUSIVideoVolume');
 txtVol   = mkValBox(pVideo,sprintf('%d / %d',1,nVols));
 
 lblEditor = mkLbl(pVideo,'Editor');
@@ -494,7 +511,10 @@ btnColor = mkBtn(pVideo,'Color...',@pickColor,[0.20 0.20 0.20],13);
 btnFill  = mkBtn(pVideo,'Fill (F)',@fillRegion,[0.20 0.20 0.20],13);
 btnClear = mkBtn(pVideo,'Clear mask',@clearMaskAll,[0.35 0.20 0.20],13);
 
-btnApplyAllMask = mkBtn(pVideo,'Apply mask to all volumes (this slice)',@applyMaskToAllFrames,[0.20 0.45 0.25],13);
+btnApplyAllMask = mkBtn(pVideo,'Copy mask: all frames',@applyMaskToAllFrames,[0.20 0.45 0.25],13);
+set(btnApplyAllMask,'Tag','VideoMaskAllFrames');
+btnApplyAllSlices = mkBtn(pVideo,'Copy mask: all slices + frames',@applyMaskToAllSlices,[0.20 0.45 0.25],13);
+set(btnApplyAllSlices,'Tag','VideoMaskAllSlices');
 btnLoadMask = mkBtn(pVideo,'Load mask / bundle',@loadMaskBundleCB,[0.45 0.28 0.70],13);
 btnSaveMask = mkBtn(pVideo,'Save mask (.mat)',@saveMaskMat,[0.10 0.35 0.95],13);
 btnSaveInterp = mkBtn(pVideo,'Save interpolated data (.mat)',@saveInterpolatedMat,[0.15 0.65 0.55],13);
@@ -507,8 +527,27 @@ popUSrc = mkPopup(pUnder,{'1) Default(bg)','2) Mean(I)','3) Median(I) robust','4
 
 lblUMode = mkLbl(pUnder,'Underlay mode');
 popUMode = mkPopup(pUnder,{'1) Legacy(mat2gray)','2) Robust(1-99%)','3) Video robust(0.5-99.5%)','4) Vessel enhance'},uState.mode,@underModeChanged);
+lblAtlasChoice=mkLbl(pUnder,'Atlas underlay');
+popAtlasChoice=mkPopup(pUnder,{'Load a saved atlas underlay first'},1,@atlasUnderlayChoiceCB);
+set(popAtlasChoice,'Tag','AtlasUnderlayChoice','Enable','off');
+cbRegionLabels=uicontrol(pUnder,'Style','checkbox','String','Region abbreviations','Value',0, ...
+    'ForegroundColor','w','BackgroundColor',[.08 .08 .08],'FontSize',12, ...
+    'Tag','AtlasRegionLabelsToggle','Callback',@updateRegionLabels);
+btnRegionList=mkBtn(pUnder,'Region list',@showRegionList,[.20 .38 .62],12);
+set(btnRegionList,'Tag','AtlasRegionListButton');
+lblRegionScheme=mkLbl(pUnder,'Region colors');
+popRegionScheme=mkPopup(pUnder,{'Atlas','Distinct','Pastel','Grayscale'},1,@regionAppearanceChanged);
+set(popRegionScheme,'Tag','AtlasRegionColorScheme');
+cbAtlasLines=uicontrol(pUnder,'Style','checkbox','String','Atlas region boundaries','Value',0, ...
+    'ForegroundColor','w','BackgroundColor',[.08 .08 .08],'FontSize',12, ...
+    'Tag','AtlasRegionLinesToggle','Callback',@updateRegionLabels);
+state.regionScheme='Atlas';state.regionContext3D=[];
+state.underlayRevision=0;state.renderedAtlasCache={};
+
 
 lblBri = mkLbl(pUnder,'Brightness');
+cbPhysicalScale=mkChk(pUnder,'Physical X/Y scale',1,@imageAppearanceChanged);set(cbPhysicalScale,'Tag','Video_PhysicalScale');
+cbSharpPixels=mkChk(pUnder,'Sharp pixels',1,@imageAppearanceChanged);set(cbSharpPixels,'Tag','Video_SharpPixels');
 slBri  = mkSlider(pUnder,-0.80,0.80,uState.brightness,@underSliderChanged);
 txtBri = mkValBox(pUnder,sprintf('%.2f',uState.brightness));
 
@@ -531,6 +570,10 @@ set(slVlv,'SliderStep',[1/max(1,MAX_CONLEV) 10/max(1,MAX_CONLEV)]);
 txtVlv = mkValBox(pUnder,sprintf('%d',uState.conectLev));
 
 btnLoadUnder   = mkBtn(pUnder,'LOAD NEW UNDERLAY',@loadNewUnderlayCB,[0.20 0.38 0.62],12);
+setappdata(fig,'FUSILoadUnderlay',@(file)loadNewUnderlayCB([],[],file));
+setappdata(fig,'FUSIUnderlayData',@underlayData);
+setappdata(fig,'FUSIWarpFunctionalToAtlas',@(varargin)warpFunctionalToAtlasCB([],[],varargin{:}));
+setappdata(fig,'FUSISetSlice',@browseSlice);
 btnLoadGAVideo = mkBtn(pUnder,'LOAD GA VIDEO BUNDLE',@loadGroupVideoBundleCB,[0.55 0.33 0.15],12);
 btnWarpAtlas   = mkBtn(pUnder,'WARP FUNCTIONAL TO ATLAS',@warpFunctionalToAtlasCB,[0.20 0.38 0.62],12);
 btnResetWarp   = mkBtn(pUnder,'RESET TO NATIVE',@resetWarpToNativeCB,[0.28 0.28 0.30],12);
@@ -539,6 +582,22 @@ btnResetWarp   = mkBtn(pUnder,'RESET TO NATIVE',@resetWarpToNativeCB,[0.28 0.28 
 % OVERLAY TAB
 % -----------------------------
 lblMap = mkLbl(pOverlay,'Colormap');
+btnBaselineSource=mkBtn(pOverlay,'Baseline source...',@baselineSourceChanged,[0.25 0.40 0.65],13);
+btnResetBaseline=mkBtn(pOverlay,'Reset local baseline',@resetLocalBaseline,[0.25 0.45 0.35],13);
+set(btnResetBaseline,'Tag','VideoResetLocalBaseline','TooltipString','Restore this scan/animal''s previous local baseline window.');
+set(btnBaselineSource,'Tag','VideoBaselineSource','TooltipString',fusiBaselineReference('label',baseline));
+setappdata(fig,'FUSIGetBaselineState',@getBaselineState);
+btnScans=mkBtn(pOverlay,'Scans / order...',@manageScanSequence,[.20 .38 .62],12);
+set(btnScans,'Tag','VideoScanSequence','TooltipString','Add up to ten scans, choose saved preprocessing and set the sequence order.');
+popOverlayScan=mkPopup(pOverlay,{'Overlay: current scan'},1,@overlayScanChanged);
+set(popOverlayScan,'Tag','VideoOverlayScan','TooltipString','Select which scan supplies the video signal overlay; no time-course plot is shown here.');
+cbSequenceMovie=mkChk(pOverlay,'Play included scans in order',false,@sequenceMovieChanged);
+set(cbSequenceMovie,'Tag','VideoSequenceMovie','TooltipString','Play every included scan in Scans / order with fixed anatomy and scan labels. Save MP4 has its own scan and slice selector.');
+lblSequenceUnderlay=mkLbl(pOverlay,'Fixed underlay scan');
+popSequenceUnderlay=mkPopup(pOverlay,{'Keep current underlay'},1,@sequenceUnderlayChanged);
+set(popSequenceUnderlay,'Tag','VideoSequenceUnderlay','TooltipString','Choose one scan''s Doppler anatomy for the whole sequence. A loaded atlas underlay and alignment remain fixed.');
+setappdata(fig,'FUSIGetScanSequence',@getScanSequence);
+setappdata(fig,'FUSIVideoPlayback',struct('get',@videoPlaybackInfo,'setFrame',@setVideoPlaybackFrame,'stop',@stopVideoPlayback,'isPlaying',@videoPlaybackActive));
 idxMap = find(strcmp(cmapNames,overlayCmapName),1,'first');
 if isempty(idxMap), idxMap = 1; end
 popMap = mkPopup(pOverlay,cmapNames,idxMap,@overlayMapChanged);
@@ -621,6 +680,19 @@ saveMP4Btn = uicontrol(fig,'Style','pushbutton','String','Save MP4', ...
     'FontName',uiFontName,'FontSize',13,'FontWeight','bold', ...
     'Callback',@saveVideo);
 
+volume3DBtn = uicontrol(fig,'Style','pushbutton','String','3D brain / volume', ...
+    'Units','pixels','Tag','Video3DVolume', ...
+    'BackgroundColor',[0.20 0.40 0.58],'ForegroundColor','w', ...
+    'FontName',uiFontName,'FontSize',13,'FontWeight','bold', ...
+    'TooltipString','Render the acquired multi-slice volume; atlas registration is optional.', ...
+    'Callback',@openVolume3D);
+if nZ < 2, set(volume3DBtn,'Enable','off'); end
+atlas3DBtn=uicontrol(fig,'Style','pushbutton','String','Allen brain atlas', ...
+    'Units','pixels','Tag','VideoAllenAtlas','BackgroundColor',[.12 .45 .23], ...
+    'ForegroundColor','w','FontName',uiFontName,'FontSize',13,'FontWeight','bold', ...
+    'TooltipString','Open the complete reference brain without a scan or registration.', ...
+    'Callback',@(~,~)fusiAtlasVolumeGUI());
+
 set(fig,'WindowButtonDownFcn',@mouseDown);
 set(fig,'WindowButtonUpFcn',@mouseUp);
 set(fig,'WindowButtonMotionFcn',@mouseMoveVideo);
@@ -628,18 +700,29 @@ set(fig,'KeyPressFcn',@keyPressHandler);
 set(fig,'WindowScrollWheelFcn',@mouseScrollSlice);
 set(fig,'ResizeFcn',@(~,~)layoutUI());
 
-layoutUI();
+refreshScanSequenceControls();layoutUI();
+restoreAtlasDisplayContext();
 render();
 
 % =========================================================
 % TIMER
 % =========================================================
-playTimer = timer('ExecutionMode','fixedRate', ...
-    'Period',1/max(fps,0.1), 'BusyMode','drop','TimerFcn',@timerTick);
+playTimer = timer('ExecutionMode','fixedSpacing', ...
+    'Period',max(.001,round(1000/max(fps,0.1))/1000), 'BusyMode','drop','TimerFcn',@timerTick);
 
     function timerTick(~,~)
         if ~ishandle(fig) || ~playing
             return;
+        end
+
+        if get(cbSequenceMovie,'Value')
+            try
+                p=videoPlaybackInfo();
+                if p.frame>=numel(p.frames),stopVideoPlayback();sequenceStarted=false;return;end
+                setVideoPlaybackFrame(p.frame+1);return;
+            catch ME
+                stopVideoPlayback();statusLine=['Sequence playback stopped: ' ME.message];render();return;
+            end
         end
 
         volume = volume + 1;
@@ -756,7 +839,7 @@ set(contentFrame,'Position',[10 contentFrameY panelW-20 contentFrameH]);
         set(ax,'Position',[axX axY axW axH]);
         set(txtTitle,'Position',[axX axY+axH+10 axW 28]);
 
-        set(info,'Position',[20 H-92 panelX-40 70]);
+        set(hVideoInfo,'Position',[20 H-92 panelX-40 70]);
         set(txtSliceTop,'Position',[20 H-120 320 24]);
 
         cbarW = 18;
@@ -766,6 +849,8 @@ set(contentFrame,'Position',[10 contentFrameY panelW-20 contentFrameH]);
         set(cbar,'Units','pixels','Position',[cbarX cbarY cbarW cbarH]);
 
         set(btnColorbarRange,'Position',[cbarX-14 axY-44 146 34]);
+        set(volume3DBtn,'Position',[axX+110 axY-44 210 34]);
+        set(atlas3DBtn,'Position',[axX+328 axY-44 185 34]);
         set(footer,'Position',[10 8 min(1200,W-20) 22]);
     end
 
@@ -842,7 +927,9 @@ set(contentFrame,'Position',[10 contentFrameY panelW-20 contentFrameH]);
         set(btnClear,'Position',[xLabel+2*(bw+10) y0 bw 36]);
         y0 = y0 - (36 + gapc);
 
-        set(btnApplyAllMask,'Position',[xLabel y0 (w-2*pad) 36]);
+        copyW=(w-2*pad-10)/2;
+        set(btnApplyAllMask,'Position',[xLabel y0 copyW 36]);
+        set(btnApplyAllSlices,'Position',[xLabel+copyW+10 y0 copyW 36]);
         y0 = y0 - (36 + gapc);
 
         set(btnLoadMask,'Position',[xLabel y0 (w-2*pad) 36]);
@@ -862,50 +949,57 @@ set(contentFrame,'Position',[10 contentFrameY panelW-20 contentFrameH]);
     wVal   = 116;
     wCtrl  = max(140, xVal - xCtrl - 12);
 
-    fixed = 0;
-    fixed = fixed + 2*rowHc;
-    fixed = fixed + 3*rowHc;
-    fixed = fixed + 2*rowHc;
-    fixed = fixed + 4*36;   % 4 buttons now
-
-    nGaps = 11;
-    gapc = adaptiveGap(h, fixed, nGaps, 10, 14);
-    gapBig = gapc + 8;
+    rowHUnder=min(rowHc,max(24,floor((h-76-4*36-16*3)/12)));
+    gapc=max(3,min(12,floor((h-76-12*rowHUnder-4*36)/16)));
+    gapBig=gapc+4;
 
     y0 = h - 52;
 
-    set(lblUSrc,'Position',[xLabel y0 wLabel rowHc]);
-    set(popUSrc,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblUSrc,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(popUSrc,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHUnder]);
+    y0 = y0 - (rowHUnder + gapc);
 
-    set(lblUMode,'Position',[xLabel y0 wLabel rowHc]);
-    set(popUMode,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHc]);
-    y0 = y0 - (rowHc + gapBig);
+    set(lblUMode,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(popUMode,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHUnder]);
+    y0=y0-(rowHUnder+gapc);
+    set(lblAtlasChoice,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(popAtlasChoice,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHUnder]);
+    y0=y0-(rowHUnder+gapc);
+    set(cbRegionLabels,'Position',[xLabel y0 max(160,round(w*.52)) rowHUnder]);
+    set(btnRegionList,'Position',[xVal y0 wVal rowHUnder]);
+    y0=y0-(rowHUnder+gapc);
+    set(lblRegionScheme,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(popRegionScheme,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHUnder]);
+    y0=y0-(rowHUnder+gapc);
+    set(cbAtlasLines,'Position',[xLabel y0 w-2*pad rowHUnder]);
+    y0=y0-(rowHUnder+gapc);
+    set(cbPhysicalScale,'Position',[xLabel y0 round(w*.55) rowHUnder]);set(cbSharpPixels,'Position',[round(w*.58) y0 round(w*.38) rowHUnder]);
+    y0 = y0 - (rowHUnder + gapBig);
 
-    set(lblBri,'Position',[xLabel y0 wLabel rowHc]);
-    set(slBri,'Position',[xCtrl y0+round((rowHc-sliderH)/2) wCtrl sliderH]);
-    set(txtBri,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblBri,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(slBri,'Position',[xCtrl y0+round((rowHUnder-sliderH)/2) wCtrl sliderH]);
+    set(txtBri,'Position',[xVal y0 wVal rowHUnder]);
+    y0 = y0 - (rowHUnder + gapc);
 
-    set(lblCon,'Position',[xLabel y0 wLabel rowHc]);
-    set(slCon,'Position',[xCtrl y0+round((rowHc-sliderH)/2) wCtrl sliderH]);
-    set(txtCon,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblCon,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(slCon,'Position',[xCtrl y0+round((rowHUnder-sliderH)/2) wCtrl sliderH]);
+    set(txtCon,'Position',[xVal y0 wVal rowHUnder]);
+    y0 = y0 - (rowHUnder + gapc);
 
-    set(lblGam,'Position',[xLabel y0 wLabel rowHc]);
-    set(slGam,'Position',[xCtrl y0+round((rowHc-sliderH)/2) wCtrl sliderH]);
-    set(txtGam,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapBig);
+    set(lblGam,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(slGam,'Position',[xCtrl y0+round((rowHUnder-sliderH)/2) wCtrl sliderH]);
+    set(txtGam,'Position',[xVal y0 wVal rowHUnder]);
+    y0 = y0 - (rowHUnder + gapBig);
 
-    set(lblVsz,'Position',[xLabel y0 wLabel rowHc]);
-    set(slVsz,'Position',[xCtrl y0+round((rowHc-sliderH)/2) wCtrl sliderH]);
-    set(txtVsz,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblVsz,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(slVsz,'Position',[xCtrl y0+round((rowHUnder-sliderH)/2) wCtrl sliderH]);
+    set(txtVsz,'Position',[xVal y0 wVal rowHUnder]);
+    y0 = y0 - (rowHUnder + gapc);
 
-    set(lblVlv,'Position',[xLabel y0 wLabel rowHc]);
-    set(slVlv,'Position',[xCtrl y0+round((rowHc-sliderH)/2) wCtrl sliderH]);
-    set(txtVlv,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapBig);
+    set(lblVlv,'Position',[xLabel y0 wLabel rowHUnder]);
+    set(slVlv,'Position',[xCtrl y0+round((rowHUnder-sliderH)/2) wCtrl sliderH]);
+    set(txtVlv,'Position',[xVal y0 wVal rowHUnder]);
+    y0 = y0 - (rowHUnder + gapBig);
 
     set(btnLoadUnder,'Position',[xLabel y0 (w-2*pad) 36]);
     y0 = y0 - (36 + gapc);
@@ -922,6 +1016,7 @@ set(contentFrame,'Position',[10 contentFrameY panelW-20 contentFrameH]);
    end
 
    function layoutOverlayTab(w, h)
+    rowHOverlay=min(rowHc,max(24,floor((h-110)/13)));
     xLabel = pad;
     wLabel = 230;
     xCtrl  = xLabel + wLabel + 14;
@@ -930,60 +1025,75 @@ set(contentFrame,'Position',[10 contentFrameY panelW-20 contentFrameH]);
     wCtrl  = max(140, xVal - xCtrl - 12);
 
     fixed = 0;
-    fixed = fixed + rowHc;   % cmap
-    fixed = fixed + rowHc;   % range
-    fixed = fixed + rowHc;   % sign mode
-    fixed = fixed + rowHc;   % threshold
-    fixed = fixed + rowHc;   % alpha
-    fixed = fixed + rowHc;   % smooth
-    fixed = fixed + rowHc;   % alpha mod
-    fixed = fixed + rowHc;   % mod min
-    fixed = fixed + rowHc;   % mod max
+    fixed = fixed + rowHOverlay;   % baseline source
+    fixed = fixed + rowHOverlay;   % scan sequence and selected overlay
+    fixed = fixed + 2*rowHOverlay; % sequence playback and retained underlay
+    fixed = fixed + rowHOverlay;   % cmap
+    fixed = fixed + rowHOverlay;   % range
+    fixed = fixed + rowHOverlay;   % sign mode
+    fixed = fixed + rowHOverlay;   % threshold
+    fixed = fixed + rowHOverlay;   % alpha
+    fixed = fixed + rowHOverlay;   % smooth
+    fixed = fixed + rowHOverlay;   % alpha mod
+    fixed = fixed + rowHOverlay;   % mod min
+    fixed = fixed + rowHOverlay;   % mod max
 
-    nGaps = 8;
-    gapc = adaptiveGap(h, fixed, nGaps, 10, 14);
-    gapBig = gapc + 8;
+    nGaps = 13;
+    gapc=max(3,min(12,floor((h-68-fixed)/nGaps)));
+    gapBig = gapc + 4;
 
     y0 = h - 52;
 
-    set(lblMap,'Position',[xLabel y0 wLabel rowHc]);
-    set(popMap,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    baselineWidth=(w-2*pad-10)/2;
+    set(btnBaselineSource,'Position',[xLabel y0 baselineWidth rowHOverlay]);
+    set(btnResetBaseline,'Position',[xLabel+baselineWidth+10 y0 baselineWidth rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
+    set(btnScans,'Position',[xLabel y0 baselineWidth rowHOverlay]);
+    set(popOverlayScan,'Position',[xLabel+baselineWidth+10 y0 baselineWidth rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
+    set(cbSequenceMovie,'Position',[xLabel y0 w-2*pad rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
+    set(lblSequenceUnderlay,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(popSequenceUnderlay,'Position',[xCtrl y0 wCtrl+wVal+12 rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
+    set(lblMap,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(popMap,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
 
-    set(lblRange,'Position',[xLabel y0 wLabel rowHc]);
-    set(edRange,'Position',[xCtrl y0 floor((wCtrl+wVal+12)*0.62) rowHc]);
-    set(btnRange,'Position',[xCtrl+floor((wCtrl+wVal+12)*0.62)+10 y0 floor((wCtrl+wVal+12)*0.38)-10 rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblRange,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(edRange,'Position',[xCtrl y0 floor((wCtrl+wVal+12)*0.62) rowHOverlay]);
+    set(btnRange,'Position',[xCtrl+floor((wCtrl+wVal+12)*0.62)+10 y0 floor((wCtrl+wVal+12)*0.38)-10 rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
 
-    set(lblSignMode,'Position',[xLabel y0 wLabel rowHc]);
-    set(popSignMode,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHc]);
-    y0 = y0 - (rowHc + gapBig);
+    set(lblSignMode,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(popSignMode,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapBig);
 
-    set(lblThr,'Position',[xLabel y0 wLabel rowHc]);
-    set(slThr,'Position',[xCtrl y0+round((rowHc-sliderH)/2) wCtrl sliderH]);
-    set(edThr,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblThr,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(slThr,'Position',[xCtrl y0+round((rowHOverlay-sliderH)/2) wCtrl sliderH]);
+    set(edThr,'Position',[xVal y0 wVal rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
 
-    set(lblAlpha,'Position',[xLabel y0 wLabel rowHc]);
-    set(slAlpha,'Position',[xCtrl y0+round((rowHc-sliderH)/2) wCtrl sliderH]);
-    set(txtAlpha,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblAlpha,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(slAlpha,'Position',[xCtrl y0+round((rowHOverlay-sliderH)/2) wCtrl sliderH]);
+    set(txtAlpha,'Position',[xVal y0 wVal rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
 
-    set(lblSmooth,'Position',[xLabel y0 wLabel rowHc]);
-    set(slSmooth,'Position',[xCtrl y0+round((rowHc-sliderH)/2) wCtrl sliderH]);
-    set(edSmooth,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapBig);
+    set(lblSmooth,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(slSmooth,'Position',[xCtrl y0+round((rowHOverlay-sliderH)/2) wCtrl sliderH]);
+    set(edSmooth,'Position',[xVal y0 wVal rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapBig);
 
-    set(lblAlphaMod,'Position',[xLabel y0 wLabel rowHc]);
-    set(chkAlphaMod,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblAlphaMod,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(chkAlphaMod,'Position',[xCtrl y0 (wCtrl+wVal+12) rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
 
-    set(lblModMin,'Position',[xLabel y0 wLabel rowHc]);
-    set(edModMin,'Position',[xVal y0 wVal rowHc]);
-    y0 = y0 - (rowHc + gapc);
+    set(lblModMin,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(edModMin,'Position',[xVal y0 wVal rowHOverlay]);
+    y0 = y0 - (rowHOverlay + gapc);
 
-    set(lblModMax,'Position',[xLabel y0 wLabel rowHc]);
-    set(edModMax,'Position',[xVal y0 wVal rowHc]);
+    set(lblModMax,'Position',[xLabel y0 wLabel rowHOverlay]);
+    set(edModMax,'Position',[xVal y0 wVal rowHOverlay]);
 
     updateOverlayEnable();
 end
@@ -1073,19 +1183,35 @@ end
         setappdata(fig,'deConfUSIonInteractionUntil',now+0.75/86400);
         sliceIdx = max(1, min(nZ, sliceIdx));
         set(txtSliceTop,'String',sliceString(sliceIdx,nZ));
+        atlasHighQuality=hasAtlasDisplay();
 
         % Manual controls always rebuild this cache, including a changed
         % source, display settings, mask, atlas transform or slice.
-        if ~fastPlayback || isempty(playbackUnderlayCache) || playbackUnderlaySlice~=sliceIdx
+        atlasKey=struct('slice',sliceIdx,'revision',state.underlayRevision,'appearance',uState,'source',underSrc,'scheme',state.regionScheme);
+        atlasHit=false;
+        if atlasHighQuality
+            for k=1:numel(state.renderedAtlasCache)
+                entry=state.renderedAtlasCache{k};if isequal(entry.key,atlasKey),playbackUnderlayCache=entry.rgb;playbackUnderlaySlice=sliceIdx;atlasHit=true;break;end
+            end
+        end
+        if ~atlasHit && (~fastPlayback || isempty(playbackUnderlayCache) || playbackUnderlaySlice~=sliceIdx)
             bgFullActive = getUnderlayFull();
             bg2 = getBg2DForSlice(bgFullActive, sliceIdx);
+            if atlasHighQuality,bg2=state.atlasDisplay3D.getSlice(sliceIdx);end
+            bg2=regionColorForDisplay(bg2,sliceIdx,atlasHighQuality);
             playbackUnderlayCache = renderUnderlayRGB(bg2);
+            if atlasHighQuality,playbackUnderlayCache=single(playbackUnderlayCache);end
             playbackUnderlaySlice=sliceIdx;
+            if atlasHighQuality
+                if numel(state.renderedAtlasCache)>=12,state.renderedAtlasCache(1)=[];end
+                state.renderedAtlasCache{end+1}=struct('key',atlasKey,'rgb',playbackUnderlayCache);
+            end
         end
         bgRGB=playbackUnderlayCache;
 
         if frame < 1 || frame > nFrames
-    syncImageAxesToCurrentFrame(bgRGB);
+    if atlasHighQuality,syncImageAxesToCurrentFrame(bgRGB,fastPlayback,[ny nx]);
+    else,syncImageAxesToCurrentFrame(bgRGB,fastPlayback);end
     return;
 end
 
@@ -1098,7 +1224,7 @@ end
         end
         A = double(A);
         A(~isfinite(A)) = 0;
-        if size(bgRGB,1) ~= size(A,1) || size(bgRGB,2) ~= size(A,2)
+        if ~atlasHighQuality && (size(bgRGB,1) ~= size(A,1) || size(bgRGB,2) ~= size(A,2))
     bgRGB = forceRgbToSize(bgRGB, size(A,1), size(A,2));
 end
 
@@ -1148,7 +1274,8 @@ end
 
 if viewMaskedOnly && any(M(:))
     dimFactor = 0.12;
-    show3 = repmat(showMaskLocal,[1 1 3]);
+    displayMask=resizeVideoDisplayLayer(showMaskLocal,size(bgRGB,[1 2]),'nearest');
+    show3 = repmat(displayMask,[1 1 3]);
     bgRGB = bgRGB .* (show3 + dimFactor*(~show3));
 end
 
@@ -1157,6 +1284,10 @@ end
 A_scaled = (dispMap - cax(1)) ./ (cax(2) - cax(1) + eps);
 A_scaled = max(0, min(1, A_scaled));
 pscRGB = ind2rgb(uint8(A_scaled * (Nc-1)), mapA);
+if atlasHighQuality
+    pscRGB=resizeVideoDisplayLayer(pscRGB,size(bgRGB,[1 2]));
+    alphaMap=resizeVideoDisplayLayer(alphaMap,size(bgRGB,[1 2]));
+end
 
 a3 = repmat(alphaMap,[1 1 3]);
 baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
@@ -1164,11 +1295,12 @@ baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
         outRGB = baseRGB;
 
         if ~viewMaskedOnly && any(M(:))
+            displayMask=resizeVideoDisplayLayer(M,size(bgRGB,[1 2]),'nearest');
             maskRGB = cat(3, ...
-    ones(size(A,1), size(A,2)) * maskColor(1), ...
-    ones(size(A,1), size(A,2)) * maskColor(2), ...
-    ones(size(A,1), size(A,2)) * maskColor(3));
-            M3 = repmat(M,[1 1 3]);
+    ones(size(bgRGB,1), size(bgRGB,2)) * maskColor(1), ...
+    ones(size(bgRGB,1), size(bgRGB,2)) * maskColor(2), ...
+    ones(size(bgRGB,1), size(bgRGB,2)) * maskColor(3));
+            M3 = repmat(displayMask,[1 1 3]);
             alphaUse = maskAlpha;
             if editorMode
                 alphaUse = max(0.6, maskAlpha);
@@ -1176,8 +1308,10 @@ baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
             outRGB = outRGB .* (1 - alphaUse .* M3) + maskRGB .* (alphaUse .* M3);
         end
 
-   syncImageAxesToCurrentFrame(outRGB,fastPlayback);
+   if atlasHighQuality,syncImageAxesToCurrentFrame(outRGB,fastPlayback,[ny nx]);
+   else,syncImageAxesToCurrentFrame(outRGB,fastPlayback);end
 
+        updateRegionLabels();
         t = (volume - 1) * TR;
 
         em = tern(editorMode,'ON','OFF');
@@ -1191,15 +1325,28 @@ baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
         end
 
         extra = '';
-        if ~isempty(statusLine)
+        if state.isAtlasWarped && ~isempty(state.atlasTransformFile)
+            [folder,name,ext]=fileparts(state.atlasTransformFile);[~,version]=fileparts(folder);
+            extra = sprintf('\nTransform: %s/%s%s',version,name,ext);
+            set(hVideoInfo,'TooltipString',state.atlasTransformFile);
+        elseif ~isempty(statusLine)
             extra = [' | ' statusLine];
+            set(hVideoInfo,'TooltipString',statusLine);
+        else
+            set(hVideoInfo,'TooltipString','');
         end
 
-        set(info,'String',sprintf([ ...
-            't = %.1f / %.1f s | Vol %d / %d | View: %s (%s)\n' ...
-            'Baseline: %g-%g %s | Editor: %s | Underlay: %s | Smooth=%.2f | AlphaMod: %s | alpha=%g%% min=%g max=%g thr=%g%s'], ...
-            t, Tmax, volume, nVols, vm, ms, ...
-            baseline.start, baseline.end, modeStr, ...
+        baselineCaption=sprintf('%g-%g %s',baseline.start,baseline.end,modeStr);
+        if fusiBaselineReference('isExternal',baseline),baselineCaption=fusiBaselineReference('label',baseline);end
+        scanCaption='';
+        if get(cbSequenceMovie,'Value')&&~isempty(state.scanSequence)
+            p=videoPlaybackInfo();scanCaption=sprintf('%s | Sequence %d / %d | ',videoScanName(),p.frame,numel(p.frames));
+        end
+        set(hVideoInfo,'String',sprintf([ ...
+            '%st = %.1f / %.1f s | Vol %d / %d | View: %s (%s)\n' ...
+            'Baseline: %s | Editor: %s | Underlay: %s | Smooth=%.2f | AlphaMod: %s | alpha=%g%% min=%g max=%g thr=%g%s'], ...
+            scanCaption,t, Tmax, volume, nVols, vm, ms, ...
+            baselineCaption, ...
             em, underSrcLabel, overlaySmoothSigma, alphaState, alphaPct, modMinAbs, modMaxAbs, maskThreshold, extra));
 
         set(txtFPS,'String',sprintf('%d',fps));
@@ -1210,6 +1357,13 @@ baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
         set(edThr,'String',sprintf('%.3g',maskThreshold));
 
         txtSliceAx.String = sliceString(sliceIdx, nZ);
+        % Follow manual display changes without slowing time-series playback.
+        if ~fastPlayback && isappdata(fig,'Volume3DFigure')
+            vf=getappdata(fig,'Volume3DFigure');
+            if isgraphics(vf) && isappdata(vf,'FUSIVolumeSync')
+                try,sync=getappdata(vf,'FUSIVolumeSync');sync(volumeDisplaySettings());catch,end
+            end
+        end
     end
 
 % =========================================================
@@ -1267,6 +1421,10 @@ baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
         I        = double(E.functional4D);
         I_interp = double(E.functional4D);
         PSC      = double(E.psc4D);
+        if isfield(E,'baseline'),baseline=E.baseline;
+        elseif isfield(baseline,'reference'),baseline=rmfield(baseline,'reference');end
+        par.videoInputIsPSC=true;
+        set(btnBaselineSource,'TooltipString',fusiBaselineReference('label',baseline));
         bgDefaultFull = double(bgNew);
 
         % Metadata
@@ -1346,6 +1504,8 @@ baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
 
         % Reset atlas state
         state.isAtlasWarped = false;
+        state.lastUnderlayFile = '';
+        state.pendingAtlasUnderlay3D = [];
         state.atlasTransformFile = '';
         state.lastAtlasTransformFile = '';
 
@@ -1354,6 +1514,7 @@ baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
         origI_interp      = I_interp;
         origPSC           = PSC;
         origBgDefaultFull = bgDefaultFull;
+        origUnderlayProcessed = false;
 
         % Reset underlay source
         underSrc = 1;
@@ -1539,10 +1700,17 @@ end
             render();
             return;
         end
-        for vv = 1:nVols
-            mask(:,:,sliceIdx,vv) = refMask;
-        end
+        mask=fusiCopyVideoMask(mask,sliceIdx,volume,false);
         statusLine = sprintf('Mask applied to all volumes (slice %d).', sliceIdx);
+        render();
+    end
+
+    function applyMaskToAllSlices(~,~)
+        if ~any(mask(:,:,sliceIdx,volume),'all')
+            statusLine='Current mask is empty - nothing copied.';render();return;
+        end
+        mask=fusiCopyVideoMask(mask,sliceIdx,volume,true);
+        statusLine=sprintf('Current mask copied to all %d slices and %d frames.',nZ,nVols);
         render();
     end
 
@@ -1771,11 +1939,17 @@ end
 % PLAY/REPLAY
 % =========================================================
     function playPause(src,~)
+        if videoExporting,set(src,'Value',0);return;end
         playing = logical(get(src,'Value'));
         if playing
+            if get(cbSequenceMovie,'Value')&&~sequenceStarted
+                try,setVideoPlaybackFrame(1);sequenceStarted=true;
+                catch ME,stopVideoPlayback();statusLine=ME.message;render();return;end
+            end
+            playing=true;set(src,'Value',1);
             set(src,'String','Pause');
             if strcmp(playTimer.Running,'off')
-                set(playTimer,'Period',1/max(fps,0.1));
+                set(playTimer,'Period',max(.001,round(1000/max(fps,.1))/1000));
                 start(playTimer);
             end
         else
@@ -1788,6 +1962,10 @@ end
     end
 
     function replayVid(~,~)
+        if videoExporting,return;end
+        if get(cbSequenceMovie,'Value')
+            stopVideoPlayback();setVideoPlaybackFrame(1);sequenceStarted=true;
+        end
         volume = 1;
         set(slVol,'Value',1);
         frame = 1;
@@ -1825,7 +2003,12 @@ end
         return;
     end
 
-    sliceIdx = newZ;
+    browseSlice(newZ);
+end
+
+function browseSlice(z)
+    validateattributes(z,{'numeric'},{'scalar','finite'});
+    sliceIdx=max(1,min(nZ,round(z)));
     render();
 end
 
@@ -1848,6 +2031,309 @@ end
 % =========================================================
 % OPEN SCM
 % =========================================================
+    function openVolume3D(~,~)
+        if nZ<2,return;end
+        playing=false;set(playBtn,'Value',0,'String','Play');
+        if exist('playTimer','var') && isvalid(playTimer),stop(playTimer);end
+        try
+            processedUnderlay=state.defaultUnderlayProcessed;
+            if underSrc==1 && isequal(bgDefaultFull,bg) && isfield(par,'scmInitialUnderlayInfo') && ...
+                    isfield(par.scmInitialUnderlayInfo,'isDisplayReady')
+                processedUnderlay=processedUnderlay || isequal(par.scmInitialUnderlayInfo.isDisplayReady,true);
+            end
+            data=struct('I',I,'PSC',PSC,'underlay',getUnderlayFull(), ...
+                'mask',mask,'maskIsInclude',maskIsInclude,'applyMask',viewMaskedOnly, ...
+                'TR',TR,'interpol',par.interpol,'frame',volume,'par',par, ...
+                'label',safeStr(fileLabel),'caxis',par.previewCaxis,'baseline',baseline, ...
+                'underlayLabel',underSrcLabel,'inputIsPSC',isfield(par,'videoInputIsPSC') && par.videoInputIsPSC, ...
+                'transformed',state.isAtlasWarped || state.isStepMotorAtlasWarped, ...
+                'underlayProcessed',processedUnderlay && underSrc==1,'fps',fps);
+            data.display=volumeDisplaySettings();
+            data.par.scanSequence=state.scanSequence;
+            data.nativePower=origI;data.scanMapping=state.currentROIMapping;
+            if state.isAtlasWarped && isfield(state,'atlasUnderlayKey') && ~isempty(state.atlasUnderlayKey)
+                data.atlasOutputArrayOrder='DV-LR-AP';
+                data.atlasOutputGeometry=state.atlasUnderlayKey.scanGeometry;
+            end
+            data.processUnderlay=@renderUnderlayRGB;
+            data.processBaseline=@(u)toRGB(processUnderlay(u));
+            volumeFig=fusiVolumeGUI(data);
+            setappdata(fig,'Volume3DFigure',volumeFig);
+        catch ME
+            errordlg(ME.message,'3D volume view');
+        end
+    end
+
+    function d=volumeDisplaySettings()
+        d=struct('caxis',par.previewCaxis,'colormap',mapA,'colorScheme',overlayCmapName, ...
+            'signMode',overlaySignMode,'alphaModEnable',alphaModEnable,'alphaPct',alphaPct, ...
+            'modMinAbs',modMinAbs,'modMaxAbs',modMaxAbs,'maskThreshold',maskThreshold, ...
+            'overlaySmoothSigma',overlaySmoothSigma,'underlay',uState);
+    end
+
+    function s=getBaselineState()
+        s=struct('baseline',baseline,'PSC',PSC);
+    end
+
+    function q=getScanSequence()
+        q=state.scanSequence;
+    end
+
+    function refreshScanSequenceControls()
+        sequenceView=state.scanSequence;set(btnScans,'Enable','on');set(popOverlayScan,'Enable','off');
+        if isempty(sequenceView)
+            set(btnScans,'Enable','off');set(cbSequenceMovie,'Enable','off','Value',0);set(popSequenceUnderlay,'Enable','off');return;
+        end
+        labels=fusiScanSequence('labels',sequenceView);
+        pin=find(cellfun(@(d)strcmp(d.key,state.videoUnderlayKey),sequenceView.scans),1);
+        if isempty(pin),pin=0;end
+        set(popSequenceUnderlay,'String',[{'Keep current underlay'} labels],'Value',pin+1);
+        set(cbSequenceMovie,'Enable',tern(numel(labels)>1,'on','off'));set(popSequenceUnderlay,'Enable',tern(numel(labels)>1,'on','off'));
+        for si=1:numel(labels),labels{si}=sprintf('Overlay %d: %s',si,labels{si});end
+        set(popOverlayScan,'String',labels,'Value',sequenceView.active,'TooltipString',labels{sequenceView.active});
+        if numel(labels)>1,set(popOverlayScan,'Enable','on');end
+        if videoExporting,set(findall(fig,'-property','Enable'),'Enable','off');end
+    end
+
+    function manageScanSequence(~,~)
+        try
+            if isappdata(fig,'FUSIScanSequenceError'),rmappdata(fig,'FUSIScanSequenceError');end
+            playing=false;set(playBtn,'Value',0,'String','Play');if isvalid(playTimer),stop(playTimer);end
+            assert(~(isfield(par,'videoInputIsPSC')&&par.videoInputIsPSC),'deConfUSIon:ScanSequencePower','Open an absolute power dataset from Studio to compare scans.');
+            if isempty(state.scanSequence),state.scanSequence=fusiScanSequence('init',par,origI,TR,fileLabel);end
+            q=state.scanSequence;
+            q.atlasRegistered=state.isAtlasWarped;
+            if isappdata(fig,'FUSIScanSequenceRequest'),q=getappdata(fig,'FUSIScanSequenceRequest');rmappdata(fig,'FUSIScanSequenceRequest');
+            else,q=fusiScanSequenceDialog(q,baseline,fusiBaselineRawStart(par,getDatasetRootForVideoSelectors()));end
+            if isempty(q),return;end
+            q.originalKey=state.originalScanKey;
+            assert(any(cellfun(@(d)strcmp(d.key,q.originalKey),q.scans)),'deConfUSIon:OriginalScan','Keep the originally loaded dataset in the list; untick it to hide its curve.');
+            assert(numel(q.scans)<=fusiScanSequence('maxScans')&&q.active>=1&&q.active<=numel(q.scans),'deConfUSIon:ScanSequenceCount','Choose one to ten scans.');
+            progress=fusiBaselineProgress('open','Preparing scan normalization');
+            pg=onCleanup(@()fusiBaselineProgress('close',progress)); %#ok<NASGU>
+            [q,b]=fusiScanSequence('prepare',q,baseline,origI,TR,par,@(fraction,message)fusiBaselineProgress('update',progress,fraction,message));
+            setappdata(fig,'FUSIScanSequenceApplying',true);syncGuard=onCleanup(@()removeSequenceApplyingFlag()); %#ok<NASGU>
+            setappdata(fig,'FUSIBaselineRequest',b);baselineSourceChanged();
+            if isappdata(fig,'FUSIBaselineError'),error('deConfUSIon:ScanSequenceBaseline','%s',getappdata(fig,'FUSIBaselineError'));end
+            state.scanSequence=q;par.scanSequence=q;videoSequencePlan=[];sequenceStarted=false;refreshScanSequenceControls();
+            statusLine='Scans ready. Tick Play included scans in order to preview; Save MP4 lets you choose the export scans and slices.';render();
+        catch ME
+            if isappdata(fig,'FUSIScanSequenceRequest'),rmappdata(fig,'FUSIScanSequenceRequest');end
+            setappdata(fig,'FUSIScanSequenceError',ME.message);statusLine=['Scan sequence: ' ME.message];render();
+        end
+    end
+
+    function removeSequenceApplyingFlag()
+        if isgraphics(fig)&&isappdata(fig,'FUSIScanSequenceApplying'),rmappdata(fig,'FUSIScanSequenceApplying');end
+    end
+
+    function overlayScanChanged(~,~,automatic)
+        if nargin<3,automatic=false;end
+        q=state.scanSequence;index=get(popOverlayScan,'Value');if isempty(q)||index==q.active,return;end
+        if ~automatic,stopVideoPlayback();sequenceStarted=false;end
+        progress=fusiBaselineProgress('open','Loading selected overlay scan');
+        guard=onCleanup(@()fusiBaselineProgress('close',progress)); %#ok<NASGU>
+        try
+            if isappdata(fig,'FUSIScanSequenceError'),rmappdata(fig,'FUSIScanSequenceError');end
+            source=q.scans{q.active};target=q.scans{index};
+            mode='keep';if isfield(q,'underlayMode'),mode=q.underlayMode;end
+            if automatic||get(cbSequenceMovie,'Value'),mode='keep';end
+            if state.isAtlasWarped&&fusiScanSequence('shareAtlas',q),mode='keep';end
+            maskFile='';
+            if strcmp(mode,'mask')
+                if isappdata(fig,'FUSIOverlayUnderlayRequest'),maskFile=getappdata(fig,'FUSIOverlayUnderlayRequest');rmappdata(fig,'FUSIOverlayUnderlayRequest');
+                else
+                    paths=fusiResolveAnalysisFolder(target.rawFile);[name,folder]=uigetfile('*.mat','Choose this scan''s Mask Editor underlay',paths.datasetFolder);
+                    if isequal(name,0),refreshScanSequenceControls();return;end;maskFile=fullfile(folder,name);
+                end
+            end
+            retain=strcmp(mode,'keep');registered=retain&&state.isAtlasWarped&&~isempty(state.currentROIMapping);
+            appearance=uState;anchor=state.retainedUnderlay;retainedLabel=underSrcLabel;
+            if retain&&(isempty(anchor)||anchor.revision~=state.underlayRevision)
+                anchor=struct('source',source,'nativeBG',origBgDefaultFull,'revision',state.underlayRevision);
+            end
+            nativeBG=[];
+            if retain
+                offset=fusiScanSequence('offset',anchor.source,target);
+                if all(offset==0)&&isequal(anchor.source.spatialSize,target.spatialSize),nativeBG=anchor.nativeBG;
+                else,nativeBG=fusiScanSequence('mapVolume',anchor.nativeBG,anchor.source,target);end
+            end
+            oldDisplayMask=any(mask,4);newMapping=[];
+            if registered,newMapping=scmRebaseROIMapping(state.currentROIMapping,source,target);end
+            [q,b]=fusiScanSequence('prepare',q,baseline,origI,TR,par,@(fraction,message)fusiBaselineProgress('update',progress,fraction,message));
+            [proc,b,newPar,power]=fusiScanSequence('load',q,index,b,par, ...
+                @(fraction,message)fusiBaselineProgress('update',progress,fraction,message));
+            if registered
+                fusiBaselineProgress('update',progress,.9,'Placing the selected scan on the retained atlas grid...');
+                displayPSC=scmWarpMappedSeries(proc.PSC,newMapping,[ny nx nZ]);
+                displayI=scmWarpMappedSeries(power,newMapping,[ny nx nZ]);
+            end
+            oldMask=any(origMask,4);oldMask=reshape(oldMask,source.spatialSize);
+            newMask=fusiScanSequence('mapVolume',oldMask,source,target);
+            par=newPar;state.scanSequence=par.scanSequence;baseline=b;
+            if isfield(b,'localBaseline'),localBaselineReset=b.localBaseline;end
+            TR=target.TR;nVols=target.nFrames;nFrames=nVols;Tmax=(nVols-1)*TR;volume=1;frame=1;
+            I=power;origI=power;I_interp=proc.I1;origI_interp=I_interp;PSC=proc.PSC;origPSC=PSC;
+            if registered
+                PSC=displayPSC;I=displayI;I_interp=displayI;origBgDefaultFull=nativeBG;state.currentROIMapping=newMapping;
+            else
+                bgDefaultFull=proc.bg;if retain&&~isempty(nativeBG),bgDefaultFull=nativeBG;end
+                origBgDefaultFull=bgDefaultFull;bg=bgDefaultFull;
+                state.isAtlasWarped=false;state.isStepMotorAtlasWarped=false;state.atlasDisplay3D=[];state.currentROIMapping=[];
+                state.regionLabelUnderlay=[];state.regionInfo=struct();state.regionColorLUT=[];state.isColorUnderlay=false;
+                state.pendingAtlasUnderlay3D=[];
+            end
+            displayGeometryKey=[];playbackUnderlayCache=[];
+            if retain,uState=appearance;anchor.revision=state.underlayRevision;state.retainedUnderlay=anchor;else,state.retainedUnderlay=[];end
+            fileLabel=target.label;set(txtTitle,'String',fileLabel);underSrc=1;
+            if retain,underSrcLabel=retainedLabel;else,underSrcLabel='Default(bg)';end
+            set(popUSrc,'Value',1);
+            resetAfterDataSpaceChange(true);
+            if ~isempty(newMask)
+                spatialShape=[target.spatialSize ones(1,3-numel(target.spatialSize))];
+                nativeMask=repmat(reshape(logical(newMask),spatialShape),[1 1 1 nVols]);mask=nativeMask;
+                if registered,mask=repmat(reshape(oldDisplayMask,[ny nx nZ]),[1 1 1 nVols]);end
+                maskIsInclude=origMaskIsInclude;set(popIncExc,'Value',tern(maskIsInclude,1,2));
+                origMask=nativeMask;
+            else,origMask=false([target.spatialSize ones(1,3-numel(target.spatialSize)) nVols]);end
+            origMaskIsInclude=maskIsInclude;
+            if ~isempty(maskFile),loadMaskBundleCB([],[],maskFile);end
+            set(btnBaselineSource,'TooltipString',fusiBaselineReference('label',baseline));
+            refreshScanSequenceControls();statusLine=['Signal overlay: ' fileLabel];render(automatic);
+        catch ME
+            setappdata(fig,'FUSIScanSequenceError',ME.message);setappdata(fig,'FUSIScanSequenceErrorReport',getReport(ME,'extended','hyperlinks','off'));
+            statusLine=['Scan switch failed: ' ME.message];refreshScanSequenceControls();render();
+        end
+    end
+
+    function stopVideoPlayback(varargin)
+        playing=false;
+        if isgraphics(playBtn),set(playBtn,'Value',0,'String','Play');end
+        if exist('playTimer','var')&&isvalid(playTimer),stop(playTimer);end
+    end
+    function value=videoPlaybackActive()
+        value=playing;
+    end
+    function sequenceMovieChanged(~,~)
+        stopVideoPlayback();videoSequencePlan=[];sequenceStarted=false;
+        try
+            if get(cbSequenceMovie,'Value')
+                videoPlaybackInfo();
+                if isempty(state.retainedUnderlay)&&~state.isAtlasWarped&&~state.isStepMotorAtlasWarped
+                    current=state.scanSequence.scans{state.scanSequence.active};U=getUnderlayFull();
+                    bgDefaultFull=U;origBgDefaultFull=U;underSrc=1;set(popUSrc,'Value',1);
+                    state.retainedUnderlay=struct('source',current,'nativeBG',U,'revision',state.underlayRevision);
+                end
+                statusLine='Sequence mode: included scans play in order with fixed anatomy.';
+            else,statusLine='Single scan playback.';end
+            render();
+        catch ME,set(cbSequenceMovie,'Value',0);statusLine=ME.message;render();end
+    end
+    function p=videoPlaybackInfo()
+        if get(cbSequenceMovie,'Value')&&~isempty(state.scanSequence)
+            if isempty(videoSequencePlan),videoSequencePlan=fusiVolumeSequencePlan(state.scanSequence);end
+            p=videoSequencePlan;p.sequence=true;
+            p.frame=find(p.scanIndices==state.scanSequence.active&p.localFrames==volume,1);
+            if isempty(p.frame),p.frame=1;end
+        else
+            p=struct('sequence',false,'frames',1:nVols,'frame',volume,'timeSec',(0:nVols-1)*TR);
+        end
+        p.FPS=fps;
+    end
+    function setVideoPlaybackFrame(index,showFrame,exportPlan)
+        if nargin<2,showFrame=true;end
+        if nargin<3,p=videoPlaybackInfo();else,p=exportPlan;end
+        validateattributes(index,{'numeric'},{'scalar','integer','>=',1,'<=',numel(p.frames)});
+        if p.sequence
+            target=p.scanIndices(index);
+            if target~=state.scanSequence.active
+                set(popOverlayScan,'Value',target);overlayScanChanged([],[],true);
+                if isappdata(fig,'FUSIScanSequenceError'),error('deConfUSIon:VideoSequence','%s',getappdata(fig,'FUSIScanSequenceError'));end
+            end
+            volume=p.localFrames(index);
+        else,volume=index;end
+        frame=max(1,min(nFrames,round((volume-1)*par.interpol+1)));set(slVol,'Value',volume);if showFrame,render(true);end
+    end
+    function name=videoScanName()
+        name=regexp(fileLabel,'scan\d+[^ |]*','match','once','ignorecase');
+        if isempty(name),name=fileLabel;if numel(name)>45,name=name(1:45);end,end
+    end
+    function sequenceUnderlayChanged(~,~)
+        stopVideoPlayback();sequenceStarted=false;q=state.scanSequence;index=get(popSequenceUnderlay,'Value')-1;
+        if isempty(q),return;end
+        if index==0
+            state.videoUnderlayKey='';state.retainedUnderlay=[];statusLine='The current underlay will stay fixed during sequence playback.';render();return;
+        end
+        progress=fusiBaselineProgress('open','Loading fixed sequence underlay');guard=onCleanup(@()fusiBaselineProgress('close',progress)); %#ok<NASGU>
+        try
+            d=q.scans{index};current=q.scans{q.active};
+            if index==q.active,nativeBG=origBgDefaultFull;
+            else
+                [q,readyBaseline]=fusiScanSequence('prepare',q,baseline,origI,TR,par);
+                [proc,~,~,~]=fusiScanSequence('load',q,index,readyBaseline,par,@(fraction,message)fusiBaselineProgress('update',progress,fraction,message));nativeBG=proc.bg;
+                state.scanSequence=q;par.scanSequence=q;
+            end
+            if ~state.isAtlasWarped&&~state.isStepMotorAtlasWarped
+                bgDefaultFull=fusiScanSequence('mapVolume',nativeBG,d,current);origBgDefaultFull=bgDefaultFull;bg=bgDefaultFull;
+                underSrc=1;set(popUSrc,'Value',1);underSrcLabel=['Doppler: ' d.label];
+            end
+            state.videoUnderlayKey=d.key;state.retainedUnderlay=struct('source',d,'nativeBG',nativeBG,'revision',state.underlayRevision);
+            playbackUnderlayCache=[];statusLine=['Fixed underlay: ' d.label];refreshScanSequenceControls();render();
+        catch ME,statusLine=['Underlay selection failed: ' ME.message];refreshScanSequenceControls();render();end
+    end
+
+    function baselineSourceChanged(~,~)
+        try
+            playing=false;set(playBtn,'Value',0,'String','Play');
+            if isa(playTimer,'timer')&&isvalid(playTimer),stop(playTimer);end
+            if isappdata(fig,'FUSIBaselineError'),rmappdata(fig,'FUSIBaselineError');end
+            assert(~(isfield(par,'videoInputIsPSC')&&par.videoInputIsPSC),'deConfUSIon:BaselineRaw','This viewer contains PSC only. Open the raw/preprocessed scan from Studio to change its absolute baseline.');
+            if isappdata(fig,'FUSIBaselineRequest')
+                b=getappdata(fig,'FUSIBaselineRequest');rmappdata(fig,'FUSIBaselineRequest');
+            else
+                b=fusiBaselineSourceDialog(baseline,TR,size(origI,1:ndims(origI)-1),getDatasetRootForVideoSelectors(),par);
+            end
+            if isempty(b),return;end
+            if ~fusiBaselineReference('isExternal',baseline)&&fusiBaselineReference('isExternal',b),localBaselineReset=baseline;end
+            if fusiBaselineReference('isExternal',b),b.localBaseline=localBaselineReset;end
+            sequenceBaseline=[];
+            if ~isempty(state.scanSequence)&&numel(state.scanSequence.scans)>1&&~isappdata(fig,'FUSIScanSequenceApplying')
+                sequenceBaseline=state.scanSequence;
+                if fusiBaselineReference('isExternal',b)
+                    sequenceBaseline.normMode='shared';
+                elseif strcmp(sequenceBaseline.normMode,'local')
+                    sequenceBaseline.localWindowSec=[b.start b.end];
+                else
+                    sequenceBaseline.sharedReference=[];
+                end
+                [sequenceBaseline,b]=fusiScanSequence('prepare',sequenceBaseline,b,origI,TR,par);
+            end
+            if fusiBaselineNeedsRecalculation(baseline,b)
+                proc=fusiApplyBaseline(origI,TR,par,b,nFrames);
+                updatedPSC=proc.PSC;updatedI=proc.I1;
+                if state.isAtlasWarped
+                    updatedPSC=scmWarpMappedSeries(updatedPSC,state.currentROIMapping,[ny nx nZ]);
+                    updatedI=scmWarpMappedSeries(updatedI,state.currentROIMapping,[ny nx nZ]);
+                end
+                PSC=updatedPSC;origPSC=proc.PSC;I_interp=updatedI;origI_interp=proc.I1;
+                count=getappdata(fig,'FUSIBaselineRecomputations');if isempty(count),count=0;end
+                setappdata(fig,'FUSIBaselineRecomputations',count+1);
+            end
+            baseline=b;
+            if ~isempty(sequenceBaseline),state.scanSequence=sequenceBaseline;par.scanSequence=sequenceBaseline;refreshScanSequenceControls();end
+            set(btnBaselineSource,'TooltipString',fusiBaselineReference('label',baseline));
+            statusLine=['Baseline: ' fusiBaselineReference('label',baseline)];render();
+        catch ME
+            setappdata(fig,'FUSIBaselineError',ME.message);
+            statusLine=['Baseline failed: ' ME.message];render();
+        end
+    end
+
+    function resetLocalBaseline(~,~)
+        if ~fusiBaselineReference('isExternal',baseline),statusLine='This scan already uses its local baseline.';render();return;end
+        setappdata(fig,'FUSIBaselineRequest',localBaselineReset);baselineSourceChanged();
+    end
+
     function openSCM(~,~)
         try
             PSC_fast = PSC;
@@ -1862,12 +2348,24 @@ end
                 end
             end
 
-            SCM_gui( ...
-                PSC_fast, bg_fast, TR, par, baseline, ...
+            % An empty editor mask means full view, as in Video rendering.
+            if ~any(mask_fast(:)),mask_fast=[];end
+            parSCM=par;parSCM.fusiOriginalScanKey=state.originalScanKey;parSCM.scanSequence=state.scanSequence;
+            parSCM.baselineRawIsPSC=isfield(par,'videoInputIsPSC')&&par.videoInputIsPSC;
+            if state.isAtlasWarped&&isfield(state,'atlasUnderlayKey')&&~isempty(state.atlasUnderlayKey)
+                parSCM.fusiAtlasDisplayContext=struct('bundle',state.pendingAtlasUnderlay3D, ...
+                    'nativePSC',origPSC,'nativeBG',origBgDefaultFull,'nativeMask',origMask, ...
+                    'nativeMaskIsInclude',origMaskIsInclude,'slice',sliceIdx, ...
+                    'regionScheme',state.regionScheme,'appearance',uState,'mapping',state.currentROIMapping);
+                if ~parSCM.baselineRawIsPSC,parSCM.fusiAtlasDisplayContext.nativePower=origI;end
+            elseif isfield(parSCM,'fusiAtlasDisplayContext'),parSCM=rmfield(parSCM,'fusiAtlasDisplayContext');end
+            child=SCM_gui( ...
+                PSC_fast, bg_fast, TR, parSCM, baseline, ...
                 nVols, ...
                 I, I_interp, fps, maxFPS, ...
                 mask_fast, maskIsInclude, ...
                 applyRejection, QC, fileLabel, sliceIdx);
+            setappdata(fig,'FUSILastOpenedSCM',child);
 
             statusLine = 'SCM opened (mask transferred).';
             render();
@@ -1881,7 +2379,16 @@ end
 % SAVE MP4
 % =========================================================
 function saveVideo(~,~)
+    if videoExporting,return;end
+    videoExporting=true;
+    exportControls=findall(fig,'-property','Enable');exportEnabled=get(exportControls,'Enable');
+    if ischar(exportEnabled),exportEnabled={exportEnabled};end
+    set(exportControls,'Enable','off');
+    exportGuard=onCleanup(@()finishVideoExport(exportControls,exportEnabled)); %#ok<NASGU>
     vid = [];
+    paperVid = [];
+    savedFiles = {};
+    exportStarted = tic;
     exportFig = [];
     exportAx = [];
     infoAx = [];
@@ -1891,71 +2398,47 @@ function saveVideo(~,~)
     oldVolume   = volume;
     oldPlaying  = playing;
     oldSliceIdx = sliceIdx;
+    oldScanIndex=0;if ~isempty(state.scanSequence),oldScanIndex=state.scanSequence.active;end
+    oldTR=TR;exportPlan=[];exportCount=0;
+    exportUnderlay=underSrcLabel;exportUnderlayKey=state.videoUnderlayKey;
 
     try
-        analysedRoot = '';
-
-        if isstruct(par) && isfield(par,'exportPath') && ~isempty(par.exportPath)
-            analysedRoot = char(par.exportPath);
-        elseif isstruct(par) && isfield(par,'savePath') && ~isempty(par.savePath)
-            analysedRoot = char(par.savePath);
-        elseif isstruct(par) && isfield(par,'outPath') && ~isempty(par.outPath)
-            analysedRoot = char(par.outPath);
+        stopVideoPlayback();
+        if isappdata(fig,'FUSIVideoExportRequest')
+            selection=getappdata(fig,'FUSIVideoExportRequest');rmappdata(fig,'FUSIVideoExportRequest');
+        elseif ~isempty(state.scanSequence)&&numel(state.scanSequence.scans)>1
+            selection=fusiVideoExportDialog(state.scanSequence,nZ,sliceIdx,fileLabel);
         else
-            analysedRoot = pwd;
-        end
-
-        analysedRoot = strtrim(analysedRoot);
-        analysedRoot = strrep(analysedRoot,'"','');
-
-        if isempty(analysedRoot) || exist(analysedRoot,'dir') ~= 7
-            analysedRoot = pwd;
-        end
-
-        videosDir = fullfile(analysedRoot, 'Videos');
-        if exist(videosDir,'dir') ~= 7
-            [ok,msg] = mkdir(videosDir);
-            if ~ok
-                error('Could not create Videos folder:\n%s\n\nReason: %s', videosDir, msg);
+            selection=struct('scope','current','slices',1);
+            if nZ>1
+                answer=inputdlg({sprintf('Slices to export (1-%d). Examples: 1 2 10 or 7:9',nZ)}, ...
+                    'Export slices',1,{num2str(sliceIdx)});
+                if isempty(answer),selection=[];
+                elseif numel(answer)==2,selection.slices=[answer{1} ':' answer{2}];
+                else,selection.slices=answer{1};end
             end
         end
-
-        rawLabel = lower(safeStr(fileLabel));
-        if isempty(rawLabel)
-            rawLabel = '';
-        end
-
-        tags = {};
-        if contains(rawLabel,'raw'),     tags{end+1} = 'raw'; end
-        if contains(rawLabel,'gabriel') || contains(rawLabel,'imregdemons'), tags{end+1} = 'imreg'; end
-        if contains(rawLabel,'median'),  tags{end+1} = 'median'; end
-        if contains(rawLabel,'mean'),    tags{end+1} = 'mean'; end
-        if contains(rawLabel,'pca'),     tags{end+1} = 'pca'; end
-        if contains(rawLabel,'despike') || contains(rawLabel,'despiked')
-            tags{end+1} = 'despike';
-        end
-        if contains(rawLabel,'smooth') || contains(rawLabel,'smoothed')
-            tags{end+1} = 'smooth';
-        end
-        if contains(rawLabel,'interp') || contains(rawLabel,'interpol')
-            tags{end+1} = 'interp';
-        end
-        if contains(rawLabel,'psc'),       tags{end+1} = 'psc'; end
-        if contains(rawLabel,'brainonly'), tags{end+1} = 'brain'; end
-
-        if isempty(tags)
-            shortLabel = 'video';
+        if isempty(selection),statusLine='Export cancelled.';render();return;end
+        selectedSlices=fusiMovieExportSlices(selection.slices,nZ);
+        assert(any(strcmp(selection.scope,{'sequence','current'})), ...
+            'deConfUSIon:VideoExportScope','Choose all included scans or the selected signal overlay.');
+        exportPar=par;exportPar.scanSequence=state.scanSequence;
+        if strcmp(selection.scope,'sequence')
+            exportPlan=fusiVolumeSequencePlan(state.scanSequence);exportPlan.sequence=true;
+            if isempty(state.retainedUnderlay)&&~state.isAtlasWarped&&~state.isStepMotorAtlasWarped
+                current=state.scanSequence.scans{state.scanSequence.active};U=getUnderlayFull();
+                bgDefaultFull=U;origBgDefaultFull=U;underSrc=1;set(popUSrc,'Value',1);
+                state.retainedUnderlay=struct('source',current,'nativeBG',U,'revision',state.underlayRevision);
+            end
         else
-            shortLabel = strjoin(tags,'_');
+            exportPlan=struct('sequence',false,'frames',1:nVols);
         end
-
-        timeTag = datestr(now,'yyyymmdd_HHMMSS');
-
+        exportCount=numel(exportPlan.frames);
         % ---------------------------------------------------------
         % EXPORT SETTINGS
         % ---------------------------------------------------------
-        % About 30% slower than the previous 1.6x export setting
-        exportFPS = max(6, round(fps * 0.40));
+        % Use the selected playback speed, with every acquired volume.
+        exportFPS = max(1, fps);
 
         % Faster than exportgraphics+PNG, but still decent quality
         exportQuality = 75;
@@ -1983,7 +2466,9 @@ function saveVideo(~,~)
         catch
         end
 
-        if isfinite(baseStart) && isfinite(baseEnd)
+        if fusiBaselineReference('isExternal',baseline)
+            baselineStr=['Baseline: ' fusiBaselineReference('label',baseline)];
+        elseif isfinite(baseStart) && isfinite(baseEnd)
             baselineStr = sprintf('Baseline %.0f-%.0f %s', baseStart, baseEnd, baseMode);
         else
             baselineStr = 'Baseline n/a';
@@ -2004,6 +2489,8 @@ function saveVideo(~,~)
         % use current data size to define export window
         bgFullActive0 = getUnderlayFull();
         bg20 = getBg2DForSlice(bgFullActive0, max(1,min(nZ,sliceIdx)));
+        if hasAtlasDisplay(),bg20=state.atlasDisplay3D.getSlice(max(1,min(nZ,sliceIdx)));end
+        bg20=regionColorForDisplay(bg20,sliceIdx,hasAtlasDisplay());
         bgRGB0 = renderUnderlayRGB(bg20);
 
         if ndPSC == 4
@@ -2014,20 +2501,29 @@ function saveVideo(~,~)
             A0 = PSC;
         end
 
-        if size(bgRGB0,1) ~= size(A0,1) || size(bgRGB0,2) ~= size(A0,2)
+        if ~hasAtlasDisplay() && (size(bgRGB0,1) ~= size(A0,1) || size(bgRGB0,2) ~= size(A0,2))
             bgRGB0 = forceRgbToSize(bgRGB0, size(A0,1), size(A0,2));
         end
 
         imgH = size(bgRGB0,1);
         imgW = size(bgRGB0,2);
 
-        infoBarPx = 55;
-        exportImgH = min(900, max(520, imgH * 3));
-        exportW = round(exportImgH * imgW / max(1,imgH));
-        exportW = min(max(exportW, 1000), 1700);
-        exportH = exportImgH + infoBarPx;
-
         scr = get(0,'ScreenSize');
+        % Freeze the displayed coordinate system, physical aspect and image
+        % rectangle for the whole export. The paper companion crops the
+        % information bar; it never enlarges/reflows this same image axes.
+        exportX=[1 imgW];exportY=[1 imgH];
+        if hasAtlasDisplay()
+            exportX=state.atlasDisplay3D.xData;exportY=state.atlasDisplay3D.yData;
+        end
+        exportAspect=double(get(ax,'DataAspectRatio'));
+        infoBarPx = 56;if exportPlan.sequence,infoBarPx=76;end
+        exportImgH = min([900 max(520,imgH*3) max(2,scr(4)-180-infoBarPx)]);
+        physicalRatio=(diff(exportX)+1)/exportAspect(1)/((diff(exportY)+1)/exportAspect(2));
+        exportW = min([1700 max(1000,round(exportImgH*physicalRatio)) max(2,scr(3)-80)]);
+        % H.264 needs even dimensions; avoid encoder padding/cropping.
+        exportW=2*floor(exportW/2);exportImgH=2*floor(exportImgH/2);
+        exportH = exportImgH + infoBarPx;
         posX = max(30, round((scr(3)-exportW)/2));
         posY = max(60, round((scr(4)-exportH)/2));
 
@@ -2038,14 +2534,16 @@ function saveVideo(~,~)
             'ToolBar','none', ...
             'NumberTitle','off', ...
             'Name','Exporting fUSI video...', ...
+            'Tag','FUSIVideoMovieCanvas','Resize','off','DockControls','off', ...
             'Units','pixels', ...
             'Position',[posX posY exportW exportH], ...
             'Renderer','opengl', ...
             'Visible','on');
+        exportCleanup=onCleanup(@()deleteExportFigure(exportFig)); %#ok<NASGU>
 
         infoAx = axes('Parent',exportFig, ...
-            'Units','normalized', ...
-            'Position',[0.00 0.93 1.00 0.07], ...
+            'Units','pixels', ...
+            'Position',[1 exportImgH+1 exportW infoBarPx], ...
             'Color','k', ...
             'XColor','k', ...
             'YColor','k', ...
@@ -2067,37 +2565,31 @@ function saveVideo(~,~)
             'Interpreter','none');
 
         exportAx = axes('Parent',exportFig, ...
-            'Units','normalized', ...
-            'Position',[0.00 0.00 1.00 0.93], ...
+            'Units','pixels', ...
+            'Position',[1 1 exportW exportImgH], ...
             'Color','k');
         exportImg = image(exportAx, zeros(imgH, imgW, 3, 'single'));
-        set(exportAx,'Visible','off','YDir','reverse','Color','k');
-        axis(exportAx,'image');
-        axis(exportAx,'off');
+        set(exportImg,'XData',exportX,'YData',exportY);
+        interpolation='bilinear';if state.sharpPixels,interpolation='nearest';end
+        if isprop(exportImg,'Interpolation'),set(exportImg,'Interpolation',interpolation);end
+        set(exportAx,'Visible','off','YDir','reverse','Color','k', ...
+            'XLim',exportX+[-.5 .5],'YLim',exportY+[-.5 .5], ...
+            'XLimMode','manual','YLimMode','manual','DataAspectRatio',exportAspect, ...
+            'PlotBoxAspectRatioMode','auto','PositionConstraint','innerposition');
+        paperTime=text(exportAx,.985,.985,'','Units','normalized','Color','w', ...
+            'FontName','Arial','FontSize',16,'FontWeight','bold','HorizontalAlignment','right', ...
+            'VerticalAlignment','top','Interpreter','none','Visible','off');
+        annotatedFrameSize=[];paperFrameSize=[];
 
-        % ===== EXPORT SLICE RANGE (nZ>1 only) =====
-        zFrom = 1; zTo = max(1,nZ);
-        if nZ > 1
-            answ = inputdlg({sprintf('First slice (1-%d):',nZ), sprintf('Last slice (1-%d):',nZ)}, ...
-                'Export slice range', 1, {'1', num2str(nZ)});
-            if isempty(answ)
-                statusLine = 'Export cancelled.'; render(); return;
-            end
-            zFrom = round(str2double(answ{1}));
-            zTo   = round(str2double(answ{2}));
-            if ~isfinite(zFrom) || ~isfinite(zTo) || zFrom < 1 || zTo > nZ || zFrom > zTo
-                errordlg('Invalid slice range.','Export');
-                statusLine = 'Export cancelled (bad range).'; render(); return;
-            end
-        end
+        [videosDir,exportIdentity]=fusiMovieExportFolder(exportPar,fileLabel,'Videos',48,exportPlan.sequence);
 
-        for zz = zFrom:zTo
+        for zz = selectedSlices
             sliceIdx = zz;
             volume   = 1;
             frame    = 1;
 
             outFile = fullfile(videosDir, ...
-                sprintf('video_%s_z%02d_%s.mp4', shortLabel, zz, timeTag));
+                sprintf('video_z%02d.mp4',zz));
 
             disp('--- SAVE VIDEO DEBUG ---');
             disp(['slice         = ' num2str(zz)]);
@@ -2106,21 +2598,27 @@ function saveVideo(~,~)
             disp(['exportFPS     = ' num2str(exportFPS)]);
             disp(['exportQuality = ' num2str(exportQuality)]);
 
-            vid = VideoWriter(outFile, 'MPEG-4');
+            paperFile=fusiPaperMoviePath(outFile);
+            movieStage=fusiMovieStage({outFile,paperFile});discardStage=onCleanup(movieStage.cleanup);
+            vid = VideoWriter(movieStage.files{1}, 'MPEG-4');
             vid.FrameRate = exportFPS;
             vid.Quality   = exportQuality;
             open(vid);
+            paperVid=VideoWriter(movieStage.files{2},'MPEG-4');paperVid.FrameRate=exportFPS;paperVid.Quality=exportQuality;
+            open(paperVid);
 
-            for v = 1:nVols
-                volume = v;
-                frame = (v - 1) * par.interpol + 1;
-                frame = max(1, min(nFrames, round(frame)));
+            for v = 1:exportCount
+                setVideoPlaybackFrame(v,false,exportPlan);
+                sliceIdx=zz;
 
                 % -------------------------------------------------
                 % Build export RGB directly (full frame, no colorbar)
                 % -------------------------------------------------
                 bgFullActive = getUnderlayFull();
                 bg2 = getBg2DForSlice(bgFullActive, sliceIdx);
+                atlasHighQuality=hasAtlasDisplay();
+                if atlasHighQuality,bg2=state.atlasDisplay3D.getSlice(sliceIdx);end
+                bg2=regionColorForDisplay(bg2,sliceIdx,atlasHighQuality);
                 bgRGB = renderUnderlayRGB(bg2);
 
                 if ndPSC == 4
@@ -2134,7 +2632,7 @@ function saveVideo(~,~)
                 A = double(A);
                 A(~isfinite(A)) = 0;
 
-                if size(bgRGB,1) ~= size(A,1) || size(bgRGB,2) ~= size(A,2)
+                if ~atlasHighQuality && (size(bgRGB,1) ~= size(A,1) || size(bgRGB,2) ~= size(A,2))
                     bgRGB = forceRgbToSize(bgRGB, size(A,1), size(A,2));
                 end
 
@@ -2179,7 +2677,8 @@ end
 
 if viewMaskedOnly && any(M(:))
     dimFactor = 0.12;
-    show3 = repmat(showMask0,[1 1 3]);
+    displayMask=resizeVideoDisplayLayer(showMask0,size(bgRGB,[1 2]),'nearest');
+    show3 = repmat(displayMask,[1 1 3]);
     bgRGB = bgRGB .* (show3 + dimFactor*(~show3));
 end
 
@@ -2188,17 +2687,22 @@ end
 A_scaled = (dispMap - cax(1)) ./ (cax(2) - cax(1) + eps);
 A_scaled = max(0, min(1, A_scaled));
 pscRGB = ind2rgb(uint8(A_scaled * (Nc-1)), mapA);
+if atlasHighQuality
+    pscRGB=resizeVideoDisplayLayer(pscRGB,size(bgRGB,[1 2]));
+    alphaMap=resizeVideoDisplayLayer(alphaMap,size(bgRGB,[1 2]));
+end
 
 a3 = repmat(alphaMap,[1 1 3]);
 baseRGB = (1-a3).*bgRGB + a3.*pscRGB;
 outRGB = baseRGB;
 
                 if ~viewMaskedOnly && any(M(:))
+                    displayMask=resizeVideoDisplayLayer(M,size(bgRGB,[1 2]),'nearest');
                     maskRGB = cat(3, ...
-                        ones(size(A,1), size(A,2)) * maskColor(1), ...
-                        ones(size(A,1), size(A,2)) * maskColor(2), ...
-                        ones(size(A,1), size(A,2)) * maskColor(3));
-                    M3 = repmat(M,[1 1 3]);
+                        ones(size(bgRGB,1), size(bgRGB,2)) * maskColor(1), ...
+                        ones(size(bgRGB,1), size(bgRGB,2)) * maskColor(2), ...
+                        ones(size(bgRGB,1), size(bgRGB,2)) * maskColor(3));
+                    M3 = repmat(displayMask,[1 1 3]);
                     alphaUse = maskAlpha;
                     if editorMode
                         alphaUse = max(0.6, maskAlpha);
@@ -2209,45 +2713,62 @@ outRGB = baseRGB;
 
                 hNow = size(outRGB,1);
                 wNow = size(outRGB,2);
-
-                set(exportImg, ...
-                    'CData', outRGB, ...
-                    'XData', [1 wNow], ...
-                    'YData', [1 hNow]);
-
-                set(exportAx, ...
-                    'XLim', [0.5 wNow+0.5], ...
-                    'YLim', [0.5 hNow+0.5], ...
-                    'YDir', 'reverse', ...
-                    'Color', 'k');
-
-                axis(exportAx,'image');
-                axis(exportAx,'off');
-
-                t = (v - 1) * TR;
-
-              set(infoText,'String',sprintf([ ...
-    'Slice %d/%d | Vol %d/%d | t = %.1f / %.1f s | ' ...
-    'Sigma %.2f | Alpha [%.0f %.0f] | Range %.1f-%.1f%% | %s'], ...
-    zz, max(1,nZ), v, nVols, t, Tmax, ...
-    overlaySmoothSigma, modMinAbs, modMaxAbs, ...
-    cax(1), cax(2), baselineStr));
-
-                try
-                    drawnow limitrate nocallbacks;
-                catch
-                    drawnow;
+                if hNow~=imgH || wNow~=imgW
+                    error('deConfUSIon:VideoExportGeometry', ...
+                        'The image dimensions changed during export. Reopen Video GUI and retry.');
                 end
+                set(exportImg,'CData',outRGB);
 
+                t = (volume - 1) * TR;
+                scanCaption='';
+                if exportPlan.sequence,scanCaption=sprintf('%s | Sequence %d/%d | ',videoScanName(),v,exportCount);end
+
+              header=sprintf([ ...
+    '%sSlice %d/%d | Vol %d/%d | t = %.1f / %.1f s | ' ...
+    'Sigma %.2f | Alpha [%.0f %.0f] | Range %.1f-%.1f%% | %s'], ...
+    scanCaption,zz, max(1,nZ), volume, nVols, t, Tmax, ...
+    overlaySmoothSigma, modMinAbs, modMaxAbs, ...
+    cax(1), cax(2), baselineStr);
+                if exportPlan.sequence
+                    header=sprintf('%s | local t = %.1f / %.1f s | slice %d/%d\nRange %.1f-%.1f%% | %s | %s', ...
+                        scanCaption,t,Tmax,zz,max(1,nZ),cax(1),cax(2),baselineStr,exportUnderlay);
+                end
+                set(infoText,'String',header);
+                set(exportFig,'Name',sprintf('Exporting slice %d | frame %d/%d | %s',zz,v,exportCount,videoScanName()));
+
+                % Every acquired volume must be rendered synchronously.
+                % limitrate can capture stale pixels/layout from its previous
+                % paper-ready frame, producing apparent zooms or static frames.
+                drawnow nocallbacks;
                 fr = getframe(exportFig);
+                if isempty(annotatedFrameSize),annotatedFrameSize=size(fr.cdata);end
+                if ~isequal(size(fr.cdata),annotatedFrameSize)
+                    error('deConfUSIon:VideoExportGeometry','The movie canvas changed size during export.');
+                end
 
                 for rr = 1:repeatEachFrame
                     writeVideo(vid, fr);
                 end
+                % Capture this fixed image rectangle without the information
+                % bar. Only the timestamp changes; geometry stays untouched.
+                stamp=sprintf('t = %.1f s',t);
+                if exportPlan.sequence,stamp=sprintf('%s | t = %.1f s',videoScanName(),t);end
+                set(paperTime,'String',stamp,'Visible','on');
+                drawnow nocallbacks;paperFrame=getframe(exportFig,[0 0 exportW exportImgH]);
+                if isempty(paperFrameSize),paperFrameSize=size(paperFrame.cdata);end
+                if ~isequal(size(paperFrame.cdata),paperFrameSize)
+                    error('deConfUSIon:VideoExportGeometry','The paper-ready movie canvas changed size during export.');
+                end
+                for rr=1:repeatEachFrame,writeVideo(paperVid,paperFrame);end
+                set(paperTime,'Visible','off');
             end
 
             close(vid);
             vid = [];
+            close(paperVid);paperVid=[];
+            movieStage.commit();clear discardStage;
+            savedFiles=[savedFiles {outFile paperFile}]; %#ok<AGROW>
+            fprintf('Video saved: %s\nPaper-ready MP4 saved: %s\n',outFile,paperFile);
         end
 
         try
@@ -2257,6 +2778,7 @@ outRGB = baseRGB;
         catch
         end
 
+        restoreVideoScan(oldScanIndex);
         volume   = oldVolume;
         playing  = oldPlaying;
         sliceIdx = oldSliceIdx;
@@ -2288,10 +2810,28 @@ outRGB = baseRGB;
             end
         end
 
-        statusLine = sprintf('Videos saved (slices %d-%d) in: %s', zFrom, zTo, videosDir);
+        statusLine = sprintf('Annotated and paper-ready videos saved (slices %s, %d frames each) in: %s',num2str(selectedSlices),exportCount,videosDir);
         render();
+        manifest=struct('export',exportIdentity,'files',{savedFiles},'slices',[min(selectedSlices) max(selectedSlices)], ...
+            'selectedSlices',selectedSlices,'exportScope',selection.scope, ...
+            'frameCount',exportCount,'TRSeconds',oldTR,'FPS',exportFPS,'baseline',baselineStr, ...
+            'underlay',exportUnderlay,'underlayScanKey',exportUnderlayKey,'overlaySmoothSigma',overlaySmoothSigma,'caxis',cax);
+        if exportPlan.sequence
+            manifest.sequence=exportPlan;
+            manifest.sequence.normalization=state.scanSequence.normMode;
+            manifest.sequence.baselineWindowSec=state.scanSequence.localWindowSec;
+            manifest.sequence.timeConvention='Local time restarts at each scan; sequence timeline follows selected order. Acquisition gaps are not inferred.';
+        end
+        settingsFile=fullfile(videosDir,'export_settings.json');
+        fid=fopen(settingsFile,'w');
+        if fid<0,error('deConfUSIon:VideoExportSettings','Cannot save export settings: %s',settingsFile);end
+        settingsGuard=onCleanup(@()fclose(fid));fprintf(fid,'%s',jsonencode(manifest,'PrettyPrint',true));clear settingsGuard;
+        savedFiles{end+1}=settingsFile;
+        setappdata(fig,'FUSIVideoLastExport',manifest);
+        fusiExportSavedDialog(savedFiles,toc(exportStarted));
 
     catch ME
+        try,if ~isempty(paperVid),close(paperVid);end,catch,end
         try
             if ~isempty(vid)
                 close(vid);
@@ -2306,6 +2846,7 @@ outRGB = baseRGB;
         catch
         end
 
+        try,restoreVideoScan(oldScanIndex);catch,end
         volume   = oldVolume;
         playing  = false;
         sliceIdx = oldSliceIdx;
@@ -2327,6 +2868,21 @@ outRGB = baseRGB;
         render();
         errordlg(sprintf('MP4 export failed:\n\n%s', ME.message), 'Save MP4 failed');
     end
+end
+
+function finishVideoExport(controls,enabled)
+    videoExporting=false;
+    for k=1:numel(controls),if isgraphics(controls(k)),set(controls(k),'Enable',enabled{k});end,end
+end
+function restoreVideoScan(index)
+    if index>0&&~isempty(state.scanSequence)&&index~=state.scanSequence.active
+        set(popOverlayScan,'Value',index);overlayScanChanged([],[],true);
+        if isappdata(fig,'FUSIScanSequenceError'),error('deConfUSIon:VideoSequence','%s',getappdata(fig,'FUSIScanSequenceError'));end
+    end
+end
+
+function deleteExportFigure(h)
+    if ~isempty(h) && isgraphics(h),delete(h);end
 end
 % =========================================================
 % SAVE MASK
@@ -2359,6 +2915,7 @@ end
         out.metadata.nZ = nZ;
         out.metadata.created = datestr(now);
         out.metadata.script = mfilename;
+        out.metadata.baseline = baseline;
         out.metadata.note = 'Mask bundle saved from fUSI Video GUI';
 
         maskBundle = struct();
@@ -2375,8 +2932,10 @@ end
 
         out.maskBundle = maskBundle;
 
-        save(fullfile(p,f),'-struct','out','-v7.3');
-        statusLine = 'Mask bundle saved.';
+        destination=fusiAnalysisOutputPath(fullfile(p,f));
+        if ~isfolder(fileparts(destination)),mkdir(fileparts(destination));end
+        save(destination,'-struct','out','-v7.3');
+        statusLine = ['Mask bundle saved: ' destination];
         render();
     end
 
@@ -2399,8 +2958,10 @@ end
         metadata.script = mfilename;
         out.metadata = metadata;
 
-        save(fullfile(p,f),'-struct','out','-v7.3');
-        statusLine = 'Interpolated data saved.';
+        destination=fusiAnalysisOutputPath(fullfile(p,f));
+        if ~isfolder(fileparts(destination)),mkdir(fileparts(destination));end
+        save(destination,'-struct','out','-v7.3');
+        statusLine = ['Interpolated data saved: ' destination];
         render();
     end
 
@@ -2704,19 +3265,19 @@ end
 % CLOSE HANDLER
 % =========================================================
     function onCloseVideo(~,~)
-        try
-            if exist('playTimer','var') && isa(playTimer,'timer')
-                stop(playTimer);
-                delete(playTimer);
-            end
-        catch
-        end
+        disposeVideoTimer();
         try
             setappdata(fig,'updatedMask',mask);
             setappdata(fig,'updatedMaskIsInclude',maskIsInclude);
         catch
         end
         delete(fig);
+    end
+
+    function disposeVideoTimer(~,~)
+        if exist('playTimer','var')&&isa(playTimer,'timer')&&isvalid(playTimer)
+            stop(playTimer);delete(playTimer);
+        end
     end
 
 % =========================================================
@@ -3214,7 +3775,11 @@ end
         end
     end
 
-function syncImageAxesToCurrentFrame(C,fastPlayback)
+function imageAppearanceChanged(~,~)
+    state.physicalScale=logical(get(cbPhysicalScale,'Value'));state.sharpPixels=logical(get(cbSharpPixels,'Value'));
+    displayGeometryKey=[];render();
+end
+function syncImageAxesToCurrentFrame(C,fastPlayback,gridSize)
     if nargin<2, fastPlayback=false; end
     if isempty(C)
         return;
@@ -3222,8 +3787,12 @@ function syncImageAxesToCurrentFrame(C,fastPlayback)
 
     h = size(C,1);
     w = size(C,2);
+    highQuality=nargin>=3 && ~isempty(gridSize);
+    if highQuality,h=gridSize(1);w=gridSize(2);end
+    xData=[1 w];yData=[1 h];
+    if highQuality,xData=state.atlasDisplay3D.xData;yData=state.atlasDisplay3D.yData;end
     % ===== 3D PROBE SMOOTH DISPLAY (nZ>1 only; coordinates unchanged) =====
-    if exist('nZ','var') && nZ > 1 && ~fastPlayback
+    if ~highQuality && exist('nZ','var') && nZ > 1 && ~fastPlayback && ~state.sharpPixels
         kUp = max(1, round(480 / max(1, min(h,w))));
         if kUp > 1
             C = imresize(C, kUp, 'bicubic');
@@ -3239,12 +3808,13 @@ function syncImageAxesToCurrentFrame(C,fastPlayback)
     end
 
     set(img,'CData',C);
-    if isprop(img,'Interpolation'), set(img,'Interpolation','bilinear'); end
-    if fastPlayback && isequal(displayGeometryKey,[h w]), return; end
-    displayGeometryKey=[h w];
+    interpolation='bilinear';if state.sharpPixels,interpolation='nearest';end
+    if isprop(img,'Interpolation'), set(img,'Interpolation',interpolation); end
+    if fastPlayback && isequal(displayGeometryKey,[h w xData yData]), return; end
+    displayGeometryKey=[h w xData yData];
     set(img, ...
-        'XData', [1 w], ...
-        'YData', [1 h]);
+        'XData', xData, ...
+        'YData', yData);
 
     set(ax, ...
         'XLim', [0.5 w+0.5], ...
@@ -3267,6 +3837,18 @@ function syncImageAxesToCurrentFrame(C,fastPlayback)
         end
         set(ax,'DataAspectRatio',[1 probeViewAspect 1]);
     end
+    if state.isAtlasWarped && isfield(state,'atlasUnderlayKey') && ~isempty(state.atlasUnderlayKey)
+        spacing=par.atlasVoxelSizeYXZUm;
+        set(ax,'DataAspectRatio',[1 spacing(2)/spacing(1) 1],'PlotBoxAspectRatioMode','auto');
+    end
+    if highQuality
+        spacing=state.atlasDisplay3D.spacingUm;
+        set(ax,'DataAspectRatio',[1 spacing(2)/spacing(1) 1],'PlotBoxAspectRatioMode','auto');
+    end
+    if ~state.physicalScale,set(ax,'DataAspectRatio',[1 1 1]);end
+    % axis image recalculates limits from the upsampled display texture.
+    % Restore the complete original pixel bounds after setting the aspect.
+    set(ax,'XLim',xData+[-.5 .5],'YLim',yData+[-.5 .5],'XLimMode','manual','YLimMode','manual');
 end
 
     function B = makeBrushMask(x0, y0, r, ny0, nx0)
@@ -3329,7 +3911,9 @@ end
         end
     end
 
-    function loadMaskBundleCB(~,~)
+    function loadMaskBundleCB(~,~,selectedFile)
+        if nargin>=3&&~isempty(selectedFile),fullf=selectedFile;
+        else
         startPath = getStartPath();
 
         [f,p] = uigetfile( ...
@@ -3341,6 +3925,7 @@ end
         end
 
         fullf = fullfile(p,f);
+        end
 
         try
             [~,~,ext] = fileparts(fullf);
@@ -3348,23 +3933,25 @@ end
 
             if strcmp(ext,'.mat')
                 S = load(fullf);
-                [maskNew, includeNew, bgNew, note] = normalizeMaskInputForVideo( ...
+                [maskNew, includeNew, bgNew, note, processedNew] = normalizeMaskInputForVideo( ...
                     S, true, bgDefaultFull, ny, nx, nZ, nVols, sliceIdx);
             else
                 M = readMaskFileForVideo(fullf);
-                [maskNew, includeNew, bgNew, note] = normalizeMaskInputForVideo( ...
+                [maskNew, includeNew, bgNew, note, processedNew] = normalizeMaskInputForVideo( ...
                     M, true, bgDefaultFull, ny, nx, nZ, nVols, sliceIdx);
             end
 
             mask = maskNew;
             maskIsInclude = includeNew;
             bgDefaultFull = bgNew;
-applyUnderlayMeta(defaultUnderlayMeta(), bgDefaultFull);
+state.defaultUnderlayProcessed = processedNew;
+applyUnderlayMeta(defaultUnderlayMeta(), bgDefaultFull, processedNew);
 
 if ~state.isAtlasWarped
     origMask = mask;
     origMaskIsInclude = maskIsInclude;
     origBgDefaultFull = bgDefaultFull;
+    origUnderlayProcessed = state.defaultUnderlayProcessed;
 end
             underSrc = 1;
             underSrcLabel = 'Default(bg)';
@@ -3388,13 +3975,13 @@ end
         end
     end
 
-    function [maskOut, maskIsIncludeOut, bgOut, note] = normalizeMaskInputForVideo( ...
+    function [maskOut, maskIsIncludeOut, bgOut, note, processed] = normalizeMaskInputForVideo( ...
         maskIn, maskInInclude, bgIn, ny0, nx0, nZ0, nVols0, slice0)
 
         maskOut = false(ny0, nx0, nZ0, nVols0);
         maskIsIncludeOut = true;
         bgOut = bgIn;
-        note = '';
+        note = '';processed=false;
 
         if nargin >= 2 && ~isempty(maskInInclude)
             try
@@ -3409,7 +3996,18 @@ end
         end
 
         if isstruct(maskIn)
-
+            B=scmReadMaskEditorBundle(maskIn);
+            if ~isempty(B)
+                selected=B.includeMask;
+                if isempty(selected),selected=true(size(B.image));end
+                maskOut=expandMaskToVideoSize(selected,ny0,nx0,nZ0,nVols0,slice0);
+                image=B.image;
+                if ~isempty(B.brainMask),image(~B.brainMask)=0;end
+                bgOut=fitBundleUnderlayToVideo(image,bgIn,ny0,nx0,nZ0);
+                processed=B.isProcessed;maskIsIncludeOut=true;
+                note='Loaded Mask Editor appearance and spatial masks.';return;
+            end
+            S=maskIn;
             try
                 if exist('GA_video_bundle_fix_v5','file') == 2
                     [maskOut, maskIsIncludeOut, bgOut, note, handled_v5] = GA_video_bundle_fix_v5('mask',S,bgIn,ny0,nx0,nZ0,nVols0,slice0);
@@ -3828,7 +4426,57 @@ end
         startPath = pwd;
     end
 
-   function warpFunctionalToAtlasCB(~,~)
+   function warpFunctionalToAtlasCB(source,~,selectedFile)
+    try
+        if nargin<3,selectedFile='';end
+        bundle=[];
+        picker=[];
+        if nargin>=3&&isa(selectedFile,'function_handle'),picker=selectedFile;selectedFile='';end
+        hasPaired3D=isfield(state,'pendingAtlasUnderlay3D')&&~isempty(state.pendingAtlasUnderlay3D);
+        if ~isempty(picker)||(nargin<3&&isgraphics(source)&&hasPaired3D)
+            lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+            [selectedFile,options]=fusiChooseAtlasTransformFile(par,getDatasetRootForVideoSelectors(), ...
+                state.atlasTransformFile,lastFile,picker);
+            setappdata(fig,'FUSIAtlasTransformPickerOptions',options);
+            if isempty(selectedFile),return;end
+        end
+        if ~isempty(selectedFile)
+            if isfolder(selectedFile),warpFunctionalToAtlasStepMotorFolder(char(selectedFile));return;end
+            selectedPayload=load(selectedFile);selectedTransform=extractAtlasWarpStruct(selectedPayload);
+            if isfield(selectedTransform,'type')&&strcmpi(selectedTransform.type,'simple_coronal_2d')
+                selectedTransform=askAndApply2DWarpDirection(selectedTransform,'Saved coronal registration');
+                I=warpDataSeriesToAtlas(origI,selectedTransform,sliceIdx);
+                I_interp=warpDataSeriesToAtlas(origI_interp,selectedTransform,sliceIdx);
+                PSC=warpDataSeriesToAtlas(origPSC,selectedTransform,sliceIdx);
+                state.isAtlasWarped=true;state.isStepMotorAtlasWarped=false;state.atlasUnderlayKey=[];
+                state.atlasTransformFile=char(selectedFile);state.lastAtlasTransformFile=char(selectedFile);
+                resetAfterDataSpaceChange(true);
+                entries=getappdata(popAtlasChoice,'AtlasUnderlayEntries2D');
+                if ~isempty(entries),atlasUnderlayChoiceCB([],[]);else,render();end
+                return;
+            end
+            bundle=fusiFindAtlasUnderlay3D(par,getDatasetRootForVideoSelectors(),selectedFile,'',size(origPSC,[1 2 3]));
+            assert(~isempty(bundle),'deConfUSIon:AtlasGeometryMismatch','No matching saved 3D alignment was found in this file.');
+        elseif isfield(state,'pendingAtlasUnderlay3D') && ~isempty(state.pendingAtlasUnderlay3D),bundle=state.pendingAtlasUnderlay3D;
+        elseif size(origPSC,3)>1
+            lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+            bundle=fusiFindAtlasUnderlay3D(par,getDatasetRootForVideoSelectors(),state.atlasTransformFile,lastFile,size(origPSC,[1 2 3]));
+        end
+        if ~isempty(bundle)
+            if nargin<3&&isgraphics(source)&&~hasPaired3D
+                [file,options]=fusiChooseAtlasTransformFile(par,getDatasetRootForVideoSelectors(), ...
+                    fusiAtlasPairedTransformFile(bundle.meta,bundle.file),bundle.file);
+                setappdata(fig,'FUSIAtlasTransformPickerOptions',options);if isempty(file),return;end
+                bundle=fusiFindAtlasUnderlay3D(par,getDatasetRootForVideoSelectors(),file,bundle.file,size(origPSC,[1 2 3]));
+                assert(~isempty(bundle),'deConfUSIon:AtlasGeometryMismatch','The selected transform does not match this native recording grid.');
+            end
+            apply3DAtlasWarp(bundle);return;
+        end
+    catch ME
+        setappdata(fig,'FUSIAtlasWarpLastError',ME);if nargin>=3,rethrow(ME);end
+        errordlg(ME.message,'3D atlas warp failed');return;
+    end
+    state.atlasUnderlayKey=[];
 
     if state.isAtlasWarped
         choice0 = questdlg(['Functional data is already in atlas space.' char(10) char(10) ...
@@ -3887,6 +4535,11 @@ function warpFunctionalToAtlasSingleFile()
 
         S = load(tfFile);
         T = extractAtlasWarpStruct(S);
+        if isfield(T,'scanGeometry') && strcmp(T.scanGeometry.convention,'coronal_stack_v2')
+            bundle=fusiFindAtlasUnderlay3D(par,getDatasetRootForVideoSelectors(),tfFile,'',size(origPSC,[1 2 3]));
+            assert(~isempty(bundle),'deConfUSIon:AtlasGeometryMismatch','The 3D transform does not match this recording.');
+            apply3DAtlasWarp(bundle);return;
+        end
         T = askAndApply2DWarpDirection(T, 'Video single atlas warp');
 
         % HUMOR_VIDEO_3D_GUARD_PATCH_20260518B
@@ -3990,12 +4643,14 @@ function warpFunctionalToAtlasSingleFile()
 end
 
 
-function warpFunctionalToAtlasStepMotorFolder()
+function warpFunctionalToAtlasStepMotorFolder(folderPath)
 
     startDir = getTransformStartPathVideo();
 
+    if nargin<1
     folderPath = uigetdir(startDir, ...
         'Select Step Motor Registration2D folder containing source001/source002 transforms');
+    end
 
     if isequal(folderPath,0)
         return;
@@ -4119,11 +4774,13 @@ function resetWarpToNativeCB(~,~)
         I_interp     = origI_interp;
         PSC          = origPSC;
         bgDefaultFull = origBgDefaultFull;
+        state.defaultUnderlayProcessed = origUnderlayProcessed;
 
         state.isAtlasWarped = false;
         state.atlasTransformFile = '';
 
         state.lastAtlasTransformFile = '';
+        state.atlasUnderlayKey=[];state.atlasSliceSampling=[];
 
 state.isStepMotorAtlasWarped = false;
 state.stepMotorAtlasFolder = '';
@@ -4132,7 +4789,7 @@ state.stepMotorAtlasSourceIdx = [];
 state.stepMotorAtlasAtlasIdx = [];
 state.atlas2DWarpDirection = 'ask';
 
-        applyUnderlayMeta(defaultUnderlayMeta(), bgDefaultFull);
+        applyUnderlayMeta(defaultUnderlayMeta(), bgDefaultFull, origUnderlayProcessed);
 
         mask = origMask;
         maskIsInclude = origMaskIsInclude;
@@ -4189,8 +4846,10 @@ end
             error('PSC must be 2D, 3D or 4D after space change.');
     end
 
+    refreshRegistered2DUnderlays();
     sliceIdx = max(1, min(nZ, round(sliceIdx)));
     volume   = max(1, min(nVols, volume));
+    if nZ>1,set(volume3DBtn,'Enable','on');else,set(volume3DBtn,'Enable','off');end
     frame    = (volume - 1) * par.interpol + 1;
     frame    = max(1, min(nFrames, round(frame)));
 
@@ -4298,7 +4957,8 @@ end
         Rout3  = imref3d(outSize3);
 
         if ndims(X) == 4
-            Y=AtlasRegistration('warp',X,T);
+            Y=fusiWarpAtlasForDisplay(X,T);
+            state.currentROIMapping=struct('kind','3DDirect','transform',T);
             return;
         end
 
@@ -4326,6 +4986,7 @@ end
             zUse = 1;
 
             X2 = prepareFunctionalSliceForReg2DVideo(X2, T, zUse);
+            state.currentROIMapping=videoSliceMapping(X,T,Ause,zUse);
 
             nTT = size(X2,3);
             Y = zeros([outSize2 nTT], 'single');
@@ -4350,6 +5011,7 @@ end
 
             X2 = squeeze(X(:,:,zUse,:));
             X2 = prepareFunctionalSliceForReg2DVideo(X2, T, zUse);
+            state.currentROIMapping=videoSliceMapping(X,T,Ause,zUse);
 
             nTT = size(X2,3);
             Y = zeros([outSize2 nTT], 'single');
@@ -4368,6 +5030,14 @@ end
 
     error('Unsupported transform matrix size.');
     end
+
+function mapping=videoSliceMapping(X,T,A,sourceSlice)
+    nativeShape=size(X,[1 2]);transposed=false;
+    if isfield(T,'sourceSize')&&numel(T.sourceSize)>=2
+        transposed=isequal(nativeShape,fliplr(double(T.sourceSize(1:2))))&&~isequal(nativeShape,double(T.sourceSize(1:2)));
+    end
+    mapping=struct('kind','2D','matrices',{{A}},'sourceSlices',sourceSlice,'transpose',transposed);
+end
 
 
 function [Y, report] = warpDataSeriesToAtlasStepMotorVideo(X, regList)
@@ -4490,6 +5160,12 @@ function [Y, report] = warpDataSeriesToAtlasStepMotorVideo(X, regList)
     end
 
     report.usedRegList = regList;
+    matrices=cell(1,nUse);transposed=false(1,nUse);
+    for k=1:nUse
+        T=regList(k).T;matrices{k}=apply2DWarpDirectionToMatrixVideo(double(T.warpA),T);
+        part=videoSliceMapping(X,T,matrices{k},regList(k).sourceIdx);transposed(k)=part.transpose;
+    end
+    state.currentROIMapping=struct('kind','2D','matrices',{matrices},'sourceSlices',report.sourceIdx,'transpose',transposed);
 end
 
 
@@ -4709,23 +5385,182 @@ function score = scoreStepMotorTransformFileVideo(f, T)
     end
 end
 
-function loadNewUnderlayCB(~,~)
-    ensureUnderlayStateFields();
-    startPath = getUnderlayStartPath();
-
-    [f,p] = uigetfile( ...
-        {'*.mat;*.nii;*.nii.gz;*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.bmp', ...
-         'Underlay files (*.mat,*.nii,*.nii.gz,*.png,*.jpg,*.jpeg,*.tif,*.tiff,*.bmp)'}, ...
-        'Select new underlay', startPath);
-
-    if isequal(f,0)
-        return;
+function showRegionList(~,~)
+    labels=state.regionLabelUnderlay;regionInfoForList=state.regionInfo;
+    if isempty(labels)
+        ctx=getappdata(popAtlasChoice,'AtlasRegionContext2D');
+        if ~isempty(ctx),labels=ctx.labels;regionInfoForList=ctx.info;end
     end
+    if isempty(labels)&&~isempty(state.pendingAtlasUnderlay3D)
+        space='native';if state.isAtlasWarped,space='atlas';end
+        ctx=fusiAtlasSearchContext(state.pendingAtlasUnderlay3D,space,[]);
+        if ~isempty(ctx),labels=ctx.labels;regionInfoForList=ctx.info;end
+    end
+    fusiRegionListDialog(labels,regionInfoForList);
+end
+function updateRegionLabels(varargin)
+    labels=[];xData=[];yData=[];
+    z=sliceIdx;
+    namesShown=logical(get(cbRegionLabels,'Value'));linesShown=logical(get(cbAtlasLines,'Value'));
+    regionInfoForDisplay=state.regionInfo;
+    if (namesShown||linesShown)&&state.isColorUnderlay&&~isempty(state.regionLabelUnderlay)
+        if ~isempty(state.atlasDisplay3D)&&isfield(state.atlasDisplay3D,'getLabels')
+            labels=state.atlasDisplay3D.getLabels(z);xData=state.atlasDisplay3D.xData;yData=state.atlasDisplay3D.yData;
+        else,labels=state.regionLabelUnderlay(:,:,min(z,size(state.regionLabelUnderlay,3)));end
+    elseif namesShown||linesShown
+        ctx=state.regionContext3D;if isempty(ctx),ctx=getappdata(popAtlasChoice,'AtlasRegionContext2D');end
+        if ~isempty(ctx)
+            regionInfoForDisplay=ctx.info;
+            if isfield(ctx,'displayProvider')
+                labels=ctx.displayProvider.getLabels(z);xData=ctx.displayProvider.xData;yData=ctx.displayProvider.yData;
+            else,labels=ctx.labels(:,:,min(z,size(ctx.labels,3)));end
+        end
+    end
+    if isempty(xData),xData=[1 size(labels,2)];yData=[1 size(labels,1)];end
+    fusiRegionAnnotations(ax,labels,regionInfoForDisplay,namesShown, ...
+        [state.underlayRevision z],xData,yData);
+    fusiRegionBoundaryOverlay(ax,labels,linesShown,[state.underlayRevision z],xData,yData);
+end
+function regionAppearanceChanged(src,~)
+    choices=get(src,'String');state.regionScheme=choices{get(src,'Value')};
+    state.renderedAtlasCache={};playbackUnderlayCache=[];render();
+end
+function refreshRegistered2DUnderlays()
+    if ~state.isAtlasWarped || (isfield(state,'atlasUnderlayKey')&&~isempty(state.atlasUnderlayKey)),return;end
+    files={state.atlasTransformFile};
+    if state.isStepMotorAtlasWarped,files=state.stepMotorAtlasTransformFiles;end
+    [entries,names,ctx]=fusiAtlasUnderlayLibrary2D(files,[ny nx nZ]);
+    if isempty(entries),return;end
+    selected=1;
+    for k=1:numel(entries)
+        if (state.isColorUnderlay&&entries{k}.meta.isColor&&strcmp(entries{k}.grouping,'Detailed'))||(~state.isColorUnderlay&&strcmp(entries{k}.meta.atlasMode,'histology')),selected=k;end
+    end
+    setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',entries);setappdata(popAtlasChoice,'AtlasRegionContext2D',ctx);
+    setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});
+    set(popAtlasChoice,'String',names,'Value',selected,'Enable','on');
+    if state.isColorUnderlay&&~isempty(ctx)
+        state.regionLabelUnderlay=entries{selected}.meta.regionLabels;state.regionInfo=entries{selected}.meta.regionInfo;
+    end
+end
+function result=underlayData()
+    result=struct('PSC',PSC,'underlay',bgDefaultFull,'isAtlasWarped',state.isAtlasWarped,'regionLabels',state.regionLabelUnderlay, ...
+        'regionInfo',state.regionInfo,'transformFile',state.atlasTransformFile,'mapping',state.currentROIMapping, ...
+        'imageGeometry',struct('xlim',ax.XLim,'ylim',ax.YLim,'aspect',ax.DataAspectRatio, ...
+        'underlayX',img.XData,'underlayY',img.YData,'underlayTextureSize',size(img.CData,[1 2])));
+end
+function atlasUnderlayChoiceCB(~,~)
+    entries=getappdata(popAtlasChoice,'AtlasUnderlayEntries2D');
+    if ~isempty(entries)
+        entry=entries{get(popAtlasChoice,'Value')};
+        bgDefaultFull=entry.data;applyUnderlayMeta(entry.meta,bgDefaultFull);
+        underSrc=1;underSrcLabel='Default(bg)';set(popUSrc,'Value',1);
+        setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',entries);set(popAtlasChoice,'Enable','on');render();return;
+    end
+    files=getappdata(popAtlasChoice,'AtlasUnderlayFiles');if isempty(files),return;end
+    groups=getappdata(popAtlasChoice,'AtlasUnderlayGroupings');k=get(popAtlasChoice,'Value');
+    loadNewUnderlayCB([],[],struct('file',files{k},'grouping',groups{k}));
+end
+function refreshAtlasUnderlayChoices()
+    setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',{});
+    bundle=state.pendingAtlasUnderlay3D;
+    space='native';if state.isAtlasWarped,space='atlas';end
+    state.regionContext3D=fusiAtlasSearchContext(bundle,space,state.regionContext3D);
+    [names,files,selected,groups]=fusiAtlasUnderlayChoices(bundle.file);
+    if isempty(names),set(popAtlasChoice,'Enable','off');return;end
+    set(popAtlasChoice,'String',names,'Value',selected,'Enable','on');
+    setappdata(popAtlasChoice,'AtlasUnderlayFiles',files);
+    setappdata(popAtlasChoice,'AtlasUnderlayGroupings',groups);
+    if bundle.meta.isColor&&isfield(bundle.meta,'regionGrouping')
+        selected=find(strcmp(files,bundle.file)&strcmp(groups,bundle.meta.regionGrouping),1);
+        if ~isempty(selected),set(popAtlasChoice,'Value',selected);end
+    end
+end
 
-    fullf = fullfile(p,f);
+function apply3DAtlasWarp(bundle)
+    playing=false;set(playBtn,'Value',0,'String','Play');stop(playTimer);
+    meta=bundle.meta;[newBG,viewMeta,Tgrid,gridInfo]=fusiCachedAtlasUnderlayView3D(bundle.underlay,meta,'atlas');
+    reuse=state.isAtlasWarped && isfield(state,'atlasUnderlayKey') && isequal(state.atlasUnderlayKey,meta.registrationKey);
+    if ~reuse
+        Inew=fusiWarpAtlasForDisplay(origI,Tgrid);
+        if isequaln(origI,origI_interp),IinterpNew=Inew;else,IinterpNew=fusiWarpAtlasForDisplay(origI_interp,Tgrid);end
+        PSCnew=fusiWarpAtlasForDisplay(origPSC,Tgrid,true);
+        I=Inew;I_interp=IinterpNew;PSC=PSCnew;
+    end
+    state.pendingAtlasUnderlay3D=bundle;state.atlasUnderlayKey=meta.registrationKey;state.atlasSliceSampling=gridInfo;
+    if ~reuse,state.currentROIMapping=struct('kind','3D','transform',Tgrid);end
+    state.isAtlasWarped=true;state.isStepMotorAtlasWarped=false;
+    transformFile=fusiAtlasPairedTransformFile(meta,bundle.file);
+    state.atlasTransformFile=transformFile;state.lastAtlasTransformFile=transformFile;
+    par.atlasVoxelSizeYXZUm=viewMeta.voxelSizeUm;
+    if ~reuse,forceStepMotorAtlasGrayUnderlayVideo();end
+    bgDefaultFull=newBG;applyUnderlayMeta(viewMeta,bgDefaultFull);underSrc=1;underSrcLabel='Default(bg)';set(popUSrc,'Value',1);
+    refreshAtlasUnderlayChoices();
+    if ~reuse,resetAfterDataSpaceChange(true);end
+    [folder,name,ext]=fileparts(transformFile);[~,version]=fileparts(folder);
+    statusLine=sprintf('Atlas: %s | %s/%s%s | %d acquired slices', ...
+        meta.atlasMode,version,name,ext,size(origPSC,3));
+    set(btnWarpAtlas,'String','WARP TO ATLAS: CHOOSE TRANSFORM','TooltipString',transformFile);
+    setappdata(fig,'FUSIAtlasAppliedTransformFile',transformFile);render();
+end
+function applyStepMotorUnderlayBundleVideo(bundle)
+    playing=false;set(playBtn,'Value',0,'String','Play');stop(playTimer);
+    reuse=state.isAtlasWarped&&state.isStepMotorAtlasWarped&&~isempty(state.currentROIMapping)&& ...
+        isfield(state,'stepMotorUnderlayBundle')&&~isempty(state.stepMotorUnderlayBundle)&& ...
+        strcmp(state.stepMotorUnderlayBundle.sessionFile,bundle.sessionFile)&&strcmp(state.atlasTransformFile,bundle.folder);
+    sourceCount=1;if ndims(origPSC)==4,sourceCount=size(origPSC,3);end
+    if ~reuse
+        assert(sourceCount==bundle.sourceNSlices,'deConfUSIon:StepMotorSourceMismatch', ...
+            'This registration was saved for %d source slices; the current recording has %d.',bundle.sourceNSlices,sourceCount);
+        regList=askAndApply2DWarpDirectionToRegListVideo(bundle.regList,'Saved step-motor registration');
+        [Inew,report]=warpDataSeriesToAtlasStepMotorVideo(origI,regList);
+        if isequaln(origI,origI_interp),IinterpNew=Inew;else,IinterpNew=warpDataSeriesToAtlasStepMotorVideo(origI_interp,regList);end
+        PSCnew=warpDataSeriesToAtlasStepMotorVideo(origPSC,regList);
+        I=Inew;I_interp=IinterpNew;PSC=PSCnew;
+        state.stepMotorAtlasTransformFiles=report.files;state.stepMotorAtlasSourceIdx=report.sourceIdx;state.stepMotorAtlasAtlasIdx=report.atlasIdx;
+    end
+    state.stepMotorUnderlayBundle=bundle;state.isAtlasWarped=true;state.isStepMotorAtlasWarped=true;
+    state.atlasUnderlayKey=[];state.pendingAtlasUnderlay3D=[];state.atlasDisplay3D=[];state.regionContext3D=[];
+    state.atlasTransformFile=bundle.folder;state.lastAtlasTransformFile=bundle.regList(1).file;state.stepMotorAtlasFolder=bundle.folder;
+    entry=bundle.entries{bundle.selected};bgDefaultFull=entry.data;applyUnderlayMeta(entry.meta,bgDefaultFull);
+    underSrc=1;underSrcLabel='Default(bg)';set(popUSrc,'Value',1);
+    if ~reuse,forceStepMotorAtlasGrayUnderlayVideo();resetAfterDataSpaceChange(true);end
+    setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',bundle.entries);setappdata(popAtlasChoice,'AtlasRegionContext2D',bundle.context);
+    setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});set(popAtlasChoice,'String',bundle.names,'Value',bundle.selected,'Enable','on');
+    set(btnWarpAtlas,'String','STEP MOTOR ATLAS-WARPED','TooltipString',bundle.sessionFile);
+    statusLine=sprintf('Saved atlas session: %d/%d planes | %s. Alignment is available to all loaded scans.',numel(bundle.sourceSliceIndices),bundle.sourceNSlices,bundle.names{bundle.selected});render();
+end
+function loadNewUnderlayCB(~,~,selectedFile)
+    ensureUnderlayStateFields();
+    groupingOverride='';
+    if nargin>=3&&isstruct(selectedFile)
+        groupingOverride=selectedFile.grouping;selectedFile=selectedFile.file;
+    end
+    if nargin<3 || isa(selectedFile,'function_handle')
+    picker=[];if nargin>=3,picker=selectedFile;end
+    lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+    [fullf,options]=fusiChooseUnderlayFile(par,getDatasetRootForVideoSelectors(),state.atlasTransformFile,lastFile,picker);
+    setappdata(fig,'FUSIUnderlayPickerOptions',options);
+    if isempty(fullf),return;end
+    else,fullf=char(selectedFile);end
 
     try
+        motorBundle=fusiReadStepMotorUnderlays2D(fullf);
+        if ~isempty(motorBundle)
+            applyStepMotorUnderlayBundleVideo(motorBundle);state.lastUnderlayFile=fullf;return;
+        elseif isfolder(fullf)
+            warpFunctionalToAtlasStepMotorFolder(fullf);state.lastUnderlayFile=fullf;return;
+        end
         [Uraw, meta] = readUnderlayFile(fullf);
+        if isfield(meta,'registrationBundle3D') && meta.registrationBundle3D
+            [Uraw,meta]=fusiAtlasRegroupUnderlay3D(Uraw,meta,groupingOverride);
+            assert(isequal(double(meta.transform.scanGeometry.originalSize),double(size(origPSC,[1 2 3]))), ...
+                'deConfUSIon:AtlasGeometryMismatch','This underlay was saved for a different native recording grid.');
+            bundle=struct('file',fullf,'underlay',Uraw,'meta',meta);
+            apply3DAtlasWarp(bundle);
+            state.lastUnderlayFile=fullf;
+            return;
+        end
+        state.lastUnderlayFile=fullf;
         Uraw = squeeze(Uraw);
 
         if state.isAtlasWarped
@@ -4736,7 +5571,7 @@ function loadNewUnderlayCB(~,~)
                 underSrcLabel = 'Default(bg)';
                 set(popUSrc,'Value',1);
                 statusLine = ['Loaded atlas-space underlay: ' fullf];
-                render();
+                refreshRegistered2DUnderlays();render();
                 return;
 
             elseif doesUnderlayMatchOriginalDisplay(Uraw)
@@ -4770,6 +5605,7 @@ function loadNewUnderlayCB(~,~)
             applyUnderlayMeta(meta, bgDefaultFull);
 
             origBgDefaultFull = bgDefaultFull;
+            origUnderlayProcessed = false;
 
             underSrc = 1;
             underSrcLabel = 'Default(bg)';
@@ -4854,6 +5690,7 @@ applyUnderlayMeta(meta, bgDefaultFull);
         render();
 
     catch ME
+        if nargin>=3,rethrow(ME);end
         errordlg(ME.message,'Load underlay failed');
     end
 end
@@ -5008,8 +5845,19 @@ end
     error('forceRgbToSize expected RGB image.');
 end
 
-function applyUnderlayMeta(meta, U)
+function applyUnderlayMeta(meta, U, processed)
+    if isfield(state,'underlayRevision'),state.underlayRevision=state.underlayRevision+1;end
+    state.renderedAtlasCache={};
     ensureUnderlayStateFields();
+    if nargin<3,processed=false;end
+    state.defaultUnderlayProcessed=logical(processed);
+    state.atlasDisplay3D=[];
+    if isstruct(meta) && isfield(meta,'displayProvider'),state.atlasDisplay3D=meta.displayProvider;end
+    if ~(isstruct(meta)&&isfield(meta,'registrationBundle3D')&&meta.registrationBundle3D)
+        state.regionContext3D=[];
+        setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',{});
+        if exist('popAtlasChoice','var')&&isgraphics(popAtlasChoice),set(popAtlasChoice,'Enable','off');end
+    end
 
     state.isColorUnderlay     = false;
     state.regionLabelUnderlay = [];
@@ -5021,7 +5869,9 @@ function applyUnderlayMeta(meta, U)
             state.isColorUnderlay = logical(meta.isColor);
         end
         if isfield(meta,'regionLabels') && ~isempty(meta.regionLabels)
-    state.regionLabelUnderlay = fitRegionLabelsToCurrentDisplay(meta.regionLabels, ny, nx);
+    if (isfield(meta,'registrationBundle3D') && meta.registrationBundle3D)||isequal(size(meta.regionLabels,[1 2 3]),[ny nx nZ])
+        state.regionLabelUnderlay=meta.regionLabels;
+    else,state.regionLabelUnderlay = fitRegionLabelsToCurrentDisplay(meta.regionLabels, ny, nx);end
     state.isColorUnderlay = true;
 end
         if isfield(meta,'regionInfo') && ~isempty(meta.regionInfo)
@@ -5250,37 +6100,9 @@ function [u, ia] = uniquePathListVideo(c)
 end
 
     function startPath = getUnderlayStartPath()
-
-    try
-        if isstruct(par) && isfield(par,'underlayStartPath') && ...
-                ~isempty(par.underlayStartPath) && exist(char(par.underlayStartPath),'dir') == 7
-            startPath = char(par.underlayStartPath);
-            return;
-        end
-    catch
-    end
-
-    try
-        if state.isAtlasWarped && ~isempty(state.atlasTransformFile) && exist(state.atlasTransformFile,'file') == 2
-            startPath = fileparts(state.atlasTransformFile);
-            return;
-        end
-    catch
-    end
-
-    root = getDatasetRootForVideoSelectors();
-
-    cand = { ...
-        fullfile(root,'Registration2D'), ...
-        fullfile(root,'Registration'), ...
-        fullfile(root,'Visualization'), ...
-        fullfile(root,'Masks'), ...
-        fullfile(root,'Mask'), ...
-        root, ...
-        getStartPath(), ...
-        pwd};
-
-    startPath = firstExistingDirVideo(cand);
+    lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+    options=fusiUnderlayPickerOptions(par,getDatasetRootForVideoSelectors(),state.atlasTransformFile,lastFile);
+    startPath=options.startPath;
 end
 
 function [U, meta] = readUnderlayFile(f)
@@ -5310,6 +6132,7 @@ function [U, meta] = readUnderlayFile(f)
 
     switch e
         case '.mat'
+            [matched,U,meta]=fusiCachedAtlasUnderlay3D(f);if matched,return;end
             S = load(f);
             [U, meta] = extractUnderlayFromMatStruct(S);
 
@@ -5337,6 +6160,7 @@ function meta = defaultUnderlayMeta()
 end
 
     function [U, meta] = extractUnderlayFromMatStruct(S)
+    [matched,U,meta]=fusiReadAtlasUnderlay3D(S);if matched,return;end
     meta = defaultUnderlayMeta();
 
     % =====================================================
@@ -5391,6 +6215,7 @@ end
         elseif isfield(S,'infoRegions') && ~isempty(S.infoRegions)
             meta.regionInfo = S.infoRegions;
         end
+        if ~isempty(meta.regionLabels),U=fusiRegionLabelRGB(meta.regionLabels,meta.regionInfo);end
         return;
     end
 
@@ -5603,6 +6428,55 @@ function tf = doesUnderlayMatchOriginalDisplay(U)
     end
 end
 
+function yes=hasAtlasDisplay()
+    yes=underSrc==1 && ~isempty(state.atlasDisplay3D);
+end
+
+function resized=resizeVideoDisplayLayer(layer,shape,method)
+    if nargin<3,method='linear';end
+    bounds=[];if hasAtlasDisplay(),bounds=state.atlasDisplay3D;end
+    resized=fusiResizeDisplayLayer(layer,shape,method,bounds);
+end
+
+function U=regionColorForDisplay(U,z,atlasHighQuality)
+    if underSrc==1&&state.isColorUnderlay&&~isempty(state.regionLabelUnderlay)&&~strcmp(state.regionScheme,'Atlas')
+        labelsForColor=state.regionLabelUnderlay(:,:,min(z,size(state.regionLabelUnderlay,3)));
+        if atlasHighQuality,labelsForColor=state.atlasDisplay3D.getLabels(z);end
+        U=fusiRegionLabelRGB(labelsForColor,state.regionInfo,state.regionScheme);
+    end
+end
+
+    function restoreAtlasDisplayContext()
+        if ~isfield(par,'fusiAtlasDisplayContext'),return;end
+        ctx=par.fusiAtlasDisplayContext;bundle=ctx.bundle;
+        [bgDefaultFull,meta,Tgrid,grid]=fusiCachedAtlasUnderlayView3D(bundle.underlay,bundle.meta,'atlas');
+        assert(isequal(size(PSC,[1 2 3]),grid.outputSizeYXZ),'deConfUSIon:AtlasGeometryMismatch','Transferred atlas display and PSC grids differ.');
+        origPSC=ctx.nativePSC;origI=ctx.nativePSC;origI_interp=ctx.nativePSC;origBgDefaultFull=ctx.nativeBG;
+        state.currentROIMapping=struct('kind','3D','transform',Tgrid);
+        if isfield(ctx,'mapping')&&~isempty(ctx.mapping),state.currentROIMapping=ctx.mapping;end
+        if isfield(ctx,'nativePower')&&~isempty(ctx.nativePower)
+            progress=fusiBaselineProgress('open','Preparing the shared atlas in Video');
+            progressGuard=onCleanup(@()fusiBaselineProgress('close',progress)); %#ok<NASGU>
+            fusiBaselineProgress('update',progress,0,'Placing absolute power on the same atlas grid...');
+            origI=ctx.nativePower;origI_interp=ctx.nativePower;par.videoInputIsPSC=false;
+            I=scmWarpMappedSeries(origI,state.currentROIMapping,[ny nx nZ]);I_interp=I;
+            fusiBaselineProgress('update',progress,1,'Shared atlas and scan controls ready.');clear progressGuard;
+        end
+        shape=size(origPSC,[1 2 3]);
+        [origMask,origMaskIsInclude]=normalizeMaskInputForVideo(ctx.nativeMask,ctx.nativeMaskIsInclude,ctx.nativeBG,shape(1),shape(2),shape(3),size(origPSC,4),ctx.slice);
+        state.isAtlasWarped=true;state.atlasUnderlayKey=bundle.meta.registrationKey;
+        state.pendingAtlasUnderlay3D=bundle;state.atlasSliceSampling=grid;
+        transformFile=fusiAtlasPairedTransformFile(meta,bundle.file);
+        state.atlasTransformFile=transformFile;state.lastAtlasTransformFile=transformFile;
+        set(btnWarpAtlas,'String','WARP TO ATLAS: CHOOSE TRANSFORM','TooltipString',transformFile);
+        setappdata(fig,'FUSIAtlasAppliedTransformFile',transformFile);
+        sliceIdx=max(1,min(nZ,ctx.slice));par.atlasVoxelSizeYXZUm=meta.voxelSizeUm;
+        applyUnderlayMeta(meta,bgDefaultFull);refreshAtlasUnderlayChoices();
+        state.regionScheme=ctx.regionScheme;uState=ctx.appearance;
+        options=get(popRegionScheme,'String');set(popRegionScheme,'Value',find(strcmp(options,state.regionScheme),1));
+        set(slBri,'Value',uState.brightness);set(slCon,'Value',uState.contrast);set(slGam,'Value',uState.gamma);
+        set(txtBri,'String',sprintf('%.2f',uState.brightness));set(txtCon,'String',sprintf('%.2f',uState.contrast));set(txtGam,'String',sprintf('%.2f',uState.gamma));
+    end
  function rgb = renderUnderlayRGB(Uin)
     ensureUnderlayStateFields();
 
@@ -5612,7 +6486,11 @@ end
     if isRgbImage || isRegionLabel
         rgb = convertUnderlayToColorRGB(Uin);
     else
-        rgb = toRGB(processUnderlay(Uin));
+        if state.defaultUnderlayProcessed && underSrc==1
+            rgb=toRGB(Uin);
+        else
+            rgb = toRGB(processUnderlay(Uin));
+        end
     end
 end
 
@@ -5634,15 +6512,13 @@ function rgb = convertUnderlayToColorRGB(U)
 
         maxLab = max(L(:));
         if isempty(state.regionColorLUT) || size(state.regionColorLUT,1) < max(1,maxLab)
-            state.regionColorLUT = makeRegionColorLUT(max(1,maxLab));
+            state.regionColorLUT = fusiRegionColorLUT(state.regionInfo,max(1,maxLab));
         end
 
         rgb = zeros([size(L,1) size(L,2) 3], 'double');
 
         zmask = (L == 0);
-        rgb(:,:,1) = 0.85 * zmask;
-        rgb(:,:,2) = 0.85 * zmask;
-        rgb(:,:,3) = 0.85 * zmask;
+        % Region 0 is always black.
 
         pos = find(L > 0);
         if ~isempty(pos)
@@ -6502,5 +7378,3 @@ end
     end
 
 end
-
-

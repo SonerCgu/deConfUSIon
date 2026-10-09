@@ -33,6 +33,7 @@ function [I3D, motorInfo] = motor(I, TR, qcFolder, opts)
 % MATLAB 2017b / 2023b compatible
 % =========================================================
 
+deConfUSIon_setup();
 if nargin < 1
     I = [];
 end

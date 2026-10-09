@@ -14,6 +14,7 @@ function scanInt = interpolate3D(atlas, scan)
 % ------------------------------------------------------------
 
 % Basic checks
+deConfUSIon_setup();
 if ~isstruct(scan) || ~isfield(scan,'Data') || isempty(scan.Data)
     error('interpolate3D: scan must be a struct with non-empty field .Data');
 end

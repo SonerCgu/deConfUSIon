@@ -1,5 +1,6 @@
 function varargout = GroupAnalysis_Common(action, varargin)
 
+deConfUSIon_setup();
 if nargin < 1 || isempty(action)
     error('GroupAnalysis_Common requires an action string.');
 end
@@ -552,22 +553,22 @@ for i = 1:n
     isVEH(i) = contains(u,'VEH') || contains(u,'VEHICLE') || contains(u,'CONTROL');
 end
 
-if strcmpi(S.colorScheme,'PACAP/Vehicle') && n==2
+if any(strcmpi(S.colorScheme,{'PACAP/Vehicle','PACAP/Control'})) && n==2
     if sum(isPAC)==1
         pacIdx = find(isPAC,1,'first');
         otherIdx = setdiff(1:2,pacIdx);
         dispNames{pacIdx} = 'PACAP';
-        dispNames{otherIdx} = 'Vehicle';
+        dispNames{otherIdx} = 'Control';
         return;
     elseif sum(isVEH)==1
         vehIdx = find(isVEH,1,'first');
         otherIdx = setdiff(1:2,vehIdx);
-        dispNames{vehIdx} = 'Vehicle';
+        dispNames{vehIdx} = 'Control';
         dispNames{otherIdx} = 'PACAP';
         return;
     else
         dispNames{1} = 'PACAP';
-        dispNames{2} = 'Vehicle';
+        dispNames{2} = 'Control';
         return;
     end
 end
@@ -578,7 +579,7 @@ for i = 1:n
     if contains(u,'PACAP')
         dispNames{i} = 'PACAP';
     elseif contains(u,'VEH') || contains(u,'VEHICLE') || contains(u,'CONTROL')
-        dispNames{i} = 'Vehicle';
+        dispNames{i} = 'Control';
     else
         if strcmpi(S.colorMode,'Manual A/B')
             if i==1 && ~isempty(strtrimSafe(S.manualGroupA))
@@ -641,11 +642,7 @@ function keys = makeRowKeys(tbl)
 n = size(tbl,1);
 keys = cell(n,1);
 for i = 1:n
-    sid = strtrimSafe(tbl{i,2});
-    grp = strtrimSafe(tbl{i,3});
-    cd  = strtrimSafe(tbl{i,4});
-    pid = strtrimSafe(tbl{i,5});
-    keys{i} = [sid '|' grp '|' cd '|' pid];
+    keys{i} = strjoin(cellfun(@strtrimSafe,tbl(i,2:8),'UniformOutput',false),'|');
 end
 end
 
@@ -681,6 +678,12 @@ writeExcelSheetCompat(outFile, 'Metadata', metaSheet);
 writeExcelSheetCompat(outFile, 'Condition_A', condASheet);
 writeExcelSheetCompat(outFile, 'Condition_B', condBSheet);
 writeExcelSheetCompat(outFile, 'Outlier_Audit', auditSheet);
+if isfield(S,'lastROI')&&isstruct(S.lastROI)&&isfield(S.lastROI,'stats')
+    writeExcelSheetCompat(outFile,'ROI_Statistics',buildROIStatisticsSheetForExcel(S.lastROI));
+end
+if isfield(S,'outlierHistory')&&~isempty(S.outlierHistory)
+    writeExcelSheetCompat(outFile,'Exclusion_History',buildExclusionHistorySheetForExcel(S.outlierHistory));
+end
 
 try
     styleGroupAnalysisWorkbook(outFile);
@@ -699,6 +702,53 @@ else
         else
             error('Excel write failed on sheet %s.', sheetName);
         end
+    end
+end
+end
+
+function C=buildROIStatisticsSheetForExcel(R)
+st=R.stats;
+% Older saved results have no confidence interval. Export their original
+% values without implying that the new reporting fields were recorded.
+fallback=struct('effect',NaN,'effectLabel','Not recorded in legacy result', ...
+    'confidenceLevel',NaN,'ci',[NaN NaN], ...
+    'multiplicity','Unadjusted p-value; multiplicity not recorded in legacy result', ...
+    'warnings',{{}});
+fields=fieldnames(fallback);
+for k=1:numel(fields)
+    if ~isfield(st,fields{k}),st.(fields{k})=fallback.(fields{k});end
+end
+df=st.df;if ~isscalar(df),df=mat2str(df);end
+C={'Item','Value';'Test',st.type;'Endpoint',R.metricName; ...
+    'P-value (full precision)',st.p;'P-value (display only)',gaFormatPValue(st.p); ...
+    'Alpha',st.alpha;'t statistic',st.t;'F statistic',st.F;'Degrees of freedom',df; ...
+    'Effect (original signal units)',st.effect;'Effect direction',st.effectLabel; ...
+    'Confidence level',st.confidenceLevel;'CI lower',st.ci(1);'CI upper',st.ci(2); ...
+    'Multiplicity',st.multiplicity; ...
+    'Warnings',strjoin(st.warnings,' ')};
+if isfield(st,'groupNames')&&isfield(st,'n')&&isfield(st,'nMissing')
+    for k=1:numel(st.groupNames)
+        C(end+1,:)={['Finite rows: ' st.groupNames{k}],st.n(k)};
+        C(end+1,:)={['Missing metric rows: ' st.groupNames{k}],st.nMissing(k)};
+    end
+end
+if isfield(st,'pairing'),C(end+1,:)={'Complete pairs',st.pairing.nPairs};end
+if isfield(R,'metricSettings')&&isfield(R.metricSettings,'selection')
+    C(end+1,:)={'Endpoint selection',R.metricSettings.selection};
+end
+end
+
+function C=buildExclusionHistorySheetForExcel(history)
+C={'ExcludedAt','AnimalID','Group','Condition','Method','Threshold','Metric', ...
+    'ScreeningScore','LowerFence','UpperFence','NAtScreening','ExclusionReason','PBeforeExclusion','ROIFile'};
+for k=1:numel(history)
+    event=history{k};T=event.subjTable;
+    for i=find(event.flags(:))'
+        if ~any(strcmp(event.excludedKeys,event.rowKeys{i})),continue;end
+        p=NaN;if isfield(event,'statsBefore'),p=event.statsBefore.p;end
+        C(end+1,:)={event.excludedAt,T{i,2},T{i,3},T{i,4},event.method,event.threshold, ...
+            event.metricValues(i),event.details.score(i),event.details.lowerFence(i), ...
+            event.details.upperFence(i),event.details.stratumN(i),event.exclusionReason,p,T{i,7}}; %#ok<AGROW>
     end
 end
 end
@@ -795,18 +845,10 @@ end
     end
 end
 
-xAnal = metricVals(isfinite(metricVals));
-gMed = NaN;
-gMad = NaN;
-rz = nan(size(metricVals));
-
-if ~isempty(xAnal)
-    gMed = median(xAnal);
-    gMad = median(abs(xAnal - gMed));
-    if isfinite(gMad) && gMad > 0
-        rz(isfinite(metricVals)) = 0.6745 * (metricVals(isfinite(metricVals)) - gMed) / gMad;
-    end
-end
+threshold=S.outMADthr;
+if strcmpi(S.outlierMethod,'IQR rule'), threshold=S.outIQRk; end
+if strcmpi(S.outlierMethod,'SD z-score (exploratory)'),threshold=S.outSDthr;end
+[auditFlags,rz]=gaOutlierScores(metricVals,fullTbl,S.outlierMethod,threshold);
 
 for i = 1:size(fullTbl,1)
     info = extractRowMetaForExcel(fullTbl(i,:));
@@ -829,20 +871,8 @@ for i = 1:size(fullTbl,1)
     thrTxt = '';
     isOut = false;
 
-    if strcmpi(S.outlierMethod,'MAD robust z-score')
-        thrTxt = num2str(S.outMADthr);
-        isOut = isfinite(rz(i)) && abs(rz(i)) > S.outMADthr;
-    elseif strcmpi(S.outlierMethod,'IQR rule')
-        thrTxt = num2str(S.outIQRk);
-        if ~isempty(xAnal)
-            q1 = prctile(xAnal,25);
-            q3 = prctile(xAnal,75);
-            iqrV = q3 - q1;
-            lo = q1 - S.outIQRk * iqrV;
-            hi = q3 + S.outIQRk * iqrV;
-            isOut = isfinite(metricVals(i)) && (metricVals(i) < lo || metricVals(i) > hi);
-        end
-    end
+    thrTxt=num2str(threshold);
+    isOut=auditFlags(i);
 
     rows{i,1}  = logicalToText(fullTbl{i,1});
     rows{i,2}  = info.animalID;
@@ -1563,6 +1593,8 @@ function p = tcdf_local(x, v)
 x = double(x);
 v = double(v);
 p = nan(size(x));
+p(isinf(x) & isfinite(v) & v>0 & x<0)=0;
+p(isinf(x) & isfinite(v) & v>0 & x>0)=1;
 ok = isfinite(x) & isfinite(v) & (v > 0);
 if ~any(ok), return; end
 xo = x(ok);
@@ -1652,6 +1684,7 @@ if fid < 0, return; end
 cleanupObj = onCleanup(@()fclose(fid)); %#ok<NASGU>
 
 inData = false;
+isThreeColumn = false;
 isRebased = false;
 baselineSec = [NaN NaN];
 
@@ -1702,8 +1735,9 @@ while true
     vals = sscanf(ln,'%f');
 
     if numel(vals) >= 3
-        % SCM format: time_sec, time_min, PSC
-        tMin(end+1,1) = vals(2); %#ok<AGROW>
+        % SCM format: time_sec, time_min, PSC (seconds retain more precision).
+        isThreeColumn = true;
+        tMin(end+1,1) = vals(1)/60; %#ok<AGROW>
         psc(end+1,1)  = vals(3); %#ok<AGROW>
     elseif numel(vals) == 2
         % Legacy two-column fallback.
@@ -1712,7 +1746,7 @@ while true
     end
 end
 
-keep = isfinite(tMin) & isfinite(psc);
+keep = isfinite(tMin);
 tMin = double(tMin(keep));
 psc  = double(psc(keep));
 
@@ -1721,7 +1755,7 @@ if isempty(tMin)
 end
 
 % Two-column files may occasionally store seconds.
-if max(tMin) > 300
+if ~isThreeColumn && max(tMin) > 300
     tMin = tMin ./ 60;
 end
 
@@ -2075,8 +2109,15 @@ catch
 end
 end
 
-function stats = computeStats(metricVals, grpCol, S)
+function stats = computeStats(metricVals, grpCol, S, subjTable)
 stats = struct('type',S.testType,'alpha',S.alpha,'p',NaN,'t',NaN,'F',NaN,'df',NaN,'desc','');
+metricVals=double(metricVals(:));grpCol=grpCol(:);
+assert(numel(metricVals)==numel(grpCol),'GroupAnalysis:StatsRows','Metric values and group labels must have matching rows.');
+assert(isscalar(S.alpha)&&isfinite(S.alpha)&&S.alpha>0&&S.alpha<1, ...
+    'GroupAnalysis:Alpha','Alpha must be between 0 and 1.');
+stats.effect=NaN;stats.effectLabel='';stats.ci=[NaN NaN];stats.confidenceLevel=1-S.alpha;
+stats.warnings={};
+stats.multiplicity='Unadjusted p-value for this endpoint; no correction across multiple analyses.';
 testType = strtrimSafe(S.testType);
 
 if strcmpi(testType,'None')
@@ -2086,6 +2127,22 @@ end
 
 gNames = uniqueStable(grpCol);
 gNames = sortGroupNamesStableGA(gNames, S);
+stats.groupNames=gNames;stats.n=zeros(1,numel(gNames));stats.nMissing=stats.n;
+for g=1:numel(gNames)
+    rows=strcmpi(grpCol,gNames{g});
+    stats.n(g)=sum(rows & isfinite(metricVals));stats.nMissing(g)=sum(rows & ~isfinite(metricVals));
+end
+isPaired=strcmpi(testType,'Paired t-test (matched PairID / animal)');
+if (contains(testType,'Two-sample') || isPaired) && numel(gNames)~=2
+    error('GroupAnalysis:TestGroups','This t-test requires exactly two groups. Select two groups or use ANOVA.');
+end
+if strcmpi(testType,'One-sample t-test (vs 0)') && numel(gNames)~=1
+    error('GroupAnalysis:TestGroups','A one-sample test needs one group. Select one group instead of pooling different treatments.');
+end
+if nargin>=4 && ~isempty(subjTable)
+    assert(size(subjTable,1)==numel(metricVals),'GroupAnalysis:StatsRows','Subject rows and metric values must match.');
+end
+effectSE=NaN;
 
 if strcmpi(testType,'One-sample t-test (vs 0)')
     [t,p,df] = oneSampleT_vec(metricVals);
@@ -2093,10 +2150,12 @@ if strcmpi(testType,'One-sample t-test (vs 0)')
     stats.p = p;
     stats.df = df;
     stats.desc = 'One-sample vs 0';
+    x=metricVals(isfinite(metricVals));stats.effect=mean(x);
+    effectSE=std(x,0)/sqrt(numel(x));stats.effectLabel=[gNames{1} ' mean minus 0'];
 
 elseif strcmpi(testType,'Two-sample t-test (Student, equal var)')
-    if numel(gNames) < 2
-        error('Need >=2 groups.');
+    if numel(gNames) ~= 2
+        error('GroupAnalysis:TestGroups','This two-sample t-test requires exactly two groups. Select two groups or use ANOVA.');
     end
     a = metricVals(strcmpi(grpCol,gNames{1}));
     b = metricVals(strcmpi(grpCol,gNames{2}));
@@ -2105,10 +2164,16 @@ elseif strcmpi(testType,'Two-sample t-test (Student, equal var)')
     stats.p = p;
     stats.df = df;
     stats.desc = [gNames{1} ' vs ' gNames{2}];
+    a=a(isfinite(a));b=b(isfinite(b));stats.effect=mean(a)-mean(b);
+    if numel(a)>=2&&numel(b)>=2
+        pooled=((numel(a)-1)*var(a,0)+(numel(b)-1)*var(b,0))/df;
+        effectSE=sqrt(pooled*(1/numel(a)+1/numel(b)));
+    end
+    stats.effectLabel=[gNames{1} ' minus ' gNames{2}];
 
 elseif strcmpi(testType,'Two-sample t-test (Welch)')
-    if numel(gNames) < 2
-        error('Need >=2 groups.');
+    if numel(gNames) ~= 2
+        error('GroupAnalysis:TestGroups','This two-sample t-test requires exactly two groups. Select two groups or use ANOVA.');
     end
     a = metricVals(strcmpi(grpCol,gNames{1}));
     b = metricVals(strcmpi(grpCol,gNames{2}));
@@ -2117,13 +2182,45 @@ elseif strcmpi(testType,'Two-sample t-test (Welch)')
     stats.p = p;
     stats.df = df;
     stats.desc = [gNames{1} ' vs ' gNames{2}];
+    a=a(isfinite(a));b=b(isfinite(b));stats.effect=mean(a)-mean(b);
+    if numel(a)>=2&&numel(b)>=2,effectSE=sqrt(var(a,0)/numel(a)+var(b,0)/numel(b));end
+    stats.effectLabel=[gNames{1} ' minus ' gNames{2}];
 
-else
+elseif strcmpi(testType,'Paired t-test (matched PairID / animal)')
+    if numel(gNames)~=2 || nargin<4
+        error('GroupAnalysis:Pairing','A paired t-test needs two groups and matched subject rows.');
+    end
+    [differences,pairInfo]=pairedMetricDifferences(metricVals,grpCol,subjTable,gNames);
+    [stats.t,stats.p,stats.df]=oneSampleT_vec(differences);
+    stats.pairing=pairInfo;
+    stats.desc=[gNames{1} ' vs ' gNames{2} ' (paired)'];
+    stats.effect=mean(differences);effectSE=std(differences,0)/sqrt(numel(differences));
+    stats.effectLabel=[gNames{1} ' minus ' gNames{2} ' (within pairs)'];
+    if ~isempty(pairInfo.unmatchedKeys)
+        stats.warnings{end+1}=['Unmatched/nonfinite pairs omitted: ' strjoin(pairInfo.unmatchedKeys,', ') '.'];
+    end
+elseif strcmpi(testType,'One-way ANOVA (groups)')
     [F,p,df] = oneWayANOVA_metric(metricVals, grpCol);
     stats.F = F;
     stats.p = p;
     stats.df = df;
     stats.desc = 'ANOVA';
+else
+    error('GroupAnalysis:TestType','Unknown statistical test: %s',testType);
+end
+stats.tail='two-sided';
+if strcmpi(testType,'One-way ANOVA (groups)'), stats.tail='upper (F)'; end
+if ~contains(testType,'ANOVA')
+    if isscalar(stats.df)&&isfinite(stats.df)&&stats.df>0&&isfinite(effectSE)&&isfinite(stats.p)
+        beta=betaincinv(S.alpha,stats.df/2,.5);
+        critical=sqrt(stats.df*(1-beta)/beta);
+        stats.ci=stats.effect+[-1 1]*critical*effectSE;
+    end
+    if ~isfinite(stats.p)
+        stats.warnings{end+1}='P-value unavailable: at least two finite observations per tested group/pair set and a defined variance are required.';
+    elseif effectSE==0
+        stats.warnings{end+1}='Zero sample variance: this is a degenerate t-test; review rounded values and measurement precision.';
+    end
 end
 end
 
@@ -2135,7 +2232,7 @@ if n < 2, t = NaN; p = NaN; df = max(0,n-1); return; end
 mu = mean(x);
 sd = std(x,0);
 se = sd/sqrt(n);
-t = mu / max(eps,se);
+t = mu / se; % Do not impose an arbitrary scale on small-valued data.
 df = n-1;
 p = 2 * tcdf_local(-abs(t), df);
 end
@@ -2150,7 +2247,7 @@ v1 = var(a,0); v2 = var(b,0);
 df = n1 + n2 - 2;
 sp2 = ((n1-1)*v1 + (n2-1)*v2) / max(1,df);
 den = sqrt(sp2 * (1/n1 + 1/n2));
-t = (m1 - m2) / max(eps, den);
+t = (m1 - m2) / den;
 p = 2 * tcdf_local(-abs(t), df);
 end
 
@@ -2162,9 +2259,9 @@ if n1<2 || n2<2, t = NaN; p = NaN; df = NaN; return; end
 m1 = mean(a); m2 = mean(b);
 v1 = var(a,0); v2 = var(b,0);
 den = sqrt(v1/n1 + v2/n2);
-t = (m1-m2) / max(eps,den);
-df = (v1/n1 + v2/n2)^2 / ((v1^2)/(n1^2*max(1,n1-1)) + (v2^2)/(n2^2*max(1,n2-1)));
-df = max(1, df);
+t = (m1-m2) / den;
+weights=[v1/n1 v2/n2]/(v1/n1+v2/n2);
+df = 1/(weights(1)^2/(n1-1)+weights(2)^2/(n2-1));
 p = 2 * tcdf_local(-abs(t), df);
 end
 
@@ -2191,62 +2288,28 @@ end
 df1 = k-1;
 df2 = n-k;
 MSb = SSb / max(1,df1);
-MSw = SSw / max(1,df2);
-F = MSb / max(eps,MSw);
+if df2<=0,F=NaN;p=NaN;df=[df1 df2];return;end
+MSw = SSw / df2;
+F = MSb / MSw;
 df = [df1 df2];
-p = 1 - fcdf_local(F, df1, df2);
+% Upper-tail beta form avoids losing tiny p-values by subtracting from 1.
+if isnan(F),p=NaN;else,p=betainc(df2/(df2+df1*F),df2/2,df1/2);end
 end
 
-function [keysOut, info] = detectOutliers(metricVals, subjTable, S)
-keysOut = {};
-info = {};
-x = metricVals(:);
-valid = isfinite(x);
-if sum(valid) < 3, return; end
-
-method = strtrimSafe(S.outlierMethod);
-
-if strcmpi(method,'MAD robust z-score')
-    thr = S.outMADthr;
-    xv = x(valid);
-    med = median(xv);
-    madv = median(abs(xv - med));
-    if madv <= 0 || ~isfinite(madv), return; end
-    rz = 0.6745 * (x - med) / madv;
-    idxOut = find(valid & abs(rz) > thr);
-
-    keysAll = makeRowKeys(subjTable);
-    for ii = idxOut(:)'
-        sid = strtrimSafe(subjTable{ii,2});
-        grp = strtrimSafe(subjTable{ii,3});
-        cd  = strtrimSafe(subjTable{ii,4});
-        info{end+1,1} = sprintf('%s | %s | %s | metric=%.4g | MADz=%.4g > %.4g', ...
-            sid, grp, cd, x(ii), abs(rz(ii)), thr); %#ok<AGROW>
-        keysOut{end+1,1} = keysAll{ii}; %#ok<AGROW>
-    end
-
-elseif strcmpi(method,'IQR rule')
-    k = S.outIQRk;
-    xv = x(valid);
-    q1 = prctile(xv,25);
-    q3 = prctile(xv,75);
-    iqrV = q3-q1;
-    lo = q1 - k*iqrV;
-    hi = q3 + k*iqrV;
-    idxOut = find(valid & (x<lo | x>hi));
-
-    keysAll = makeRowKeys(subjTable);
-    for ii = idxOut(:)'
-        sid = strtrimSafe(subjTable{ii,2});
-        grp = strtrimSafe(subjTable{ii,3});
-        cd  = strtrimSafe(subjTable{ii,4});
-        info{end+1,1} = sprintf('%s | %s | %s | metric=%.4g | outside [%.4g, %.4g]', ...
-            sid, grp, cd, x(ii), lo, hi); %#ok<AGROW>
-        keysOut{end+1,1} = keysAll{ii}; %#ok<AGROW>
-    end
-else
-    return;
+function [keysOut, info, screen] = detectOutliers(metricVals, subjTable, S)
+threshold=S.outMADthr;
+if strcmpi(S.outlierMethod,'IQR rule'), threshold=S.outIQRk; end
+if strcmpi(S.outlierMethod,'SD z-score (exploratory)'),threshold=S.outSDthr;end
+[flag,z,info,details]=gaOutlierScores(metricVals,subjTable,S.outlierMethod,threshold);
+keys=makeRowKeys(subjTable); keysOut=keys(flag);
+for i=find(flag(:))'
+    info{end+1,1}=sprintf('%s | %s | %s | metric=%.4g | potential outlier', ...
+        strtrimSafe(subjTable{i,2}),strtrimSafe(subjTable{i,3}),strtrimSafe(subjTable{i,4}),metricVals(i));
 end
+if ~any(flag), info{end+1,1}='No rows flagged.'; end
+screen=struct('createdAt',datestr(now,31),'method',S.outlierMethod,'threshold',threshold, ...
+    'subjTable',{subjTable},'rowKeys',{keys},'metricValues',double(metricVals(:)), ...
+    'flags',flag,'robustZ',z,'details',details,'notes',{info},'exclusionReason','');
 end
 
 function key = makeCacheKey(varargin)
@@ -2316,7 +2379,7 @@ end
 end
 
 function validateROIMetricSettings(S)
-if strcmpi(S.tc_metric,'Plateau')
+if any(strcmpi(S.tc_metric,{'Plateau','Maximum plateau'}))
     interval=[S.tc_plateauMin0 S.tc_plateauMin1]; label='Plateau';
 else
     interval=[S.tc_peakSearchMin0 S.tc_peakSearchMin1]; label='Peak search';
@@ -2326,16 +2389,20 @@ if numel(interval)~=2 || any(~isfinite(interval)) || interval(2)<=interval(1)
 end
 if ~strcmpi(S.tc_metric,'Plateau')
     w=S.tc_peakWinMin;
+    if strcmpi(S.tc_metric,'Maximum plateau'), w=S.tc_plateauWinMin; end
     if ~isscalar(w) || ~isfinite(w) || w<=0 || w>diff(interval)+1e-9
         error('GroupAnalysis:MetricWindow', ...
-            ['Peak window is %g min, but Peak search is %g-%g min (%g min long). ' ...
-             'Set Peak window to a positive duration no longer than %g min, or widen Peak search. All times are in minutes.'], ...
+            ['Metric window is %g min, but its search is %g-%g min (%g min long). ' ...
+             'Set duration to a positive value no longer than %g min, or widen the search. All times are in minutes.'], ...
             w,interval(1),interval(2),diff(interval),diff(interval));
     end
 end
 end
 
 function reportROIMetricCoverage(S,subjects,times,plateauCoverage,peakCoverage)
+if strcmpi(S.tc_metric,'Maximum plateau')
+    error('GroupAnalysis:MetricCoverage','Maximum plateau needs a complete finite window of %g min inside %g-%g min for at least one subject.',S.tc_plateauWinMin,S.tc_plateauMin0,S.tc_plateauMin1);
+end
 if strcmpi(S.tc_metric,'Plateau')
     requested=sprintf('Plateau: %g-%g min.',S.tc_plateauMin0,S.tc_plateauMin1);
     coverage=plateauCoverage;
@@ -2383,6 +2450,10 @@ for i = 1:N
     tAll{i}  = entry.tMin;
     isPSCInput(i) = entry.isPSCInput;
 end
+if any(isPSCInput) && any(~isPSCInput) && ~S.tc_computePSC
+    error('GroupAnalysis:MixedUnits',['These rows mix raw intensity and exported PSC. Enable Compute PSC and choose a valid baseline for the raw recordings, ' ...
+        'or analyse recordings with matching units.']);
+end
 
 % Retain early data too; late-starting scans are NaN before their first frame.
 t0 = min(cellfun(@(x) x(1), tAll));
@@ -2407,28 +2478,25 @@ if t1 <= t0
 end
 tCommon = t0:dt:t1;
 
-Xraw = nan(N,numel(tCommon));
-for i = 1:N
-    Xraw(i,:) = interp1(tAll{i}(:), tcAll{i}(:), tCommon(:), 'linear', NaN).';
+% Quantify each recording on its acquired grid. Resampling a brief plateau
+% onto the group plot grid can change both its mean and its winning window.
+nativeX=tcAll;
+for i=1:N
+    nativeX{i}=double(tcAll{i}(:)');
+    if S.tc_computePSC && ~isPSCInput(i)
+        baseIdx=tAll{i}>=S.tc_baseMin0 & tAll{i}<=S.tc_baseMin1;
+        b=nanmean_local(nativeX{i}(baseIdx),2);
+        if isempty(b) || ~isfinite(b) || b==0
+            nativeX{i}(:)=NaN;
+        else
+            nativeX{i}=100*(nativeX{i}-b)/b;
+        end
+    end
 end
-
-X = Xraw;
-
-if S.tc_computePSC
-    baseIdx = (tCommon >= S.tc_baseMin0) & (tCommon <= S.tc_baseMin1);
-    if ~any(baseIdx)
-        error('Baseline window has no samples.');
-    end
-    for i = 1:N
-        if isPSCInput(i)
-            continue;
-        end
-        b = nanmean_local(Xraw(i,baseIdx),2);
-        if ~isfinite(b) || b == 0
-            b = eps;
-        end
-        X(i,:) = 100 * (Xraw(i,:) - b) ./ b;
-    end
+% Interpolation is only for group time-course display, never ROI metrics.
+X=nan(N,numel(tCommon));
+for i=1:N
+    X(i,:)=interp1(tAll{i}(:),nativeX{i}(:),tCommon(:),'linear',NaN).';
 end
 
 unitsPercent = any(isPSCInput) || S.tc_computePSC;
@@ -2445,6 +2513,8 @@ for g = 1:numel(gNames)
 
     groupTC(g).name = gNames{g};
     groupTC(g).mean = mu;
+    sd(n<2)=NaN;
+    groupTC(g).sd   = sd;
     groupTC(g).sem  = se;
     groupTC(g).n    = sum(idx);
     groupTC(g).nPerTime = n;
@@ -2453,20 +2523,27 @@ end
 plateau = nan(N,1);
 plateauCoverage = zeros(N,1);
 for i = 1:N
-    [plateau(i),plateauCoverage(i)] = plateauMean(X(i,:),tCommon,S.tc_plateauMin0,S.tc_plateauMin1);
+    [plateau(i),plateauCoverage(i)] = plateauMean(nativeX{i},tAll{i},S.tc_plateauMin0,S.tc_plateauMin1);
 end
 
 peakVal = nan(N,1);
 peakCoverage = zeros(N,1);
 for i = 1:N
-    [peakVal(i),peakCoverage(i)] = robustPeak(X(i,:), tCommon, ...
+    [peakVal(i),peakCoverage(i)] = robustPeak(nativeX{i}, tAll{i}, ...
         S.tc_peakSearchMin0, S.tc_peakSearchMin1, ...
         S.tc_peakWinMin, S.tc_trimPct);
 end
 
-if strcmpi(S.tc_metric,'Plateau')
+selectedWindows=nan(N,2);
+if strcmpi(S.tc_metric,'Maximum plateau')
+    metricVals=nan(N,1);
+    for i=1:N
+        [metricVals(i),plateauCoverage(i),selectedWindows(i,:)]=gaMaximumPlateau(nativeX{i},tAll{i},S.tc_plateauMin0,S.tc_plateauMin1,S.tc_plateauWinMin);
+    end
+    metricName=sprintf('Maximum mean over %g min (%g-%g min; exploratory)',S.tc_plateauWinMin,S.tc_plateauMin0,S.tc_plateauMin1);
+elseif strcmpi(S.tc_metric,'Plateau')
     metricVals = plateau;
-    metricName = sprintf('Plateau mean (%.1f-%.1f min)', S.tc_plateauMin0, S.tc_plateauMin1);
+    metricName = sprintf('Fixed interval mean (%.1f-%.1f min)', S.tc_plateauMin0, S.tc_plateauMin1);
 else
     metricVals = peakVal;
     metricName = sprintf('Robust peak (%.1f-%.1f min)', S.tc_peakSearchMin0, S.tc_peakSearchMin1);
@@ -2476,7 +2553,8 @@ if ~any(isfinite(metricVals))
     reportROIMetricCoverage(S,subjActive,tAll,plateauCoverage,peakCoverage);
 end
 
-stats = computeStats(metricVals, grpCol, S);
+stats = computeStats(metricVals, grpCol, S, subjActive);
+stats.pReport = gaFormatPValue(stats.p);
 
 Tcell = cell(N+1,6);
 Tcell(1,:) = {'Subject','Group','Condition','PairID','Metric','MetricName'};
@@ -2499,14 +2577,31 @@ R.groupColors = groupColors;
 R.unitsPercent = unitsPercent;
 R.metricName = metricName;
 R.metricVals = metricVals;
+R.missingMetricSubjects=subjActive(~isfinite(metricVals),2);
+R.selectedPlateauWindowsMin = selectedWindows;
 R.plateauCoverage = plateauCoverage;
 R.peakCoverage = peakCoverage;
-R.metricSettings = struct('version',3,'plateauMin',[S.tc_plateauMin0 S.tc_plateauMin1], ...
+R.metricSettings = struct('version',4,'sampling','original acquired samples; interpolation only for group plots','plateauMin',[S.tc_plateauMin0 S.tc_plateauMin1], ...
     'peakSearchMin',[S.tc_peakSearchMin0 S.tc_peakSearchMin1], ...
     'peakWindowMin',S.tc_peakWinMin,'trimPercentTotal',S.tc_trimPct,'minimumCoverage',0.8);
+if strcmpi(S.tc_metric,'Maximum plateau')
+    R.metricSettings.plateauWindowMin=S.tc_plateauWinMin;
+    R.metricSettings.minimumCoverage=1;
+    R.metricSettings.selection='Per-subject maximum arithmetic mean; exploratory';
+    R.metricSettings.fullIntervalRule='When duration equals search width, average all acquired samples inside the nominal interval; no boundary interpolation';
+end
 R.stats = stats;
+R.outlierScreen=gaPrevField(S,'outlierScreen',struct());
+R.outlierHistory=gaPrevField(S,'outlierHistory',{});
 R.metrics = struct('table',{Tcell});
 R.subjTable = subjActive;
+R.subjectTimeMin=tAll;
+R.subjectTimecourses=nativeX;
+R.subjectCommonTimecourses=X;
+R.displaySettings=struct('errorBand',gaPrevField(S,'tc_errorBand','SEM'), ...
+    'view',gaPrevField(S,'tc_timecourseView','Group mean'), ...
+    'animalCondition',gaPrevField(S,'tc_animalCondition','Both conditions'), ...
+    'selectedAnimalKeys',{gaPrevField(S,'tc_selectedAnimalKeys',{})});
 R.plotTop = S.plotTop;
 R.plotBot = S.plotBot;
 R.showSEM = S.tc_showSEM;
@@ -3131,23 +3226,7 @@ function gaPrevTop(ax,R,S,styleName)
 [~,fg] = gaPrevColors(styleName);
 hold(ax,'on');
 t = double(R.tMin(:)');
-allY = [];
-for g = 1:numel(R.group)
-    y = double(R.group(g).mean(:)');
-    e = double(R.group(g).sem(:)');
-    if gaPrevField(S,'tc_previewSmooth',false)
-        dtSec = median(diff(t))*60;
-        y = gaPrevSmooth(y,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
-        e = gaPrevSmooth(e,dtSec,gaPrevField(S,'tc_previewSmoothWinSec',60));
-    end
-    col = gaPrevGroupColor(R,R.group(g).name,g);
-    if gaPrevField(S,'tc_showSEM',true) && numel(e)==numel(y)
-        GroupAnalysis_Common('drawSEM',ax,t,y,e,col,gaPrevField(S,'displaySemAlpha',0.25));
-        allY = [allY y+e y-e];
-    end
-    plot(ax,t,y,'Color',col,'LineWidth',2.4,'DisplayName',gaPrevDisplayName(R,g));
-    allY = [allY y(:)'];
-end
+[allY,lineHs,leg]=drawROITimecourseCurves(ax,R,S,[],2.4,gaPrevField(S,'displaySemAlpha',0.25));
 xlabel(ax,'Time (min)','Color',fg,'FontWeight','bold');
 if isfield(R,'unitsPercent') && R.unitsPercent, ylabel(ax,'% signal change','Color',fg,'FontWeight','bold'); else, ylabel(ax,'Signal','Color',fg,'FontWeight','bold'); end
 title(ax,'','Color',fg,'FontWeight','bold');
@@ -3166,7 +3245,7 @@ if gaPrevField(S,'tc_showInjectionBox',true)
         try, uistack(hp,'bottom'); catch, end
     end
 end
-try, legend(ax,'Location','best','TextColor',fg,'Color','none','Box','off'); catch, end
+try, if ~isempty(lineHs), legend(ax,lineHs,leg,'Location','best','TextColor',fg,'Color','none','Box','off','Interpreter','none'); end; catch, end
 hold(ax,'off');
 end
 
@@ -3265,13 +3344,7 @@ set(ax,'XTick',(first:last)*step);
 end
 function gaPrevStatsText(ax,R,S,styleName)
 [~,fg] = gaPrevColors(styleName);
-if ~isfield(R,'stats') || ~isfield(R.stats,'p'), return; end
-p = R.stats.p;
-if ~isfinite(p), return; end
-yl = ylim(ax); dy = yl(2)-yl(1); if ~isfinite(dy) || dy<=0, dy=1; end
-stars = gaPrevStars(p);
-x = mean(xlim(ax));
-text(ax,x,yl(2)-0.06*dy,sprintf('%s   p = %.3g',stars,p),'Color',fg,'FontWeight','bold','FontSize',12,'HorizontalAlignment','center','VerticalAlignment','top');
+gaDrawROISignificance(ax,R,S,fg);
 end
 
 function gaPrevClear(ax,styleName,showGrid)
@@ -3553,7 +3626,8 @@ try
     grp = localAuditCellToStr(row,3);
     cnd = localAuditCellToStr(row,4);
     pid = localAuditCellToStr(row,5);
-    key = lower(strtrim([sid '|' grp '|' cnd '|' pid]));
+    files=cellfun(@(j)localAuditCellToStr(row,j),num2cell(6:8),'UniformOutput',false);
+    key = lower(strtrim(strjoin([{sid,grp,cnd,pid},files],'|')));
 catch
     key = '';
 end
@@ -3589,4 +3663,145 @@ end
             s = '';
         end
     end
+end
+
+
+function [d,info] = pairedMetricDifferences(values,groups,T,names)
+% Explicit PairID takes priority; empty PairIDs fall back to Animal ID.
+keys=cell(size(values));
+for i=1:numel(values)
+    keys{i}=lower(strtrimSafe(T{i,5}));
+    if isempty(keys{i}), keys{i}=lower(strtrimSafe(T{i,2})); end
+end
+ids=unique(keys,'stable'); d=[];
+info=struct('keys',{{}},'rows',zeros(0,2),'unmatchedKeys',{{}},'nPairs',0);
+for k=1:numel(ids)
+    if isempty(ids{k}), continue; end
+    a=find(strcmp(keys,ids{k}) & strcmpi(groups,names{1}));
+    b=find(strcmp(keys,ids{k}) & strcmpi(groups,names{2}));
+    if numel(a)>1 || numel(b)>1
+        error('GroupAnalysis:Pairing','Multiple rows for pair "%s" in one group. Use one independent value per animal or assign explicit unique PairIDs.',ids{k});
+    end
+    if isempty(a)||isempty(b)||~isfinite(values(a))||~isfinite(values(b))
+        info.unmatchedKeys{end+1}=ids{k}; continue;
+    end
+    d(end+1,1)=values(a)-values(b); %#ok<AGROW>
+    info.keys{end+1}=ids{k}; info.rows(end+1,:)=[a b];
+end
+info.nPairs=numel(d);
+if numel(d)<2
+    error('GroupAnalysis:Pairing','At least two complete matched pairs are needed. Set matching PairIDs (or Animal IDs) in the two groups.');
+end
+end
+
+function catalog = roiAnimalCatalog(T)
+catalog=struct('keys',{{}},'labels',{{}},'rowKeys',{{}});
+if isempty(T), return; end
+for i=1:size(T,1)
+    label=strtrimSafe(T{i,2}); key=lower(label);
+    if isempty(key)
+        % Unnamed recordings must not all be treated as the same animal.
+        key=['recording|' strtrimSafe(T{i,6}) '|' strtrimSafe(T{i,7})];
+        if strcmp(key,'recording||'), key=sprintf('unnamed row %d',i); end
+        label=sprintf('Unnamed recording %d',i);
+    end
+    catalog.rowKeys{i,1}=key;
+    if ~any(strcmp(catalog.keys,key))
+        catalog.keys{end+1}=key; catalog.labels{end+1}=label;
+    end
+end
+end
+
+function [allY,handles,labels] = drawROITimecourseCurves(ax,R,S,colors,lineWidth,shadeAlpha)
+% Display choices never alter the group mean, plateau values or statistics.
+allY=[]; handles=gobjects(0); labels={};
+view=gaPrevField(S,'tc_timecourseView','Group mean');
+band=gaPrevField(S,'tc_errorBand','SEM');
+if ~gaPrevField(S,'tc_showSEM',true), band='None'; end
+showGroups=~strcmpi(view,'Animals only');
+showAnimals=~strcmpi(view,'Group mean');
+t=double(R.tMin(:)');
+if isempty(colors)
+    colors=zeros(numel(R.group),3);
+    for g=1:numel(R.group), colors(g,:)=gaPrevGroupColor(R,R.group(g).name,g); end
+end
+if showGroups
+    for g=1:numel(R.group)
+        y=double(R.group(g).mean(:)'); e=double(R.group(g).sem(:)');
+        if strcmpi(band,'SD')
+            if isfield(R.group,'sd')
+                e=double(R.group(g).sd(:)');
+            elseif isfield(R.group,'nPerTime')
+                e=e.*sqrt(R.group(g).nPerTime);
+            else
+                e=e*sqrt(R.group(g).n);
+            end
+        end
+        if gaPrevField(S,'tc_previewSmooth',false)
+            dt=median(diff(t))*60; win=gaPrevField(S,'tc_previewSmoothWinSec',60);
+            y=gaPrevSmooth(y,dt,win); e=gaPrevSmooth(e,dt,win);
+        end
+        if ~strcmpi(band,'None') && numel(e)==numel(y)
+            hp=drawSEM(ax,t,y,e,colors(g,:),shadeAlpha);
+            if ~isempty(hp)&&isgraphics(hp), set(hp,'Tag',['GroupROI_' upper(band)]); end
+            allY=[allY y+e y-e]; %#ok<AGROW>
+        end
+        label=sprintf('%s (n=%d)',gaPrevDisplayName(R,g),R.group(g).n);
+        handles(end+1)=plot(ax,t,y,'Color',colors(g,:),'LineWidth',lineWidth, ...
+            'DisplayName',label,'Tag','GroupROI_GroupMean');
+        labels{end+1}=label; allY=[allY y]; %#ok<AGROW>
+    end
+end
+if showAnimals && isfield(R,'subjectTimecourses') && isfield(R,'subjectTimeMin')
+    cat=roiAnimalCatalog(R.subjTable);
+    selected=gaPrevField(S,'tc_selectedAnimalKeys',{});
+    condition=gaPrevField(S,'tc_animalCondition','Both conditions');
+    palette=lines(max(1,numel(cat.keys)));
+    styles={'-','--',':','-.'};
+    for i=1:numel(R.subjectTimecourses)
+        key=cat.rowKeys{i};
+        if ~isempty(selected)&&~any(strcmp(selected,key)), continue; end
+        rowCondition=strtrimSafe(R.subjTable{i,4});
+        if isempty(rowCondition),rowCondition=mapConditionFromGroup(S,R.subjTable{i,3});end
+        if ~roiAnimalConditionMatches(rowCondition,condition),continue;end
+        animal=find(strcmp(cat.keys,key),1);
+        g=find(strcmpi(R.groupNames,strtrimSafe(R.subjTable{i,3})),1);
+        if isempty(g), g=1; end
+        ti=double(R.subjectTimeMin{i}(:)'); yi=double(R.subjectTimecourses{i}(:)');
+        if gaPrevField(S,'tc_previewSmooth',false)
+            yi=gaPrevSmooth(yi,median(diff(ti))*60,gaPrevField(S,'tc_previewSmoothWinSec',60));
+        end
+        label=sprintf('%s | %s',cat.labels{animal},gaPrevDisplayName(R,g));
+        duplicates=strcmp(cat.rowKeys,key)&strcmpi(R.subjTable(:,3),R.subjTable{i,3});
+        if sum(duplicates)>1
+            [~,base,ext]=fileparts(strtrimSafe(R.subjTable{i,7}));
+            label=sprintf('%s | %s%s [row %d]',label,base,ext,i);
+        end
+        col=palette(animal,:);
+        if showGroups, col=.6*col+.4*get(ax,'Color'); end
+        info=struct('row',i,'animalKey',key,'roiFile',R.subjTable{i,7}, ...
+            'condition',rowCondition, ...
+            'metric',R.metricVals(i),'selectedWindowMin',R.selectedPlateauWindowsMin(i,:));
+        handles(end+1)=plot(ax,ti,yi,'Color',col,'LineWidth',max(1,.55*lineWidth), ...
+            'LineStyle',styles{1+mod(g-1,numel(styles))},'DisplayName',label, ...
+            'Tag','GroupROI_AnimalTrace','UserData',info);
+        labels{end+1}=label; allY=[allY yi]; %#ok<AGROW>
+    end
+end
+setappdata(ax,'GroupROI_ErrorBand',band);
+setappdata(ax,'GroupROI_AnimalCondition',gaPrevField(S,'tc_animalCondition','Both conditions'));
+end
+
+function matches=roiAnimalConditionMatches(rowCondition,selection)
+% Explicit row conditions take precedence over the fallback group mapping.
+normalize=@(value)lower(regexprep(strtrimSafe(value),'[^a-zA-Z0-9]',''));
+selected=normalize(selection);actual=normalize(rowCondition);
+if isempty(selected)||any(strcmp(selected,{'bothconditions','allconditions','all','both'}))
+    matches=true;return;
+end
+a={'a','conda','conditiona','conditionaonly'};
+b={'b','condb','conditionb','conditionbonly'};
+if any(strcmp(selected,a)),matches=any(strcmp(actual,a));
+elseif any(strcmp(selected,b)),matches=any(strcmp(actual,b));
+else,matches=strcmp(actual,selected);end
 end

@@ -5,6 +5,7 @@ function atlas = save_correct_colors(atlasFile, rgbFile, outFile)
 %   atlas = save_correct_colors('allen_brain_atlas.mat','rgb2acr.xlsx');
 %   atlas = save_correct_colors(atlasStruct,'rgb2acr.xlsx','atlas_rgb_fixed.mat');
 
+deConfUSIon_setup();
 if nargin < 2 || isempty(rgbFile)
     error('save_correct_colors:MissingRgb','Missing rgb2acr.xlsx file.');
 end

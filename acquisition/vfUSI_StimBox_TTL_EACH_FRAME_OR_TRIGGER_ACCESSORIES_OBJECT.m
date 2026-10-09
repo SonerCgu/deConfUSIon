@@ -130,6 +130,7 @@ classdef vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT < handle
         onMotorStepFcn = []
         stopRequestedFcn = []
         frameUpdateEvery = 10
+        sensoryFrameFcn = [] % Optional software start/logging; disabled by default.
 
         % -------------------------------------------------------------
         % Motor scheduling
@@ -311,6 +312,7 @@ classdef vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT < handle
                 % -----------------------------------------------------
                 % GUI frame update
                 % -----------------------------------------------------
+                if isa(obj.sensoryFrameFcn,'function_handle'),obj.sensoryFrameFcn(imag);end
                 if ~isempty(obj.onFrameFcn) && isa(obj.onFrameFcn, 'function_handle')
                     try
                         if imag == 1 || mod(imag, max(1, round(obj.frameUpdateEvery))) == 0

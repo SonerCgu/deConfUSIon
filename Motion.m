@@ -1,5 +1,6 @@
 function varargout=Motion(action,varargin)
 % Motion-artifact workflow selection and physical-time cropping.
+deConfUSIon_setup();
 switch lower(action)
     case 'choose', varargout{1}=chooseMotionModern(varargin{:});
     case 'chopdialog', varargout{1}=chopDialog(varargin{:});
