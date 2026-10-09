@@ -3,6 +3,7 @@ function [TR, datasetFolder, wasCancelled, probeType, defaultTR] = studio_load_o
 % Dark modern Load Dataset popup for HUMoR / fUSI Studio.
 % MATLAB 2017b + 2023b compatible.
 
+deConfUSIon_setup();
 if nargin < 1, initialTR = []; end
 if nargin < 2, autoDatasetFolder = ''; end
 if nargin < 3, analysedRoot = ''; end

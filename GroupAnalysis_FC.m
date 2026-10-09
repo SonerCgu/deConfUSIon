@@ -4,6 +4,7 @@
 % Convert back with tanh(Z) only for Pearson-r display if needed.
 function varargout = GroupAnalysis_FC(action, varargin)
 
+deConfUSIon_setup();
 if nargin < 1 || isempty(action)
     error('GroupAnalysis_FC requires an action string.');
 end
@@ -191,7 +192,7 @@ if isstruct(cache) && isfield(cache,'fcBundle') && isa(cache.fcBundle,'container
 end
 end
 
-function [FC, cache] = loadFCGroupBundlesFromFiles(fileList, cache)
+function [FC, cache] = loadFCGroupBundlesFromFiles(fileList, cache,period)
 FC = struct();
 FC.files = fileList(:);
 FC.subjects = struct([]);
@@ -302,6 +303,9 @@ for i = 1:numel(fileList)
         if isfield(subj,'sourceFile') && ~isempty(subj.sourceFile), FC.subjects(idx).roiSourceFile = subj.sourceFile; else, FC.subjects(idx).roiSourceFile = ''; end
         if isfield(subj,'roiSourceFile') && ~isempty(subj.roiSourceFile), FC.subjects(idx).roiSourceFile = subj.roiSourceFile; end
         FC.subjects(idx).bundleFile = fp;
+        for field={'spacingUm','analysisSliceRange','atlasRegionInfo','epochName','epochWindowSec','hemisphereConvention','nSamples','referenceImage','anatomy'}
+            if isfield(subj,field{1}),FC.subjects(idx).(field{1})=subj.(field{1});else,FC.subjects(idx).(field{1})=[];end
+        end
         spatialFields = {'roiMap','labelMap','parcelMap','labelMask','roiLabelMask','roiAtlas','atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};
         for sf = 1:numel(spatialFields)
             fn = spatialFields{sf};
@@ -323,6 +327,7 @@ for i = 1:numel(fileList)
 end
 
 FC.nSubjects = idx;
+if nargin>=3,FC.subjects=fusiFCGroupSelectPeriod(FC.subjects,period);end
 end
 
 function names = makeDefaultFCNames(labels)
@@ -340,7 +345,7 @@ u = upper(strtrimSafe(txt));
 if contains(u,'PACAP') || contains(u,'GROUPA') || contains(u,'CONDA')
     g = 'PACAP';
 elseif contains(u,'VEHICLE') || contains(u,'VEH') || contains(u,'CONTROL') || contains(u,'GROUPB') || contains(u,'CONDB')
-    g = 'Vehicle';
+    g = 'Control';
 end
 end
 

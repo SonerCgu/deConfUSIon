@@ -1,6 +1,7 @@
 function varargout = AtlasRegistration(action,varargin)
 % Automatic linear atlas alignment. Transforms remain compatible with the
 % toolbox's affine3d/Transformation.mat convention (moving -> atlas voxels).
+deConfUSIon_setup();
 switch lower(action)
     case 'settings', varargout{1}=settingsDialog(varargin{:});
     case 'register', [varargout{1:nargout}]=registerVolume(varargin{:});
@@ -17,38 +18,53 @@ switch lower(action)
 end
 end
 
-function cfg=settingsDialog(parent)
+function cfg=settingsDialog(parent,scanSpec)
 C=deConfUSIon_ui('palette'); cfg=[]; exe=findGreedy();
+if nargin<2,scanSpec=struct();end
+sourceCount=0;if isfield(scanSpec,'sourceSliceCount'),sourceCount=scanSpec.sourceSliceCount;end
 f=figure('Name','Automatic 3D registration','NumberTitle','off', ...
     'MenuBar','none','ToolBar','none','Color',C.background, ...
-    'Units','pixels','Position',[100 100 920 620],'WindowStyle','modal', ...
+    'Units','pixels','Position',[100 100 980 760],'WindowStyle','modal', ...
     'CloseRequestFcn',@cancel);
 label(f,[.04 .87 .92 .09], ...
     'Align the 3D anatomy to the atlas, then inspect all three planes before saving.',C,15);
 label(f,[.04 .73 .25 .06],'Registration engine',C,12);
 engine=uicontrol(f,'Style','popupmenu','Units','normalized','Position',[.31 .74 .64 .055], ...
-    'String',{'ITK-SNAP / Greedy (external)','MATLAB (built in)'}, ...
-    'Value',1+isempty(exe),'BackgroundColor',C.input,'ForegroundColor',C.text,'FontName','Arial','FontSize',12, ...
+    'String',{'ITK-SNAP / Greedy (external)','MATLAB (built in)','Compare Greedy and MATLAB'}, ...
+    'Value',3-isempty(exe),'BackgroundColor',C.input,'ForegroundColor',C.text,'FontName','Arial','FontSize',12, ...
     'Tag','RegistrationEngine','Callback',@engineChanged);
-label(f,[.04 .62 .25 .06],'Atlas target',C,12);
+label(f,[.04 .62 .25 .06],'Registration target',C,12);
 target=uicontrol(f,'Style','popupmenu','Units','normalized','Position',[.31 .63 .64 .055], ...
     'String',{'Vascular atlas (Doppler anatomy)','Histology atlas (multimodal)'}, ...
-    'BackgroundColor',C.input,'ForegroundColor',C.text,'FontName','Arial','FontSize',12);
+    'BackgroundColor',C.input,'ForegroundColor',C.text,'FontName','Arial','FontSize',12,'Tag','RegistrationAtlasTarget');
 label(f,[.04 .51 .25 .06],'Transform',C,12);
 model=uicontrol(f,'Style','popupmenu','Units','normalized','Position',[.31 .52 .64 .055], ...
-    'String',{'Rigid: rotation and translation','Rigid then affine: also size and shear'}, ...
+    'String',{'Rigid: rotation and translation','Rigid then bounded scale: depth, AP and LR'},'Value',2, ...
     'BackgroundColor',C.input,'ForegroundColor',C.text,'FontName','Arial','FontSize',12);
 useCurrent=uicontrol(f,'Style','checkbox','Units','normalized', ...
     'Position',[.04 .41 .91 .055],'String','Refine current manual alignment; otherwise search anatomy-based starting positions', ...
-    'BackgroundColor',C.background,'ForegroundColor',C.text,'FontName','Arial','FontSize',12,'Value',0);
-review=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.04 .35 .91 .05], ...
-    'String','Greedy only: open one ITK-SNAP review with anatomy over the selected atlas', ...
+    'BackgroundColor',C.background,'ForegroundColor',C.text,'FontName','Arial','FontSize',12,'Value',isfield(scanSpec,'useCurrent') && scanSpec.useCurrent);
+review=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.04 .35 .55 .05], ...
+    'String','Open ITK-SNAP review; underlay:', ...
     'Tag','OpenSnapReview','Value',~isempty(findSnap()),'BackgroundColor',C.background,'ForegroundColor',C.text,'FontSize',12);
-label(f,[.04 .19 .92 .15], ...
-    ['1. Confirm voxel sizes and array order in Scan geometry.  2. Run automatic registration.' newline ...
-     '3. Check boundaries, ventricles and vessels across slices. Use Undo auto to reject the result.' newline ...
-     'Rigid preserves shape. Affine adds scaling and shear. Partial brain coverage may need manual initialization.'],C,12);
-label(f,[.04 .145 .92 .05],['Greedy: ' exe],C,10);
+snapReference=uicontrol(f,'Style','popupmenu','Units','normalized','Position',[.60 .35 .35 .05], ...
+    'String',{'Same as registration target','Histology','Vascular'},'Tag','RegistrationSnapReference', ...
+    'BackgroundColor',C.input,'ForegroundColor',C.text,'FontSize',12, ...
+    'TooltipString','Select the fixed atlas underlay for SNAP review. It does not change the chosen registration target or transform.');
+rangeText='';if sourceCount>0,rangeText=sprintf('1 %d',sourceCount);end
+if isfield(scanSpec,'sourceSliceRange') && numel(scanSpec.sourceSliceRange)==2,rangeText=sprintf('%d %d',scanSpec.sourceSliceRange);end
+label(f,[.04 .285 .40 .055],'Usable source slices (first last)',C,12);
+sourceRange=uicontrol(f,'Style','edit','Units','normalized','Position',[.47 .29 .48 .055], ...
+    'String',rangeText,'Tag','RegistrationSourceSlices','BackgroundColor',C.input,'ForegroundColor',C.text,'FontSize',12);
+label(f,[.04 .22 .40 .055],'Matching atlas AP slices (optional)',C,12);
+anchors=uicontrol(f,'Style','edit','Units','normalized','Position',[.47 .225 .48 .055], ...
+    'String','','Tag','RegistrationAtlasAnchors','BackgroundColor',C.input,'ForegroundColor',C.text,'FontSize',12);
+trim=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.04 .17 .91 .045], ...
+    'String','Automatically ignore empty end slices','Value',1,'Tag','RegistrationTrimSlices', ...
+    'BackgroundColor',C.background,'ForegroundColor',C.text,'FontSize',12);
+label(f,[.04 .10 .92 .065], ...
+    'Fit internal vessel patterns as well as coverage. Optional AP endpoints must be anatomically identified; sample spacing alone does not locate the brain.',C,11);
+label(f,[.04 .078 .92 .03],['Greedy: ' exe],C,9);
 button(f,[.04 .035 .20 .075],'Help',C.blue,@(~,~)deConfUSIon_ui('help','Registration'));
 button(f,[.54 .035 .24 .075],'Run registration',C.green,@run);
 button(f,[.80 .035 .16 .075],'Cancel',C.danger,@cancel);
@@ -59,21 +75,35 @@ if nargin>0 && isscalar(parent) && isgraphics(parent)
 end
 if isgraphics(f), uiwait(f); end
     function run(~,~)
-        if get(engine,'Value')==1 && isempty(exe)
+        if get(engine,'Value')~=2 && isempty(exe)
             errordlg('Greedy was not found. Install ITK-SNAP or add its bin folder to PATH, or select MATLAB.','Registration engine'); return;
         end
         cfg=struct('engine','greedy','target','vascular','model','rigid', ...
             'useCurrent',logical(get(useCurrent,'Value')),'executable',exe, ...
             'maxDimension',160,'iterations',[100 50 20],'openReview',logical(get(review,'Value')));
-        if get(engine,'Value')==2, cfg.engine='matlab'; cfg.openReview=false; end
+        if get(engine,'Value')==2, cfg.engine='matlab'; end
+        if get(engine,'Value')==3, cfg.engine='compare'; end
         if get(target,'Value')==2, cfg.target='histology'; end
+        references={'target','histology','vascular'};cfg.snapReference=references{get(snapReference,'Value')};
         if get(model,'Value')==2, cfg.model='affine'; end
+        cfg.trimEmptySlices=logical(get(trim,'Value'));
+        cfg.sourceSliceRange=sscanf(get(sourceRange,'String'),'%f')';
+        cfg.atlasAPAnchors=sscanf(get(anchors,'String'),'%f')';
+        if ~isempty(cfg.sourceSliceRange) && (numel(cfg.sourceSliceRange)~=2 || ...
+                any(~isfinite(cfg.sourceSliceRange)) || any(cfg.sourceSliceRange~=round(cfg.sourceSliceRange)) || ...
+                cfg.sourceSliceRange(1)<1 || cfg.sourceSliceRange(2)<=cfg.sourceSliceRange(1) || ...
+                (sourceCount>0 && cfg.sourceSliceRange(2)>sourceCount))
+            cfg=[];errordlg('Enter two increasing source slice numbers inside the recording.','Registration slices');return;
+        end
+        if ~isempty(cfg.atlasAPAnchors) && (numel(cfg.atlasAPAnchors)~=2 || any(~isfinite(cfg.atlasAPAnchors)) || ...
+                any(cfg.atlasAPAnchors<1) || diff(cfg.atlasAPAnchors)==0 || isempty(cfg.sourceSliceRange))
+            cfg=[];errordlg('Provide two distinct atlas AP slices and the corresponding source range.','Atlas endpoints');return;
+        end
         delete(f);
     end
     function cancel(~,~), delete(f); end
     function engineChanged(~,~)
-        if get(engine,'Value')==2, set(review,'Enable','off','Value',0);
-        else, set(review,'Enable','on','Value',~isempty(findSnap())); end
+        set(review,'Enable','on','Value',~isempty(findSnap()));
     end
 end
 
@@ -111,11 +141,15 @@ end
 flipAP=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.04 .245 .9 .045], ...
     'String','Reverse coronal slice order (if acquired posterior to anterior)', ...
     'BackgroundColor',C.background,'ForegroundColor',C.text,'Value',0);
-label(f,[.04 .125 .92 .11], ...
-    'Coronal frames keep their row/column orientation. Slice number maps to atlas anterior/posterior. Verify slice direction and left/right using landmarks; no automatic mirror is applied.',C,11);
+reverseLR=isfield(original,'nativeColumnOneSide') && strcmpi(original.nativeColumnOneSide,'right');
+flipLR=uicontrol(f,'Style','checkbox','Units','normalized','Position',[.04 .195 .9 .045], ...
+    'String','Reverse left/right columns (column 1 is animal right)', ...
+    'Tag','AtlasGeometryFlipLR','BackgroundColor',C.background,'ForegroundColor',C.text,'Value',reverseLR);
+label(f,[.04 .115 .53 .07], ...
+    'Verify slice direction and left/right using acquisition landmarks. No automatic mirror is applied.',C,11);
 button(f,[.61 .04 .21 .085],'Continue',C.green,@accept);
 button(f,[.84 .04 .12 .085],'Cancel',C.danger,@cancel);
-movegui(f,'center'); if isgraphics(f), uiwait(f); end
+if isgraphics(f),movegui(f,'center');setappdata(f,'AtlasGeometryReady',true);uiwait(f);end
     function accept(~,~)
         vv=arrayfun(@(h)str2double(get(h,'String')),hV);
         if any(~isfinite(vv)) || any(vv<=0)
@@ -131,12 +165,22 @@ movegui(f,'center'); if isgraphics(f), uiwait(f); end
             errordlg(sprintf('These values would create an atlas-grid volume of %s. Check units and array order.',mat2str(target)),'Scan geometry'); return;
         end
         scan=original; scan.Data=permute(scan.Data,perm); scan.VoxelSize=vv(perm);
+        if isfield(scan,'DisplayData') && isequal(size(original.DisplayData),sz)
+            scan.DisplayData=permute(original.DisplayData,perm);
+        end
         scan.Geometry=struct('originalSize',sz,'originalSpacingUm',vv,'permutation',perm, ...
             'atlasVoxelSizeUm',av,'confirmed',true);
+        scan.Geometry.nativeColumnOneSide='left';
+        if get(flipLR,'Value'),scan.Geometry.nativeColumnOneSide='right';end
+        scan.Geometry.leftRightConfirmed=true;
         if get(hOrder,'Value')==1
             scan.Geometry.convention='coronal_stack_v2';
             scan.Geometry.flipAxes=[];
             if get(flipAP,'Value'), scan.Data=flip(scan.Data,1); scan.Geometry.flipAxes=1; end
+            if get(flipLR,'Value'),scan.Data=flip(scan.Data,3);scan.Geometry.flipAxes=[scan.Geometry.flipAxes 3];end
+            if isfield(scan,'DisplayData')
+                for axis=scan.Geometry.flipAxes,scan.DisplayData=flip(scan.DisplayData,axis);end
+            end
         else
             scan.Geometry.convention='legacy_paper';
         end
@@ -149,15 +193,43 @@ function [M,report]=registerVolume(fixed,moving,cfg,initial)
 % Inputs are already resampled/oriented by interpolate3D. All registration
 % here uses that same atlas grid; the acquired 4D samples are never modified.
 if nargin<4, initial=eye(4); end
+cfg=defaults(cfg);
+if strcmpi(cfg.engine,'compare')
+    engines={'greedy','matlab'};results=cell(1,2);matrices=cell(1,2);scores=-inf(1,2);
+    for k=1:2
+        option=cfg;option.engine=engines{k};
+        try
+            [matrices{k},results{k}]=registerVolume(fixed,moving,option,initial);
+            scores(k)=results{k}.scoreAfter;
+        catch ME
+            if any(strcmp(ME.identifier,{'deConfUSIon:ProcessingCancelled','deConfUSIon:AtlasCancelled'})),rethrow(ME);end
+            results{k}=struct('engine',engines{k},'error',ME.message,'identifier',ME.identifier);
+            progress(cfg,[engines{k} ' failed: ' ME.message]);
+        end
+    end
+    [best,k]=max(scores);
+    if ~isfinite(best),error('deConfUSIon:AtlasCompare','Both registration engines failed. Greedy: %s MATLAB: %s',results{1}.error,results{2}.error);end
+    M=matrices{k};report=results{k};report.engine=['compare: ' engines{k}];
+    report.comparison=struct('engines',{engines},'scores',scores,'results',{results}, ...
+        'selected',engines{k},'rule','Higher coverage-masked intensity/detail score after retention checks; anatomical review remains required.');
+    return;
+end
 validateattributes(fixed,{'numeric'},{'real','nonempty'});
 validateattributes(moving,{'numeric'},{'real','nonempty'});
 if ndims(fixed)~=3 || ndims(moving)~=3 || min(size(moving))<4 || min(size(fixed))<4
     error('deConfUSIon:AtlasVolume','Automatic registration requires a true 3D anatomy (at least 4 samples per axis).');
 end
+[support,sliceReport]=fusiRegistrationSliceSupport(moving,cfg);
+moving=single(moving);moving(~support)=0;
 fixed=robustVolume(fixed); moving=robustVolume(moving);
 cfg=defaults(cfg); factor=max(1,ceil(max([size(fixed) size(moving)])/cfg.maxDimension));
 F=fixed(1:factor:end,1:factor:end,1:factor:end);
 V=moving(1:factor:end,1:factor:end,1:factor:end);
+cfg.support=single(support(1:factor:end,1:factor:end,1:factor:end));
+cfg.fixedFeatures=fusiRegistrationFeatures(F);cfg.movingFeatures=fusiRegistrationFeatures(V);
+[cfg.fixedGradient{1},cfg.fixedGradient{2},cfg.fixedGradient{3}]=gradient(imgaussfilt3(F,.8));
+energy=sqrt(cfg.fixedGradient{1}.^2+cfg.fixedGradient{2}.^2+cfg.fixedGradient{3}.^2);
+cfg.gradientFloor=max(1e-4,.05*prctile(energy(energy>0),95));
 if cfg.useCurrent
     start=initial;
 else
@@ -166,13 +238,14 @@ else
     start(4,1:3)=(sf([2 1 3])-sm([2 1 3]))/2;
 end
 originalStart=start; initReport=[];
+cfg.apScaleReference=norm(start(2,1:3));
 if ~cfg.useCurrent && cfg.searchInitialization
     [start,initReport]=chooseInitial3D(F,V,factor,start,cfg);
 end
 report=struct('engine',cfg.engine,'model',cfg.model,'target',cfg.target, ...
     'sampleStride',factor,'voxelSizeUm',cfg.voxelSizeUm,'initialMatrix',start, ...
     'created',datestr(now,30),'reviewRequired',true,'log','');
-report.initialization=initReport;
+report.sliceSelection=sliceReport;report.initialization=initReport;
 report.originalMatrix=originalStart;
 progress(cfg,'Preparing 3D anatomy and atlas...');
 switch lower(cfg.engine)
@@ -184,46 +257,63 @@ switch lower(cfg.engine)
         % NIfTI array axes are (row,column,slice). imwarp instead uses
         % (column,row,slice). H handles this swap AND zero/one based origins.
         spacing=double(cfg.voxelSizeUm(:)')/1000;
-        writeNifti(F,fp,spacing*factor); writeNifti(V,mp,spacing*factor);
+        % Fit an increment on a common atlas grid. The installed ITK-SNAP
+        % build fails its image-region checks for unequal matrix-probe and
+        % atlas extents. A moving mask preserves acquired coverage after
+        % initialization; the external optimizer does not score padded data.
+        rf=sampleReference(size(F),factor);rv=sampleReference(size(V),factor);
+        fitMoving=imwarp(V,rv,affine3d(start),'OutputView',rf);
+        fitMask=single(imwarp(cfg.support,rv,affine3d(start),'OutputView',rf)>.999);
+        writeNifti(F,fp,spacing*factor); writeNifti(fitMoving,mp,spacing*factor);
+        maskFile=fullfile(work,'acquired-mask.nii');writeNifti(fitMask,maskFile,spacing*factor);
         H=[0 spacing(1) 0 -spacing(1); spacing(2) 0 0 -spacing(2); ...
             0 0 spacing(3) -spacing(3); 0 0 0 1];
-        initFile=fullfile(work,'initial.mat'); writeMatrix(initFile,H/start'/H);
+        initFile=fullfile(work,'initial.mat'); writeMatrix(initFile,eye(4));
         rigidFile=fullfile(work,'rigid.mat'); affineFile=fullfile(work,'affine.mat');
         logFile=fullfile(work,'greedy.log');
         schedule=sprintf('%dx',cfg.iterations); schedule(end)=[];
         metric={'NMI'};
-        if strcmpi(cfg.target,'vascular'), metric={'NCC','2x2x2'}; end
-        common=[{'-d','3','-a','-m'} metric {'-i',fp,mp,'-n',schedule,'-threads','4','-float'}];
+        if strcmpi(cfg.target,'vascular'), metric={'WNCC','2x2x2'}; end
+        report.optimizerMetric=strjoin(metric,' ');
+        detailFixed=fullfile(work,'fixed-detail.nii');detailMoving=fullfile(work,'moving-detail.nii');
+        writeNifti(cfg.fixedFeatures,detailFixed,spacing*factor);
+        warpedDetails=imwarp(cfg.movingFeatures,rv,affine3d(start),'OutputView',rf);
+        writeNifti(warpedDetails,detailMoving,spacing*factor);
+        common=[{'-d','3','-a','-m'} metric {'-w','0.7','-i',fp,mp, ...
+            '-w','0.3','-i',detailFixed,detailMoving,'-mm',maskFile,'-n',schedule,'-threads','4'}];
+        report.featureRule='70% compressed anatomy, 30% local anatomical contrast; acquired support mask.';
         if strcmpi(cfg.target,'vascular'), common=[common {'-jitter','0'}]; end
         progress(cfg,'ITK-SNAP Greedy: multiresolution rigid registration...');
         runProcess(cfg.executable,[common {'-dof','6','-ia',initFile,'-o',rigidFile}],logFile,cfg);
         resultFile=rigidFile;
         if strcmpi(cfg.model,'affine')
-            progress(cfg,'ITK-SNAP Greedy: refining scale and shear...');
-            runProcess(cfg.executable,[common {'-dof','12','-ia',rigidFile,'-o',affineFile}],logFile,cfg);
-            resultFile=affineFile;
+            report.scaleRule='After rigid fit, bounded separate depth/AP/LR scales use the shared anatomical-detail score; no automatic shear.';
         end
         G=dlmread(resultFile); % Greedy: fixed RAS -> moving RAS, column vectors.
         if ~isequal(size(G),[4 4]) || any(~isfinite(G(:))) || rcond(G)<1e-12
             error('deConfUSIon:AtlasTransform','Greedy returned an invalid transform.');
         end
-        M=(H\(G\H))';
+        increment=(H\(G\H))';M=start*increment;
         report.log=fileread(logFile);
         report.rasPullMatrix=G;
+        report.rasPullRole='Incremental fixed RAS -> initialized moving RAS';
         % Compare one external reslice with MATLAB before accepting the
         % coordinate conversion. This detects header/origin convention errors.
         checkFile=fullfile(work,'resliced.nii');
         runProcess(cfg.executable,{'-d','3','-rf',fp,'-rm',mp,checkFile,'-r',resultFile},logFile,cfg);
         external=single(niftiread(checkFile));
-        internal=imwarp(V,sampleReference(size(V),factor),affine3d(M), ...
+        internal=imwarp(fitMoving,sampleReference(size(fitMoving),factor),affine3d(increment), ...
             'OutputView',sampleReference(size(F),factor));
         % Greedy and imwarp use different extrapolation at the outer half
         % voxel. Compare the shared interior, where both use trilinear
         % interpolation, so bright boundary voxels do not cause false alarms.
-        interior=ones(size(V),'single');
+        interior=fitMask;
         interior([1 end],:,:)=0; interior(:,[1 end],:)=0; interior(:,:,[1 end])=0;
-        valid=imwarp(interior,sampleReference(size(V),factor),affine3d(M), ...
+        valid=imwarp(interior,sampleReference(size(fitMoving),factor),affine3d(increment), ...
             'OutputView',sampleReference(size(F),factor))>.999;
+        if nnz(valid)<32 || norm(double(external(valid)))<=eps
+            error('deConfUSIon:AtlasCoordinates','Too little shared signal to verify the external coordinate conversion. Previous alignment preserved.');
+        end
         report.resliceRelativeError=norm(double(external(valid)-internal(valid)))/max(eps,norm(double(external(valid))));
         if report.resliceRelativeError>.03
             error('deConfUSIon:AtlasCoordinates','Greedy and MATLAB reslices disagree (%.2f percent); the previous transform is preserved.',100*report.resliceRelativeError);
@@ -238,7 +328,7 @@ switch lower(cfg.engine)
         optimizer.GrowthFactor=1.01; optimizer.Epsilon=1e-7;
         metric.UseAllPixels=true;
         fitMoving=V; fitRef=rm; base=eye(4); t=affine3d(start);
-        if cfg.useCurrent
+        if cfg.useCurrent || ~t.isTranslation()
             % Fit an incremental rigid transform after the manual alignment.
             % This also accepts a manual start containing scale or shear.
             fitMoving=imwarp(V,rm,affine3d(start),'OutputView',rf);
@@ -251,8 +341,7 @@ switch lower(cfg.engine)
         levels=min(3,floor(log2(min([size(F) size(V)])))-1);
         t=matlabFit(fitMoving,fitRef,F,rf,'rigid',optimizer,metric,t,levels);
         if strcmpi(cfg.model,'affine')
-            progress(cfg,'MATLAB: refining scale and shear...');
-            t=matlabFit(fitMoving,fitRef,F,rf,'affine',optimizer,metric,t,2);
+            report.scaleRule='After rigid fit, bounded separate depth/AP/LR scales use the shared anatomical-detail score; no automatic shear.';
         end
         M=base*t.T;
     otherwise, error('deConfUSIon:AtlasEngine','Unknown registration engine.');
@@ -262,23 +351,28 @@ scales=svd(M(1:3,1:3));
 if any(~isfinite(M(:))) || det(M(1:3,1:3))<=0 || min(scales)<.5 || max(scales)>2
     error('deConfUSIon:AtlasTransform','Automatic alignment produced an implausible flip or scale. The previous alignment is preserved. Check geometry or refine a manual starting position.');
 end
+if cfg.refinePartialCoverage
+    progress(cfg,'Refining within acquired coverage, without scoring missing atlas tissue...');
+    [M,report.coverageRefinement]=refineCoverage3D(F,V,factor,M,cfg);
+end
 ref=sampleReference(size(F),factor); movingRef=sampleReference(size(V),factor);
 before=imwarp(V,movingRef,affine3d(start),'OutputView',ref);
 after=imwarp(V,movingRef,affine3d(M),'OutputView',ref);
-originalBefore=imwarp(V,movingRef,affine3d(originalStart),'OutputView',ref);
-report.nmiBefore=normalizedMI(F,originalBefore);
-report.nmiInitialized=normalizedMI(F,before); report.nmiAfter=normalizedMI(F,after);
+report.nmiBefore=coverageNMI(F,V,factor,originalStart,cfg);
+report.nmiInitialized=coverageNMI(F,V,factor,start,cfg); report.nmiAfter=coverageNMI(F,V,factor,M,cfg);
+report.scoreInitialized=coverageScore(F,V,factor,start,cfg);report.scoreAfter=coverageScore(F,V,factor,M,cfg);
+report.similarityRule='Coverage-masked intensity/local-detail NMI plus contrast-sign invariant interior gradient agreement; unacquired tissue and acquisition edges excluded.';
 report.foregroundOverlap=nnz(F>.05 & after>.05)/max(1,min(nnz(F>.05),nnz(after>.05)));
 report.retainedForeground=nnz(after>.05)/max(1,nnz(V>.05)*det(M(1:3,1:3)));
 retainedBefore=nnz(before>.05)/max(1,nnz(V>.05)*det(start(1:3,1:3)));
 report.refinementAccepted=true; report.refinementNote='';
-if report.retainedForeground<min(.65,.8*retainedBefore) || report.nmiAfter<report.nmiInitialized
+if report.retainedForeground<min(.65,.8*retainedBefore) || report.scoreAfter<report.scoreInitialized
     % Keep the valid, scored initialization when the numerical optimizer
     % drifts. Report this explicitly instead of presenting a failed fine fit.
     report.refinementAccepted=false;
     report.refinementNote='Fine fit reduced similarity or coverage; retained the scored starting proposal. Review or refine a manual alignment.';
     report.rejectedOptimizerMatrix=M; report.rejectedOptimizerNMI=report.nmiAfter;
-    M=start; after=before; report.nmiAfter=report.nmiInitialized;
+    M=start; after=before; report.nmiAfter=report.nmiInitialized;report.scoreAfter=report.scoreInitialized;
     report.retainedForeground=retainedBefore;
     report.foregroundOverlap=nnz(F>.05 & after>.05)/max(1,min(nnz(F>.05),nnz(after>.05)));
 end
@@ -309,13 +403,132 @@ for k=1:size(starts,3)
     overlap(k)=nnz(W>.05 & F>.05)/max(1,nnz(W>.05));
     retained=nnz(W>.05)/max(1,nnz(V>.05));
     if retained>=.65 && overlap(k)>=.05
-        scores(k)=normalizedMI(F,W);
+        scores(k)=coverageScore(F,V,step,starts(:,:,k),cfg);
     end
 end
 [best,k]=max(scores); if ~isfinite(best), k=1; end
 start=starts(:,:,k);
+% Small, explicit orientation candidates help an oblique matrix acquisition
+% without guessing a hemisphere flip. All candidates retain physical spacing.
+point=[volumeCentroid(V,step) 1]*start;point=point(1:3);base=start;
+for axis=1:3
+    for degrees=[-12 -6 6 12]
+        checkCancel(cfg);a=degrees*pi/180;c=cos(a);s=sin(a);
+        switch axis
+            case 1,R=[1 0 0;0 c s;0 -s c];
+            case 2,R=[c 0 -s;0 1 0;s 0 c];
+            case 3,R=[c s 0;-s c 0;0 0 1];
+        end
+        delta=eye(4);delta(1:3,1:3)=R;delta(4,1:3)=point-point*R;
+        candidate=base*delta;W=imwarp(V,rv,affine3d(candidate),'OutputView',rf);
+        retained=nnz(W>.05)/max(1,nnz(V>.05));ov=nnz(W>.05 & F>.05)/max(1,nnz(W>.05));
+        value=-inf;if retained>=.65 && ov>=.05,value=coverageScore(F,V,step,candidate,cfg);end
+        starts(:,:,end+1)=candidate;scores(end+1)=value;overlap(end+1)=ov; %#ok<AGROW>
+        if value>best,best=value;k=size(starts,3);start=candidate;end
+    end
+end
 report=struct('candidateMatrices',starts,'nmi',scores,'overlap',overlap,'selected',k, ...
-    'method','box/foreground centers plus AP/depth translation candidates; no mirrors');
+    'method','box/foreground centers, AP/depth translations and +/-6/12 degree rotations; no mirrors');
+end
+
+function value=coverageScore(F,V,step,M,cfg)
+rf=sampleReference(size(F),step);rv=sampleReference(size(V),step);
+W=imwarp(V,rv,affine3d(M),'OutputView',rf);
+coverage=imwarp(cfg.support,rv,affine3d(M),'OutputView',rf)>.999;
+W(~coverage)=NaN;intensity=normalizedMI(F,W);
+D=imwarp(cfg.movingFeatures,rv,affine3d(M),'OutputView',rf);
+interior=imerode(coverage,ones(5,5,5)) & F>.03;
+D(~interior)=NaN;
+if nnz(interior)<32,detail=intensity;else,detail=normalizedMI(cfg.fixedFeatures,D);end
+% Interior edges include vessels and ventricular borders. Squared gradient
+% agreement supports opposite histology/Doppler contrast, without forcing
+% the cropped scan's lower boundary onto the whole atlas boundary.
+W(~isfinite(W))=0;[gx,gy,gz]=gradient(imgaussfilt3(W,.8));
+g=cfg.fixedGradient;f2=g{1}.^2+g{2}.^2+g{3}.^2;w2=gx.^2+gy.^2+gz.^2;
+eta=cfg.gradientFloor;valid=interior & f2>eta^2 & w2>eta^2;
+orientation=0;
+if nnz(valid)>=32
+    dotProduct=g{1}.*gx+g{2}.*gy+g{3}.*gz;
+    agreement=dotProduct.^2./((f2+eta^2).*(w2+eta^2));
+    orientation=mean(agreement(valid));
+end
+value=.5*intensity+.3*detail+.2*(1+orientation);
+end
+
+function value=coverageNMI(F,V,step,M,cfg)
+rf=sampleReference(size(F),step);rv=sampleReference(size(V),step);
+W=imwarp(V,rv,affine3d(M),'OutputView',rf);
+coverage=imwarp(cfg.support,rv,affine3d(M),'OutputView',rf)>.999;
+W(~coverage)=NaN;value=normalizedMI(F,W);
+end
+
+function [M,report]=refineCoverage3D(F,V,step,M,cfg)
+% Bounded deterministic rigid increments. The same metric and physical
+% grid are used for either engine, including partial matrix-probe coverage.
+rf=sampleReference(size(F),step);rv=sampleReference(size(V),step);
+movingCenter=volumeCentroid(V,step);
+base=M;best=score(M);initialScore=best;accepted=0;
+% A joint width/depth search avoids the local optimum of a rigid fit where
+% neither axis improves in isolation. Keep AP sampling unchanged at this
+% stage; later bounded increments can refine it if internal anatomy agrees.
+if strcmpi(cfg.model,'affine')
+    center=[movingCenter 1]*M;center=center(1:3);seed=M;
+    for depth=[.7 .85 1 1.15 1.3]
+        for width=[.7 .85 1 1.15 1.3]
+            checkCancel(cfg);R=diag([depth 1 width]);delta=eye(4);
+            delta(1:3,1:3)=R;delta(4,1:3)=center-center*R;
+            candidate=seed*delta;v=score(candidate);
+            if v>best+1e-5,M=candidate;best=v;accepted=accepted+1;end
+        end
+    end
+end
+for level=1:3
+    translation=[4 2 1]*step;angles=[3 1.5 .75]*pi/180;
+    for pass=1:3
+        changed=false;
+        dimensions=6;if strcmpi(cfg.model,'affine'),dimensions=9;end
+        for axis=1:dimensions
+            for direction=[-1 1]
+                checkCancel(cfg);delta=eye(4);
+                center=[movingCenter 1]*M;center=center(1:3);
+                if axis<=3,delta(4,axis)=direction*translation(level);
+                elseif axis<=6
+                    a=direction*angles(level);c=cos(a);s=sin(a);
+                    switch axis-3
+                        case 1,R=[1 0 0;0 c s;0 -s c];
+                        case 2,R=[c 0 -s;0 1 0;s 0 c];
+                        case 3,R=[c s 0;-s c 0;0 0 1];
+                    end
+                    delta(1:3,1:3)=R;delta(4,1:3)=center-center*R;
+                else
+                    scaleSteps=[.12 .06 .025];R=eye(3);R(axis-6,axis-6)=exp(direction*scaleSteps(level));
+                    delta(1:3,1:3)=R;delta(4,1:3)=center-center*R;
+                end
+                candidate=M*delta;v=score(candidate);
+                if v>best+1e-5,M=candidate;best=v;accepted=accepted+1;changed=true;end
+            end
+        end
+        if ~changed,break;end
+    end
+end
+report=struct('initialMatrix',base,'nmiBefore',initialScore,'nmiAfter',best,'acceptedSteps',accepted, ...
+    'method','Joint DV/LR scale search followed by bounded translation/rotation/independent scales; interior intensity/detail/gradient score; no reflection.');
+report.apScaleLimits=cfg.apScaleLimits*cfg.apScaleReference;
+    function value=score(T)
+        W=imwarp(V,rv,affine3d(T),'OutputView',rf);
+        retained=nnz(W>.05)/max(1,nnz(V>.05)*det(T(1:3,1:3)));
+        overlap=nnz(W>.05 & F>.05)/max(1,nnz(W>.05));
+        if retained<.65 || overlap<.05,value=-inf;return;end
+        relative=svd(base(1:3,1:3)\T(1:3,1:3));
+        absolute=svd(T(1:3,1:3));
+        if any(relative<.65 | relative>1.5) || any(absolute<.5 | absolute>2),value=-inf;return;end
+        % AP sampling is known. Do not collapse the acquisition length to
+        % match a visually similar subset of atlas tissue. A manually sized
+        % starting alignment remains the reference for this bound.
+        apScale=norm(T(2,1:3))/cfg.apScaleReference;
+        if apScale<cfg.apScaleLimits(1)||apScale>cfg.apScaleLimits(2),value=-inf;return;end
+        value=coverageScore(F,V,step,T,cfg);
+    end
 end
 
 function c=volumeCentroid(V,step)
@@ -413,9 +626,11 @@ end
 function cfg=defaults(cfg)
 d=struct('engine','greedy','target','vascular','model','rigid','useCurrent',false, ...
     'executable','','voxelSizeUm',[50 50 50],'maxDimension',160, ...
-    'iterations',[100 50 20],'progressFcn',[],'cancelFcn',[],'searchInitialization',true);
+    'iterations',[100 50 20],'progressFcn',[],'cancelFcn',[],'searchInitialization',true,'refinePartialCoverage',true,'trimEmptySlices',false,'preparedSliceRange',[], ...
+    'apScaleLimits',[.8 1.25]);
 names=fieldnames(d);
 for k=1:numel(names), if ~isfield(cfg,names{k}), cfg.(names{k})=d.(names{k}); end, end
+validateattributes(cfg.apScaleLimits,{'numeric'},{'real','finite','positive','numel',2,'increasing'});
 end
 
 function ref=sampleReference(sz,step)
@@ -562,15 +777,19 @@ end
 M=eye(4); M(axes,axes)=A(1:2,1:2); M(4,axes)=A(3,1:2);
 end
 
-function [cor,axi,sag]=previewCuts(D,M,sz,index)
+function [cor,axi,sag]=previewCuts(D,M,sz,index,requested)
 % Reslice only the three visible planes for a responsive drag preview.
+if nargin<5,requested=true(1,3);end
+cor=[];axi=[];sag=[];
 invM=inv(M);
-[u,v]=meshgrid(1:sz(3),1:sz(2)); cor=sample(v,index(1)*ones(size(v)),u);
-[u,v]=meshgrid(1:sz(3),1:sz(1)); axi=sample(index(2)*ones(size(v)),v,u);
-[u,v]=meshgrid(1:sz(1),1:sz(2)); sag=sample(v,u,index(3)*ones(size(v)));
+if requested(1),[u,v]=meshgrid(1:sz(3),1:sz(2)); cor=sample(v,index(1)*ones(size(v)),u);end
+if requested(2),[u,v]=meshgrid(1:sz(3),1:sz(1)); axi=sample(index(2)*ones(size(v)),v,u);end
+if requested(3),[u,v]=meshgrid(1:sz(1),1:sz(2)); sag=sample(v,u,index(3)*ones(size(v)));end
     function image=sample(x,y,z)
         points=[x(:) y(:) z(:) ones(numel(x),1)]*invM;
-        image=reshape(interp3(D,points(:,1),points(:,2),points(:,3),'linear',0),size(x));
+        if isa(D,'griddedInterpolant')
+            image=reshape(D(points(:,2),points(:,1),points(:,3)),size(x));image(~isfinite(image))=0;
+        else,image=reshape(interp3(D,points(:,1),points(:,2),points(:,3),'linear',0),size(x));end
     end
 end
 
@@ -588,6 +807,7 @@ end
 
 function bundle=exportReview(fixed,moving,regions,regionInfo,M,spacingUm,folder,launch)
 % A separate review bundle never overwrites the accepted Transformation.mat.
+folder=fusiAnalysisOutputPath(folder);
 if nargin<8, launch=true; end
 exe=findSnap();
 if launch && isempty(exe), error('deConfUSIon:SnapMissing','ITK-SNAP was not found. Set the deConfUSIon itksnapExecutable preference.'); end
@@ -602,7 +822,8 @@ bundle=struct('folder',folder,'atlas',fullfile(folder,'atlas.nii'), ...
 aligned=imwarp(single(moving),affine3d(M),'OutputView',imref3d(size(fixed)),'Interp','linear');
 writeReviewNifti(single(fixed),bundle.atlas,spacing);
 writeReviewNifti(aligned,bundle.anatomy,spacing);
-ids=uniqueValues(regions); [~,labelIndex]=ismember(regions,ids); labels=uint32(labelIndex); clear labelIndex;
+brain=fusiAtlasBrainMask(struct('Regions',regions,'infoRegions',regionInfo));
+ids=uniqueValues(regions(brain)); [~,labelIndex]=ismember(regions,ids); labels=uint32(labelIndex); clear labelIndex;
 fid=fopen(bundle.colors,'w'); assert(fid>=0,'Could not write review label colors.');
 cleanup=onCleanup(@()fclose(fid)); %#ok<NASGU>
 fprintf(fid,'0 0 0 0 0 0 0 "Background"\n');
@@ -626,25 +847,37 @@ for k=1:numel(ids)
 end
 clear cleanup;
 writeReviewNifti(labels,bundle.regions,spacing);
-save(fullfile(folder,'ReviewProposal.mat'),'M','spacingUm','mapping');
+bundle.session=struct('M',M,'spacingUm',spacingUm,'mapping',{mapping});
+fid=fopen(fullfile(folder,'ReviewSession.json'),'w');
+if fid<0,error('deConfUSIon:SnapSession','Cannot write review-session metadata.');end
+fprintf(fid,'%s',jsonencode(bundle.session,'PrettyPrint',true));fclose(fid);
+bundle.vesselContrast=fusiSnapVesselContrast(aligned);
+bundle.workspace=fusiSnapOverlayWorkspace(folder,bundle.atlas,bundle.anatomy,bundle.vesselContrast);
 fid=fopen(fullfile(folder,'README.txt'),'w');
 fprintf(fid,['Review proposal only. The accepted Transformation.mat is unchanged.\n' ...
     'Review NIfTI axes are [LR AP DV], permuted from toolbox [AP DV LR].\n' ...
     'Atlas AP increases posteriorly and DV ventrally: the RAS header includes both direction signs.\n' ...
     'Check vessels, ventricles and boundaries in all planes and at the edges of scan coverage.\n' ...
+    'Start with all three orthogonal views. Scroll to review several slices within coverage.\n' ...
+    'Alt-I adjusts contrast automatically. Select the anatomy overlay layer and adjust its contrast/opacity if it is faint.\n' ...
+    'The atlas_anatomy_overlay.itksnap workspace opens anatomy as a hot transparent overlay ON the fixed atlas.\n' ...
+    'Vessel display starts at 95%% opacity, with a robust nonzero-intensity window and gamma 0.65. Review images and transforms are unchanged.\n' ...
+    'Select aligned_anatomy and open its contrast controls to adjust the window; Alt-I resets to SNAP auto-contrast.\n' ...
+    'If separate tiles appear: right-click aligned_anatomy in the layer thumbnail/menu and choose Display as Overlay.\n' ...
     'Q/E adjusts overlay opacity; W toggles the overlay; S toggles segmentation.\n' ...
     'Verify anatomical handedness against acquisition landmarks; the NIfTI grid alone cannot establish probe left/right.\n' ...
-    'Return to MATLAB to adjust alignment or Undo auto; use Save reviewed to accept.\n' ...
-    'ITK-SNAP segmentation edits do not update the MATLAB transform automatically.\n']); fclose(fid);
+    'Manual adjustment: Tools > Registration > Manual. Choose aligned_anatomy as the moving image layer, NOT the atlas main image.\n' ...
+    'Use Interactive Tool: drag away from the rotation wheel to translate; drag the wheel to rotate. Check all planes.\n' ...
+    'Save Transform from the registration panel as ITK affine text (.tfm/.txt), or Convert3D 4x4 RAS text.\n' ...
+    'Return to MATLAB, click Import SNAP edit, and select that saved transform. It is an adjustment of this already-aligned review overlay.\n' ...
+    'Import composes the adjustment once with the original native-to-atlas proposal. Re-review and SAVE TRANSFORM NOW to save.\n' ...
+    'Do not replace atlas/anatomy files, reset their headers, or import a transform for another moving layer/session.\n' ...
+    'Refine current manual alignment: choose this after roughly aligning the acquisition yourself; it optimizes around your current transform.\n' ...
+    'Without that option, automatic initialization searches other starting positions and can replace your rough placement.\n']); fclose(fid);
 if launch
     % Only anatomy is an overlay. Keep the selected vascular/histology atlas
     % fixed underneath; region labels are available on disk but start hidden.
-    args={exe,'-g',bundle.atlas,'-o',bundle.anatomy};
-    list=java.util.ArrayList(); for k=1:numel(args), list.add(java.lang.String(args{k})); end
-    builder=java.lang.ProcessBuilder(list); builder.redirectErrorStream(true);
-    builder.redirectOutput(java.io.File(fullfile(folder,'itksnap.log')));
-    process=builder.start(); % Requested interactive viewer; do not destroy it on return.
-    bundle.process=process;
+    bundle.process=fusiOpenSnapWorkspace(exe,bundle.workspace);
     bundle.launched=true;
 end
 end

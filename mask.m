@@ -35,6 +35,7 @@ function out = mask(varargin)
 % =========================================================
 % 0) Parse inputs
 % =========================================================
+deConfUSIon_setup();
 studio = struct();
 I = [];
 datasetLabel = 'dataset';
@@ -657,6 +658,7 @@ h.btnClearSlice = makeButton(pTools,[0.75 0.43 0.22 0.12],'Clr Slice',C.grayBtn,
 h.btnClearMask = makeButton(pTools,[0.03 0.24 0.94 0.11],'Clear Active Mask',C.red,'w',@onClearMask);
 
 h.btnAutoMask  = makeButton(pTools,[0.03 0.09 0.45 0.12],'AUTO MASK',C.blue,'w',@onAutoMask);
+set(h.btnAutoMask,'TooltipString','For 3D data, use neighboring Doppler slices to propose a continuous brain mask. Sensitivity and edge shrink remain adjustable; review before saving.');
 h.btnCopyToAll = makeButton(pTools,[0.52 0.09 0.45 0.12],'Slice -> All',C.grayBtn,'w',@onCopySliceToAll);
 if nZ <= 1
     set(h.btnCopyToAll,'Enable','off');
@@ -1454,7 +1456,7 @@ end
 
     function onAutoMask(~,~)
         if nZ > 1
-            amScope = questdlg('Compute the automatic mask for:', 'Auto mask', ...
+            amScope = questdlg('3D proposal uses neighboring slices. Apply it to:', 'Auto mask', ...
                                'Current slice', 'All slices', 'All slices');
         else
             amScope = 'Current slice';
@@ -1497,9 +1499,22 @@ end
         end
 
         set(fig,'Pointer','watch');
+        amPointerGuard=onCleanup(@restoreAutoMaskPointer); %#ok<NASGU>
         drawnow;
 
-        amCount = 0;
+        amCount = 0;amVolume=[];
+        if nZ>1 && exist('bwconncomp','file')==2
+            amRaw=Ucache.mean;if S.underlayMode==5 && ~isempty(Ucache.external),amRaw=Ucache.external;end
+            if isempty(amRaw),amRaw=Ubase;end
+            amCalPar=studio;if isfield(studio,'maskSpatialMetadata'),amCalPar=studio.maskSpatialMetadata;end
+            amCalPar.scmSizeYXZ=[nY nX nZ];amCal=scmSpatialCalibration(amCalPar);
+            amRestriction=[];
+            if S.editTarget==2 && any(brainMaskVol(:)),amRestriction=brainMaskVol;end
+            [amVolume,amReport]=fusiAutoMaskVolume3D(amRaw,amSens,amCal.spacingUm,amRestriction);
+            S.autoMaskProposal=struct('method',amReport.method,'sensitivity',amSens, ...
+                'shrinkPixels',amErode,'appliedSlices',amList,'target',amTgt,'report',amReport, ...
+                'source','Temporal mean Doppler; external anatomy when selected');
+        end
         for amZ = amList
             % Auto-mask from the current slice's robust raw intensity range,
             % rather than the display-adjusted image. This makes sensitivity
@@ -1515,9 +1530,11 @@ end
                 end
             end
 
-            amMask = deConfUSIon_auto_mask_slice(amU01, amSens, amBrain);
-            amMask = fillHolesAllSafe(amMask);
+            if ~isempty(amVolume),amMask=amVolume(:,:,amZ);
+            else,amMask=deConfUSIon_auto_mask_slice(amU01,amSens,amBrain);end
+            if isempty(amVolume),amMask=fillHolesAllSafe(amMask);end
             amMask = deConfUSIon_shrink_mask(amMask, amErode);
+            if S.editTarget==2 && ~isempty(amBrain),amMask=amMask & amBrain;end
 
             if S.editTarget == 1
                 brainMaskVol(:,:,amZ) = amMask;
@@ -1539,6 +1556,10 @@ end
                          amTgt, numel(amList), amSens, amErode, amCount));
         end
         renderNow();
+    end
+
+    function restoreAutoMaskPointer()
+        if isgraphics(fig),set(fig,'Pointer','arrow');end
     end
 
     function onClearSlice(~,~)
@@ -1682,6 +1703,7 @@ sliceUnderlayProcessed = anatomical_reference;
 end
         maskEditorInfo.outputFilePrefix = filePrefix;
         maskEditorInfo.underlayMode = S.underlayMode;
+        if isfield(S,'autoMaskProposal'),maskEditorInfo.autoMaskProposal=S.autoMaskProposal;end
         maskEditorInfo.processedUnderlayRange = [0 1];
         maskEditorInfo.hasBrainMask = brainHas;
         maskEditorInfo.hasOverlayMask = overlayHas;

@@ -1,0 +1,30 @@
+% VOLUME - deConfUSIon implementation module.
+% Initialize with deConfUSIon_setup; see docs/code_map.md for callers.
+%   fusiExportVolume
+%   fusiMapAtlasSlabs
+%   fusiVolumeAtlasContext
+%   fusiVolumeAutoAppearance
+%   fusiVolumeBaseline
+%   fusiVolumeColormap
+%   fusiVolumeControlsLayout
+%   fusiVolumeDecorations
+%   fusiVolumeDisplayOrientation
+%   fusiVolumeEditAtlasRegistration
+%   fusiVolumeGeometry
+%   fusiVolumeExportPreview
+%   fusiVolumeMovieCanvas
+%   fusiVolumeMovieEdge
+%   fusiVolumePSCColormap
+%   fusiVolumeRefitStackCamera
+%   fusiVolumeRememberCamera
+%   fusiVolumeReviewAtlas
+%   fusiVolumeRGBA
+%   fusiVolumeSlabGeometry
+%   fusiVolumeSlabMean
+%   fusiVolumeSnapshot
+%   fusiVolumeStackCamera
+%   fusiVolumeStackLayout
+%   fusiVolumeSurfaceMesh
+%   fusiVolumeTextureSlices
+%   fusiVolumeVoxelFaces
+%   fusiVolumeWebMovieCanvas

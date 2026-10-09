@@ -2,6 +2,7 @@ function varargout=DataIO(action,varargin)
 % Durable analysis saves, plus compatibility with previously queued saves.
 % 'save' and legacy 'enqueue' return only after the final MAT exists.
 % Its staging file stays beside that destination, never in the system tempdir.
+deConfUSIon_setup();
 if strcmp(action,'write')
     destination=varargin{1}; payload=varargin{2}; temporary=varargin{3};
     if exist(destination,'file'), error('deConfUSIon:SaveExists','Output already exists: %s',destination); end
@@ -75,6 +76,7 @@ switch action
             DataIO('save',d.savedFile,struct('newData',d));
         end
     case 'recover'
+        if isequal(polling,true), error('deConfUSIon:SaveBusy','A save is already running; wait for it to finish before recovery.'); end
         % Recover only explicitly completed stages. An incomplete legacy
         % .pending file has no record and is never presented as saved data.
         if isempty(varargin), folders={tempdir}; else, folders=varargin{1}; end
@@ -134,12 +136,20 @@ switch action
                 J=jobs(k);
                 if J.staged
                     if isempty(J.process)
-                        J.process=launchTransfer(J.temporary,J.path,J.transferTemp,J.transferError);
+                        publishCompleteStage(J.temporary,J.path);
+                        J.state='saved'; J.payload=[]; J.error='';
+                        fprintf('[Save] Saved and verified: %s\n',J.path);
                     elseif J.process.HasExited
                         if J.process.ExitCode~=0
                             message='Background transfer failed; local staged data retained.';
                             if isfile(J.transferError), message=fileread(J.transferError); end
                             error('deConfUSIon:SaveTransfer','%s',message);
+                        end
+                        record=jsondecode(fileread([J.temporary '.json']));
+                        verifyCompleteFile(J.path,record);
+                        sourceInfo=dir(J.temporary); finalInfo=dir(J.path);
+                        if sourceInfo.bytes~=finalInfo.bytes
+                            error('deConfUSIon:SaveVerify','Transferred result differs in size; retained the complete stage.');
                         end
                         J.process.Dispose(); J.process=[];
                         J.state='saved'; J.payload=[];
@@ -150,51 +160,19 @@ switch action
                     end
                     jobs(k)=J;
                 else
-                I=J.payload.newData.I; dims=size(I);
-                if strcmp(J.state,'queued')
-                    metadata=J.payload; metadata.newData.I=zeros(0,'like',I);
-                    save(J.temporary,'-struct','metadata','-v7.3','-nocompression');
-                    if isreal(I) && (isa(I,'single') || isa(I,'double'))
-                        % matfile expansion creates compressed image chunks.
-                        % Create explicit uncompressed chunks to avoid repeated
-                        % compression while assembling a large matrix-probe MAT.
-                        [tile,~]=saveTile(dims,1,2*1024^2/8);
-                        chunkDims=dims;
-                        for d=1:numel(dims)
-                            if isnumeric(tile{d}), chunkDims(d)=numel(tile{d}); end
-                        end
-                        h5create(J.temporary,'/imageData',dims,'Datatype',class(I),'ChunkSize',chunkDims);
-                        h5writeatt(J.temporary,'/imageData','MATLAB_class',class(I));
-                    else
-                        M=matfile(J.temporary,'Writable',true);
-                        last=num2cell(dims); M.imageData(last{:})=cast(0,'like',I);
-                    end
-                    J.state='saving';
-                end
-                M=matfile(J.temporary,'Writable',true);
-                % Tile spatial dimensions too: one 3D volume can itself be
-                % hundreds of MB. Bound every write to at most 2 MB.
-                [subs,nextCursor]=saveTile(dims,J.cursor,2*1024^2/8);
-                M.imageData(subs{:})=I(subs{:});
-                J.cursor=nextCursor;
-                if J.cursor>numel(I)
-                    clear M;
-                    file=H5F.open(J.temporary,'H5F_ACC_RDWR','H5P_DEFAULT');
-                    guard=onCleanup(@()H5F.close(file));
-                    H5L.delete(file,'/newData/I','H5P_DEFAULT');
-                    H5L.move(file,'/imageData',file,'/newData/I','H5P_DEFAULT','H5P_DEFAULT');
-                    clear guard;
-                    J.staged=true;
-                    fid=fopen([J.temporary '.json'],'w');
-                    if fid<0, error('deConfUSIon:SaveRecovery','Cannot write recovery manifest.'); end
-                    fprintf(fid,'%s',jsonencode(struct('destination',J.path,'localFile',J.temporary))); fclose(fid);
-                    J.payload=[]; jobs(k)=J; % Local MAT is now the recovery copy.
-                    J.process=launchTransfer(J.temporary,J.path,J.transferTemp,J.transferError);
-                end
+                % An older open Studio may still have queued in-memory work.
+                % Finish it in one verified write; never depend on future idle
+                % timer ticks to finish thousands of tiny movie chunks.
+                DataIO('write',J.path,preparePayload(J.payload,J.path),J.temporary);
+                J.state='saved'; J.payload=[]; J.error='';
                 jobs(k)=J;
+                fprintf('[Save] Saved and verified: %s\n',J.path);
                 end
             catch ME
                 jobs(k).state='failed'; jobs(k).error=ME.message;
+                if isfile([jobs(k).temporary '.json'])
+                    jobs(k).staged=true; jobs(k).payload=[];
+                end
                 fprintf(2,'[Save queue] FAILED: %s | %s\n',jobs(k).path,ME.message);
             end
         end
@@ -209,6 +187,9 @@ switch action
     case 'unlockpoll'
         polling=false;
     case 'wait'
+        % A close/retry callback dispatched during save() must return control
+        % to that write. Waiting here would deadlock MATLAB's event thread.
+        if isequal(polling,true), error('deConfUSIon:SaveBusy','A save is already running. Leave Studio open until it finishes.'); end
         while any(ismember({jobs.state},{'queued','saving'}))
             DataIO('poll',true); drawnow; pause(.1);
         end
@@ -218,7 +199,9 @@ switch action
         rows=cell(numel(jobs),1);
         for k=1:numel(jobs), rows{k}=sprintf('%s | %s | %s',upper(jobs(k).state),jobs(k).path,jobs(k).error); end
         if isempty(rows), rows={'No queued saves.'}; end
-        uicontrol(f,'Style','listbox','Units','normalized','Position',[.03 .18 .94 .77],'String',rows,'FontSize',12);
+        uicontrol(f,'Style','listbox','Units','normalized','Position',[.03 .30 .94 .65],'String',rows,'FontSize',12);
+        uicontrol(f,'Style','pushbutton','Units','normalized','Position',[.03 .18 .94 .08], ...
+            'String','Finish / recover saves without rerunning analysis','Callback',@(~,~)finishQueue(f));
         uicontrol(f,'Style','pushbutton','Units','normalized','Position',[.03 .05 .29 .08], ...
             'String','Retry failed saves','Callback',@(~,~)DataIO('retry'));
         uicontrol(f,'Style','pushbutton','Units','normalized','Position',[.355 .05 .29 .08], ...
@@ -227,36 +210,28 @@ switch action
             'String','Close','Callback',@(~,~)delete(f));
         deConfUSIon_ui('present',f);
     case 'retry'
+        if isequal(polling,true), error('deConfUSIon:SaveBusy','A save is already running. Retry after it finishes.'); end
         for k=find(strcmp({jobs.state},'failed'))
-            if endsWith(jobs(k).temporary,'.saving') || (jobs(k).staged && isfile([jobs(k).temporary '.json']))
-                % Durable saves also retry durably; they have no queue timer.
-                polling=true; retryGuard=onCleanup(@()DataIO('unlockpoll'));
-                try
-                    if jobs(k).staged
-                        publishCompleteStage(jobs(k).temporary,jobs(k).path);
-                    else
-                        DataIO('write',jobs(k).path,jobs(k).payload,jobs(k).temporary);
-                    end
-                    jobs(k).state='saved'; jobs(k).payload=[]; jobs(k).error='';
-                    fprintf('[Save] Saved and verified: %s\n',jobs(k).path);
-                catch ME
-                    jobs(k).error=ME.message;
-                    fprintf(2,'[Save] Retry failed: %s | %s\n',jobs(k).path,ME.message);
+            polling=true; retryGuard=onCleanup(@()DataIO('unlockpoll'));
+            try
+                if ~isempty(jobs(k).process) && ~jobs(k).process.HasExited
+                    error('deConfUSIon:SaveBusy','The previous file transfer is still running.');
                 end
-                clear retryGuard;
-                continue;
+                if jobs(k).staged
+                    publishCompleteStage(jobs(k).temporary,jobs(k).path);
+                else
+                    DataIO('write',jobs(k).path,preparePayload(jobs(k).payload,jobs(k).path),jobs(k).temporary);
+                end
+                jobs(k).state='saved'; jobs(k).payload=[]; jobs(k).error='';
+                fprintf('[Save] Saved and verified: %s\n',jobs(k).path);
+            catch ME
+                jobs(k).error=ME.message;
+                if isfile([jobs(k).temporary '.json'])
+                    jobs(k).staged=true; jobs(k).payload=[];
+                end
+                fprintf(2,'[Save] Retry failed: %s | %s\n',jobs(k).path,ME.message);
             end
-            if ~isempty(jobs(k).process), try, jobs(k).process.Dispose(); catch, end, end
-            if isfile(jobs(k).transferTemp), delete(jobs(k).transferTemp); end
-            jobs(k).process=[]; jobs(k).transferTemp=[tempname(fileparts(jobs(k).path)) '.pending'];
-            if jobs(k).staged
-                jobs(k).state='saving';
-            else
-                jobs(k).temporary=[tempname(tempdir) '.deconf.pending'];
-                jobs(k).transferError=[jobs(k).temporary '.error'];
-                jobs(k).state='queued'; jobs(k).cursor=1;
-            end
-            jobs(k).error='';
+            clear retryGuard;
         end
         updateSaveStatus(jobs);
         if ~isempty(poller) && isvalid(poller) && strcmp(poller.Running,'off'), start(poller); end
@@ -288,6 +263,15 @@ end
 
 function refreshQueue(f)
 delete(f); DataIO('show');
+end
+
+function finishQueue(f)
+try
+    deConfUSIon_finish_saves();
+catch ME
+    errordlg(ME.message,'Save results');
+end
+if isgraphics(f), refreshQueue(f); end
 end
 
 function updateSaveStatus(jobs)
@@ -394,35 +378,4 @@ function publishWithoutOverwrite(source,destination)
 % No REPLACE_EXISTING: a destination created during copying is also safe.
 src=java.io.File(source); dst=java.io.File(destination);
 javaMethod('move','java.nio.file.Files',src.toPath(),dst.toPath(),javaArray('java.nio.file.CopyOption',0));
-end
-
-function [subs,next]=saveTile(dims,cursor,maxElements)
-% Contiguous column-major tiles; first split dimension varies, later ones
-% are singleton coordinates. No padding, reshaping or type conversion.
-axis=find(cumprod(dims)>maxElements,1);
-if isempty(axis), axis=numel(dims); end
-stride=prod(dims(1:axis-1));
-coords=cell(1,numel(dims)); [coords{:}]=ind2sub(dims,cursor);
-count=min(dims(axis)-coords{axis}+1,max(1,floor(maxElements/stride)));
-subs=coords; for d=1:axis-1, subs{d}=':'; end
-subs{axis}=coords{axis}+(0:count-1); next=cursor+stride*count;
-end
-
-function process=launchTransfer(source,destination,pending,errorFile)
-% Paths are literals inside an encoded script, never executable shell text.
-quote=@(s)['''' strrep(char(s),'''','''''') ''''];
-script=sprintf(['$ErrorActionPreference=''Stop''; try {' ...
-    '[IO.File]::Copy(%s,%s,$false); ' ...
-    'if ((Get-Item -LiteralPath %s).Length -ne (Get-Item -LiteralPath %s).Length) { throw ''File size mismatch'' }; ' ...
-    '[IO.File]::Move(%s,%s); exit 0 ' ...
-    '} catch { [IO.File]::WriteAllText(%s,$_.Exception.Message); exit 1 }'], ...
-    quote(source),quote(pending),quote(source),quote(pending),quote(pending),quote(destination),quote(errorFile));
-bytes=System.Text.Encoding.Unicode.GetBytes(script);
-encoded=char(System.Convert.ToBase64String(bytes));
-info=System.Diagnostics.ProcessStartInfo();
-info.FileName='powershell.exe';
-info.Arguments=['-NoProfile -NonInteractive -EncodedCommand ' encoded];
-info.UseShellExecute=false; info.CreateNoWindow=true;
-info.WindowStyle=System.Diagnostics.ProcessWindowStyle.Hidden;
-process=System.Diagnostics.Process.Start(info);
 end

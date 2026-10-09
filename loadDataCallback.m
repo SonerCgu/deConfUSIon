@@ -5,10 +5,17 @@ if isempty(fig) || ~ishghandle(fig)
 end
 studio = guidata(fig);
 startPath = localDefaultStart(studio);
-[file,path] = uigetfile({'*.mat;*.nii;*.nii.gz','fUSI Data (*.mat, *.nii, *.nii.gz)'},'Select fUSI dataset',startPath);
+[file,path] = uigetfile({'*.mat;*.nii;*.nii.gz','fUSI / fMRI data (*.mat, *.nii, *.nii.gz)'},'Select fUSI / fMRI time-series dataset',startPath);
 if isequal(file,0)
     localLog(fig,'Load cancelled.');
     return;
+end
+try
+    selectedFile=studioRequireTimeSeriesFile(fullfile(path,file));
+    if isempty(selectedFile), localLog(fig,'Load cancelled.'); return; end
+    [path,stem,ext]=fileparts(selectedFile); path=[path filesep]; file=[stem ext];
+catch ME
+    errordlg(ME.message,'Load dataset'); return;
 end
 localLog(fig,'Loading dataset...');
 localStatus(fig,false);
@@ -30,31 +37,15 @@ try
     if ~isstruct(meta), meta = struct(); end
     if ~isfield(meta,'rawMetadata') || isempty(meta.rawMetadata), meta.rawMetadata = struct(); end
 
-    [rawRoot,analysedRoot] = localRoots(path);
+    resolvedPaths=fusiResolveAnalysisFolder(fullInputFile);
+    analysedRoot=resolvedPaths.analysedRoot;
+    datasetName=resolvedPaths.datasetName;
+    datasetFolder=resolvedPaths.datasetFolder;
+    rawFileInfo=dir(fullInputFile);data.datasetSortTime=rawFileInfo.datenum;
     localMkdir(analysedRoot);
 
-    datasetName = regexprep(file,'\.nii\.gz$','','ignorecase');
-    datasetName = regexprep(datasetName,'\.nii$','','ignorecase');
-    datasetName = regexprep(datasetName,'\.mat$','','ignorecase');
-    datasetName = regexprep(datasetName,'[^\w\-]+','_');
-    datasetName = regexprep(datasetName,'_+','_');
-    datasetName = regexprep(datasetName,'^_+|_+$','');
-    if isempty(datasetName), datasetName = 'item'; end
-
-    rawRootNorm = strrep(rawRoot,'/',filesep);
-    pathNorm = strrep(path,'/',filesep);
-    if numel(pathNorm) >= numel(rawRootNorm) && strcmpi(pathNorm(1:numel(rawRootNorm)),rawRootNorm)
-        relPath = pathNorm(numel(rawRootNorm)+1:end);
-        while ~isempty(relPath) && any(relPath(1)==[filesep '/' char(92)])
-            relPath = relPath(2:end);
-        end
-        datasetFolder = fullfile(analysedRoot,relPath,datasetName);
-    else
-        datasetFolder = fullfile(analysedRoot,datasetName);
-    end
-
     if exist('studio_load_options_dark_dialog','file') == 2
-        [chosenTR,datasetFolder,cancelled,probeType,defaultTR] = studio_load_options_dark_dialog(chosenTR,datasetFolder,analysedRoot,datasetName,probeType,defaultTR,data,meta);
+        [chosenTR,datasetFolder,cancelled,probeType,defaultTR] = studio_load_options_dark_dialog(chosenTR,datasetFolder,analysedRoot,datasetName,probeType,defaultTR,data,meta,fullInputFile);
         if cancelled
             localLog(fig,'Load cancelled during TR/output-folder selection.');
             localStatus(fig,true);
@@ -111,7 +102,7 @@ try
     studio.meta.visualizationPath = visFolder;
     studio.meta.preprocessingPath = preFolder;
     studio.meta.pscPath = pscFolder;
-
+    studio=deConfUSIon_add_preproc_lazy_datasets(studio);
     guidata(fig,studio);
     localUnlock(fig);
     localRefreshDropdown(fig);
@@ -274,6 +265,9 @@ end
 function [probeType,defaultTR] = localDetectProbe(data,meta)
 probeType = '2D Probe';
 defaultTR = 0.320;
+if isstruct(meta) && isfield(meta,'rawMetadata') && isfield(meta.rawMetadata,'nifti')
+    probeType='fMRI (NIfTI)'; defaultTR=data.TR; return;
+end
 try
     if isstruct(meta) && isfield(meta,'rawMetadata') && isfield(meta.rawMetadata,'probeTypeAutoDetected') && ~isempty(meta.rawMetadata.probeTypeAutoDetected)
         probeType = meta.rawMetadata.probeTypeAutoDetected;

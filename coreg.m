@@ -13,6 +13,7 @@ function RegOut = coreg(studio, mode)
 %   RegOut = coreg(studio,'2d')
 %   RegOut = coreg(studio,'3d')
 
+deConfUSIon_setup();
 RegOut = [];
 
 if nargin < 1 || isempty(studio) || ~isstruct(studio)
@@ -247,7 +248,7 @@ uicontrol('Parent',dlg,'Style','pushbutton', ...
 
 updateSelectedText();
 onModeChanged();
-uiwait(dlg);
+if isgraphics(dlg),setappdata(dlg,'AtlasLauncherReady',true);uiwait(dlg);end
 
     function makeLegendText(parent, x, str, col)
         uicontrol('Parent',parent,'Style','text', ...

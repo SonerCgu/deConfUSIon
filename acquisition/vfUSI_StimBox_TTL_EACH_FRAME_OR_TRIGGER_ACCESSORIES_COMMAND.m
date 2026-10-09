@@ -45,7 +45,10 @@ function vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_COMMAND(cfg)
 
     cfg = localApplyDefaults(cfg);
     cfg = localApplyBackwardCompatibility(cfg);
+    if ~isfield(cfg,'sensory'),cfg.sensory=struct();end
+    cfg.sensory=vfusiSensoryConfig(cfg.sensory);
     localValidateConfig(cfg);
+    vfusiValidateSensoryScan(cfg);
     [SCAN, FS] = localResolveScannerAndFileService(cfg);
 
     % B-Mode is a live preview path, not a frame-indexed saved acquisition.
@@ -57,6 +60,7 @@ function vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_COMMAND(cfg)
 
     port = [];
     pp = [];
+    sensory = [];
     pulsePalConnected = false;
 
     motorConnection = [];
@@ -89,6 +93,11 @@ if isfield(cfg, 'output_session_folder') && ~isempty(cfg.output_session_folder)
 end
         % Create callback object in all cases so GUI frame updates and STOP work
         pp = vfUSI_StimBox_TTL_EACH_FRAME_OR_TRIGGER_ACCESSORIES_OBJECT([]);
+        if ~strcmp(cfg.sensory.mode,'disabled')
+            sensory=vfusiSensoryRun(cfg.sensory);
+            pp.sensoryFrameFcn=@(index)sensory.frame(index);
+            localGuiLog(cfg,['Sensory mode: ' cfg.sensory.mode '. Start is a software scanner callback, not a TTL measurement.']);
+        end
 
         % -----------------------------------------------------------------
         % GUI callbacks and object behaviour
@@ -574,6 +583,7 @@ end
             localGuiLog(cfg, ['Trigger localization warning: ' MEtrigLocal.message]);
         end
 
+        if ~isempty(sensory),sensory.begin(sprintf('%s scan %d',cfg.xp_name,iTrial));end
         try
             pp.prepareTrial();
         catch
@@ -586,6 +596,10 @@ end
         localRunSelectedAcquisition(SCAN, pp, cfg, nFramesThisAcq);
 
     acqEndDatenum = now;
+    if ~isempty(sensory)
+        try,sensory.finish();md.sensory=sensory.metadata();
+        catch MEsensory,md.sensory=struct('error',MEsensory.message);localGuiLog(cfg,['Sensory sync error: ' MEsensory.message]);end
+    end
 
     % V5 low-resolution anatomy preset:
     % The company GUI's live/single-image display is effectively the latest
@@ -1069,6 +1083,7 @@ end
     % Cleanup
     % =====================================================================
      function localCleanup()
+        if ~isempty(sensory),try,delete(sensory);catch,end;sensory=[];end
         if cfg.motor.enable
             try
                 if ~isempty(motorAxis) && ~isnan(motorHomeMM) && cfg.motor.return_to_zero
@@ -5516,6 +5531,7 @@ end
 function tf = localShouldUseProcessRF(cfg)
 
     tf = false;
+    if isfield(cfg,'sensory') && ~strcmp(cfg.sensory.mode,'disabled'),tf=true;return;end
 
     % Needed for frame-synchronized StimBox.
     try

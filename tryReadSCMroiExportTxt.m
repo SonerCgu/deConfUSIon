@@ -5,6 +5,7 @@ function [ok, tMin, psc] = tryReadSCMroiExportTxt(fname)
 %
 % Returns ok=false if not readable / not in expected format.
 
+deConfUSIon_setup();
 ok = false;
 tMin = [];
 psc  = [];

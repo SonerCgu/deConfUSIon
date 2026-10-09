@@ -55,6 +55,7 @@ function qc_fusi(data, meta, exportPath, opts)
 %   - Final ACCEPT remains based on Burst / tSNR / CNR / CommonMode only.
 %   - New QC items are added as informational outputs in the summary.
 
+deConfUSIon_setup();
 if nargin < 4
     error('qc_fusi requires data, meta, exportPath, opts');
 end

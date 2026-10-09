@@ -12,6 +12,7 @@ function Reg2D = coreg_coronal_2d(studio, forcedSourceFile)
 % ASCII only
 % MATLAB 2017b compatible
 
+deConfUSIon_setup();
 if nargin < 2 || isempty(forcedSourceFile)
     forcedSourceFile = '';
 end

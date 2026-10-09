@@ -2,6 +2,7 @@ function varargout=Drift(action,varargin)
 % Drift  Single public entry point for drift and artifact workflows.
 % Compatibility wrappers remain available for older scripts, while new code
 % can call Drift('core'|'pacap'|'stats'|'artifact'|'compcor'|'cca',...).
+deConfUSIon_setup();
 switch lower(char(action))
     case 'core'
         [varargout{1:nargout}]=DriftCompensation('run',varargin{:});

@@ -43,6 +43,7 @@ function [Iout, stats] = temporalsmoothing(Iin, TR, winSec, opts)
 % ============================================================
 
 % ------------------- inputs -------------------
+deConfUSIon_setup();
 if nargin < 3
     error('temporalsmoothing requires (Iin, TR, winSec).');
 end

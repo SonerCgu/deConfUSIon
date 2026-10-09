@@ -22,7 +22,11 @@ Open the current full updated user manual:
 
 The HTML manual documents installation/startup, data naming and timing, QC, preprocessing, frame rejection, scrubbing, despiking, SCM baseline rebasing, PCA/ICA memory behavior, all Standardized Analysis presets A–G, functional connectivity/FDR, group alignment, exports, and troubleshooting. The June 2026 PDF remains available as a legacy reference.
 
-The implementation review and GUI regression notes are in [the repair review](docs/deConfUSIon_review_2026-09-06.md) and [the GUI follow-up report](docs/deConfUSIon_GUI_followup_2026-09-06.md).
+The current source review, maintenance priorities and effort estimate are in
+[the maintenance review](docs/toolbox-maintenance-review.md). The
+[source map](docs/code_map.md) links scripts to their callers and dependencies.
+The separately supplied legacy pipeline is covered by the
+[MatlabMace review](docs/matlab-mace-review.md).
 
 In MATLAB you can also open the same manual directly with:
 
@@ -38,6 +42,7 @@ In MATLAB:
 
 ```matlab
 cd('D:\Github\deConfUSIon')
+deConfUSIon_setup
 deConfUSIon
 ```
 
@@ -49,12 +54,25 @@ deConfUSIon
 
 ## Current Code Status
 
-The current source package contains approximately:
+Video and SCM support a baseline window from another recording, with a
+dropdown for that scan's saved preprocessing results and reusable saved
+references. See [the shared scan baseline guide](docs/shared-scan-baseline.md).
 
-- 90 root MATLAB runtime/helper files (including the shared repair utilities)
-- 2 MATLAB utilities inside `atlas_tools`
-- 1 current HTML manual plus the June 2026 legacy PDF inside `docs`
-- atlas support files including `allen_brain_atlas.mat`, `rgb2acr.xlsx`, and `list_selected_regions.txt`
+Public launchers and processing APIs remain at the root. Implementation helpers
+are grouped under `lib/atlas`, `volume`, `roi`, `connectivity`, `group`, `display`,
+`io`, `preprocessing` and `metadata`. `Contents.m` provides an entry-point index;
+the [source map](docs/code_map.md) lists callers and dependencies. See the
+[organization and recovery guide](docs/code-organization.md) for the preserved
+backup and reversible file moves. Do not add backup folders to the MATLAB path.
+
+The current source package also includes acquisition/stimulation scripts,
+regression tests, user guides, and atlas assets (`allen_brain_atlas.mat`,
+`rgb2acr.xlsx`, `list_selected_regions.txt`).
+
+Functional Connectivity opens maximized and supports an inclusive calculation
+range such as slices 5–50. See the [FC slice-range guide](docs/functional-connectivity-slices.md).
+For 3D registration contrast, immutable saved versions and high-resolution
+SCM/Video atlas handoff, see the [atlas review guide](docs/atlas-registration-review.md).
 
 The current code is best suited for:
 
@@ -142,7 +160,7 @@ click-and-drag search bounds, and separate target/control regions on each slice.
 - Imregdemons-based spatial correction.
 - Step-motor reconstruction.
 - Temporal smoothing and subsampling.
-- Butterworth low-pass, high-pass, and band-pass filtering.
+- Temporal low/high/band-pass and band-stop filtering: Butterworth, Chebyshev I/II, elliptic, FIR, and strict FFT-bin masking, with a response preview ([filter choices](docs/temporal-filtering.md)).
 - PCA and ICA component inspection/removal.
 - Despiking.
 - PSC computation.

@@ -16,6 +16,7 @@ function Reg2Dout = registration_coronal_2d(atlas, src2D, sourceInfo, initialReg
 % ASCII only
 % MATLAB 2017b compatible
 
+deConfUSIon_setup();
 if nargin < 3 || isempty(sourceInfo)
     sourceInfo = struct();
 end
@@ -35,10 +36,13 @@ if nargin < 8
     logFcn = [];
 end
 
+atlas=deConfUSIon_apply_rgb2acr(atlas);
+saveDir=fusiAnalysisOutputPath(saveDir);
 if ~exist(saveDir,'dir')
     mkdir(saveDir);
 end
 
+anchorOnly=isfield(sourceInfo,'anchorOnly') && sourceInfo.anchorOnly;
 Reg2Dout = [];
 savedFile = '';
 savedReg2DFiles = {};
@@ -594,9 +598,37 @@ try
 catch
 end
 
+guideText=[];guideButton=[];
+if anchorOnly
+    if isfield(sourceInfo,'sliceGuide')
+        set(axAtlas,'Position',[.025 .390 .255 .41]);set(axFuse,'Position',[.300 .390 .255 .41]);
+        guidePanel=uipanel(fig,'Units','normalized','Position',[.025 .255 .53 .13], ...
+            'BackgroundColor',[.07 .07 .07],'ForegroundColor','w','Title','Physical slice spacing (relative AP guidance)');
+        guideText=uicontrol(guidePanel,'Style','text','Units','normalized','Position',[.01 .03 .77 .91], ...
+            'BackgroundColor',[.07 .07 .07],'ForegroundColor','w','FontSize',11, ...
+            'HorizontalAlignment','left','Tag','AtlasAnchorSpacing');
+        guideButton=uicontrol(guidePanel,'Style','pushbutton','Units','normalized','Position',[.79 .13 .20 .68], ...
+            'String','Use spacing estimate','BackgroundColor',[.12 .5 .25],'ForegroundColor','w', ...
+            'Tag','AtlasAnchorUseEstimate','Callback',@onUseSpacingEstimate);
+    end
+    set(fig,'Name',['Match scan slice to atlas | ' sourceInfo.label],'Tag','AtlasAnchorEditor','UserData','anchorPending');
+    accept=findobj(fig,'Style','pushbutton','String','Save Current Slice');
+    set(accept,'String','Use this slice alignment','Tag','AtlasAcceptAnchor','TooltipString','Use this scan/atlas slice pair as a reference for aligning the complete 3D volume.');
+    set(findobj(fig,'Style','pushbutton','String','Save ALL Visited'),'Visible','off');
+    set(findobj(fig,'Style','pushbutton','String','Close'),'String','Cancel anchors');
+    set(fig,'CloseRequestFcn',@onSaveTrafo);
+    set(hStatus,'String','Choose the atlas plane matching this scan slice, then move/rotate/resize the overlay. Use this slice alignment (or X) continues to the next reference slice. Cancel anchors leaves the previous 3D transform unchanged.');
+end
 renderAll();
 setappdata(fig,'Atlas2DReady',true);
-uiwait(fig);
+if anchorOnly
+    % Accept can run during drawing, before a modal wait starts. Waiting for
+    % a persistent value handles that case without deleting a live figure.
+    if isgraphics(fig),waitfor(fig,'UserData','anchorAccepted');end
+    if isgraphics(fig),delete(fig);end
+else
+    if isgraphics(fig),uiwait(fig);end
+end
 
 %% ======================================================================
 % Nested functions
@@ -606,7 +638,9 @@ uiwait(fig);
         img = squeeze(sourceStack3D(:,:,idx));
         img = double(img);
         img(~isfinite(img)) = 0;
-        img = rescale01(img);
+        if isfield(sourceInfo,'displayIsProcessed') && sourceInfo.displayIsProcessed
+            img=min(1,max(0,img));
+        else,img = rescale01(img);end
     end
 
     function mask2D = getCurrentSourceMask()
@@ -844,6 +878,15 @@ uiwait(fig);
                                       'sx %.3f | sy %.3f'], ...
                                       currentSourceSlice, sourceNSlices, S.slice, S.atlasMode, ...
                                       S.tx, S.ty, S.rotDeg, S.sx, S.sy));
+        if anchorOnly
+            set(hStatus,'String',sprintf('%s | Atlas slice %d | Use this slice alignment or X = next reference slice; Cancel anchors = discard',sourceInfo.label,S.slice));
+            if ~isempty(guideText)
+                guide=fusiCoronalSliceGuide(sourceInfo.sliceGuide,S.slice);
+                set(guideText,'String',guide.lines);
+                set(guideText,'ForegroundColor','w');if ~guide.validForAccept,set(guideText,'ForegroundColor',[1 .75 .3]);end
+                set(guideButton,'Enable','off');if guide.canEstimate,set(guideButton,'Enable','on');end
+            end
+        end
         enableDragHitTesting();
         drawnow limitrate;
     end
@@ -1003,7 +1046,41 @@ uiwait(fig);
         set(hStatus,'String','Transform reset.');
     end
 
+    function onUseSpacingEstimate(~,~)
+        guide=fusiCoronalSliceGuide(sourceInfo.sliceGuide,S.slice);
+        if guide.canEstimate,S.slice=guide.suggestedAtlasIndex;renderAll();end
+    end
+
    function onSaveTrafo(~, ~)
+    if anchorOnly
+        if isfield(sourceInfo,'sliceGuide')
+            guide=fusiCoronalSliceGuide(sourceInfo.sliceGuide,S.slice);
+            if ~guide.validForAccept
+                set(hStatus,'String',guide.warning);set(guideText,'String',guide.lines,'ForegroundColor',[1 .75 .3]);
+                return;
+            end
+        end
+        candidate=struct('M',buildAffine2D(S,[srcH srcW]),'atlasSliceIndex',S.slice, ...
+            'atlasMode',S.atlasMode,'preparedAP',sourceInfo.preparedAP, ...
+            'sourceSlice',sourceInfo.originalSlice);
+        if isfield(sourceInfo,'acceptedAnchors') && numel(sourceInfo.acceptedAnchors)==2
+            proposed=[sourceInfo.acceptedAnchors candidate];[~,order]=sort([proposed.preparedAP]);
+            % A consistent reversal is handled by the parent acquisition
+            % direction confirmation. Otherwise validate before closing.
+            if ~all(diff([proposed(order).atlasSliceIndex])<0)
+                try,fusiFitCoronalAnchors(proposed,[srcH srcW],sourceInfo.atlasVoxelSize);
+                catch ME
+                    set(hStatus,'String',ME.message);
+                    if ~isempty(guideText),set(guideText,'String',ME.message,'ForegroundColor',[1 .75 .3]);end
+                    return;
+                end
+            end
+        end
+        Reg2Dout=candidate;
+        didExplicitSave=true;
+        setappdata(fig,'Atlas2DReady',false);
+        set(fig,'UserData','anchorAccepted');return;
+    end
     saveCurrentFullPackage();
 end
 
@@ -1088,13 +1165,16 @@ function saveAllVisitedFullPackages()
 
         Reg2DList = cell(numel(visitedIdx),1);
         filesOut  = cell(numel(visitedIdx),1);
+        stamp = datestr(now,'yyyymmdd_HHMMSS_FFF');
+        sessionDir=fusiUniqueOutputFolder(saveDir,['StepMotor_Reg2D_Session_' stamp]);
+        bundleFile = fullfile(sessionDir,'StepMotor_Reg2D_Session.mat');
 
         for kk = 1:numel(visitedIdx)
 
             sourceIdx = visitedIdx(kk);
             st = sourceStates{sourceIdx};
 
-            Reg2D = buildReg2DFromState(st, sourceIdx);
+            Reg2D = buildReg2DFromState(st, sourceIdx, sessionDir);
 
             [sliceFile, ~] = saveReg2DFullPackage(Reg2D);
 
@@ -1105,16 +1185,14 @@ function saveAllVisitedFullPackages()
                 sourceIdx, Reg2D.atlasSliceIndex, sliceFile));
         end
 
-        stamp = datestr(now,'yyyymmdd_HHMMSS');
-        bundleFile = fullfile(saveDir, sprintf('StepMotor_Reg2D_Session_%s.mat', stamp));
-
         StepMotorReg2D = struct();
-        StepMotorReg2D.kind = 'STEP_MOTOR_REG2D_SESSION_INDEX_ONLY';
+        StepMotorReg2D.kind = 'STEP_MOTOR_REG2D_SESSION_BUNDLE';
         StepMotorReg2D.created = datestr(now,'yyyy-mm-dd HH:MM:SS');
-        StepMotorReg2D.note = 'Index only. SCM should use the CoronalRegistration2D_sourceXXX_atlasYYY_*.mat files, not this file.';
+        StepMotorReg2D.note = 'Reviewed per-slice transforms and combined underlays. Load this session folder in SCM.';
         StepMotorReg2D.sourceNSlices = sourceNSlices;
         StepMotorReg2D.savedSourceIdx = visitedIdx(:).';
         StepMotorReg2D.files = filesOut;
+        StepMotorReg2D.filesRelative=cellfun(@(f)f(numel(sessionDir)+2:end),filesOut,'UniformOutput',false);
         StepMotorReg2D.Reg2DList = Reg2DList;
 
         if isstruct(sourceInfo) && isfield(sourceInfo,'path')
@@ -1123,6 +1201,7 @@ function saveAllVisitedFullPackages()
             StepMotorReg2D.sourcePath = '';
         end
 
+        StepMotorReg2D.atlasUnderlays=fusiSaveStepMotorUnderlays2D(StepMotorReg2D,bundleFile);
         save(bundleFile, 'StepMotorReg2D', '-v7');
 
         savedReg2DFiles = filesOut;
@@ -1132,12 +1211,13 @@ function saveAllVisitedFullPackages()
 
         set(hStatus,'String',sprintf('Saved ALL visited source slices: %d full package(s)', numel(visitedIdx)));
 
-        logMessage(['Saved StepMotor index only -> ' bundleFile]);
+        logMessage(['Saved StepMotor session and combined underlays -> ' sessionDir]);
 
         msgbox(sprintf(['Saved %d full step-motor slice package(s).\n\n' ...
-            'Session index file:\n%s\n\n' ...
-            'SCM should use the CoronalRegistration2D_sourceXXX_atlasYYY files.'], ...
-            numel(visitedIdx), bundleFile), ...
+            'Session folder:\n%s\n\n' ...
+            'SCM: Underlay > LOAD ATLAS FOLDER and choose this folder.\n' ...
+            'Histology, vascular and all/merged regions are loaded together.'], ...
+            numel(visitedIdx), sessionDir), ...
             'Save ALL Visited complete');
 
     catch ME
@@ -1374,7 +1454,7 @@ end
 end
 
 
-function Reg2D = buildReg2DFromState(st, sourceIdx)
+function Reg2D = buildReg2DFromState(st, sourceIdx, packageDir)
 
     sourceIdx = max(1, min(sourceNSlices, round(sourceIdx)));
 
@@ -1395,6 +1475,9 @@ function Reg2D = buildReg2DFromState(st, sourceIdx)
 
     Reg2D.outputSize = [targetH targetW];
     Reg2D.sourceSize = [srcHlocal srcWlocal];
+    if isfield(atlas,'VoxelSize') && numel(atlas.VoxelSize)>=3
+        Reg2D.atlasVoxelSizeYXZUm=double(atlas.VoxelSize([2 3 1]));
+    end
 
     Reg2D.tx = st.tx;
     Reg2D.ty = st.ty;
@@ -1431,7 +1514,8 @@ function Reg2D = buildReg2DFromState(st, sourceIdx)
         Reg2D.sourceLabel = '';
     end
 
-    sliceDir = getSliceSaveDir(saveDir, st.slice, sourceIdx, isSourceMultiSlice());
+    if nargin<3,packageDir=saveDir;end
+    sliceDir = getSliceSaveDir(packageDir, st.slice, sourceIdx, isSourceMultiSlice());
 
     if ~exist(sliceDir,'dir')
         mkdir(sliceDir);
@@ -1458,6 +1542,7 @@ function Reg2D = buildReg2DFromState(st, sourceIdx)
 
     Reg2D.regionsImage = getAtlasSliceNumeric(atlas, 'regions', st.slice);
     Reg2D.regionsUnderlay = Reg2D.regionsImage;
+    Reg2D.atlasInfoRegions=atlas.infoRegions;
 end
 
     function saveReg2DWithFixedAtlas(sliceFile, Reg2D)
@@ -1802,13 +1887,12 @@ if nargin < 4 || isempty(useSourceFolder)
     useSourceFolder = false;
 end
 if useSourceFolder
-    sliceDir = fullfile(baseDir, sprintf('SourceSlice%03d_AtlasSlice%03d', round(sourceSliceIdx), round(atlasSliceIdx)));
+    name=sprintf('SourceSlice%03d_AtlasSlice%03d',round(sourceSliceIdx),round(atlasSliceIdx));
 else
-    sliceDir = fullfile(baseDir, sprintf('Slice%03d', round(atlasSliceIdx)));
+    name=sprintf('Slice%03d',round(atlasSliceIdx));
 end
-if ~exist(sliceDir,'dir')
-    mkdir(sliceDir);
-end
+stamp=char(datetime('now','Format','yyyyMMdd_HHmmss_SSS'));
+sliceDir=fusiUniqueOutputFolder(baseDir,[name '_' stamp]);
 end
 
 

@@ -1,5 +1,6 @@
 function varargout = deConfUSIon_signal(action, varargin)
 % Shared, GUI-independent numerical contracts. Time is the last dimension.
+deConfUSIon_setup();
 switch lower(action)
     case 'interpolate', [varargout{1:nargout}] = interpolateFrames(varargin{:});
     case 'psc', [varargout{1:nargout}] = makePSC(varargin{:});

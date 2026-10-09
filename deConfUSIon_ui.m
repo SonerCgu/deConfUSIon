@@ -1,5 +1,6 @@
 function varargout=deConfUSIon_ui(action,varargin)
 % Shared deConfUSIon presentation and context help, version 2026-09-06.
+deConfUSIon_setup();
 switch lower(action)
     case 'style', styleFigure(varargin{:});
     case 'identity', identityHeader(varargin{:});
@@ -140,6 +141,8 @@ end
 
 function styleFigure(fig)
 if isempty(fig) || ~ishghandle(fig), return; end
+% The volume viewer owns its web layout and pure-black theme.
+if strcmp(get(fig,'Tag'),'FUSI_VolumeGUI'),return;end
 C=palette(); setappdata(fig,'deConfUSIonOwned',true);
 set(fig,'Color',C.background);
 panels=findall(fig,'Type','uipanel');
@@ -151,6 +154,10 @@ end
 ctrl=findall(fig,'Type','uicontrol');
 for k=1:numel(ctrl)
     h=ctrl(k); st=get(h,'Style'); label=get(h,'String');
+    % Multiline buttons/dialog controls return a character matrix. REGEXP
+    % requires a row, so normalize only the styling copy of the label.
+    if ischar(label) && size(label,1)>1, label=strjoin(cellstr(label),' '); end
+    if isstring(label), label=strjoin(cellstr(label(:)),' '); end
     if isequal(getappdata(h,'PreserveColors'),true), continue; end
     set(h,'FontName',C.font);
     p=getpixelposition(h); fs=get(h,'FontSize');
@@ -362,12 +369,13 @@ switch lower(topicKey)
         math='Robust outliers use median/MAD Z scores; scrubbing can use DVARS, the RMS frame-to-frame change across voxels.';
     case 'filtering'
         definition='Temporal filtering separates slow drift and frequency bands from the measured time course.';
-        math='A digital filter applies a convolution or IIR/FIR recurrence to samples at Fs=1/TR; cutoff values are specified in Hz.';
+        math='Fs=1/TR. Two-pass IIR/FIR has zero phase and squared magnitude response. FFT masking zeros excluded finite-record frequency bins. Preserving the Doppler mean explicitly retains DC.';
+        checks='Choose Butterworth, Chebyshev I/II, elliptic, FIR or FFT in Filtering. IIR/FIR transition bands do not reject everything at the cutoff. FFT can ring at spikes/ends; no low-pass alone can eliminate all motion artifacts. Review Despike/Scrubbing first. Cutoffs must be below the actual Nyquist frequency.';
     case 'timecourse'
         definition='The Time-Course Viewer displays voxel or ROI intensity/PSC values against acquisition time.';
         math='The horizontal coordinate is t_k=k*TR (or recorded tsec when available); averaging is performed only over finite selected voxels.';
     case 'video'
-        definition='Video GUI renders each time point as an underlay plus a thresholded functional overlay.';
+        definition='Video GUI renders each time point as an underlay plus a thresholded functional overlay. For multi-slice data, 3D brain / volume opens a rotatable native-grid view with PNG and rotating MP4 export. Atlas registration is optional for native rendering; anatomical labels require registration.';
         math='The displayed frame is a spatial map at time t_k; color limits and alpha modulation change visualization, not the stored values.';
     case 'load'
         definition='The loader standardizes supported arrays to [Y X T] or [Y X Z T] and records TR, tsec, and voxel geometry.';

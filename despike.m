@@ -4,6 +4,7 @@ function [out, stats] = despike(data, zthr, saveRoot, tag)
 % VOXEL-WISE MAD DESPIKING (STABLE VERSION)
 % ==========================================================
 
+deConfUSIon_setup();
 if nargin < 2 || isempty(zthr)
     zthr = 5;
 end

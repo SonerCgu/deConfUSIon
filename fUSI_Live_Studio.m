@@ -4,6 +4,7 @@ function fig = fUSI_Live_Studio(I, TR, metadata, datasetName)
 % Same overall functionality, improved styling/layout only.
 % ASCII-safe.
 
+deConfUSIon_setup();
 if nargin < 4
     datasetName = 'Active Dataset';
 end

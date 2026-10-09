@@ -25,6 +25,7 @@ function out = imregdemons_preprocess(Iin, TRin, opts)
 % ============================================================
 
 %% ------------------ INPUT CHECKS ------------------
+deConfUSIon_setup();
 if nargin < 3
     error('imregdemons_preprocess requires inputs: Iin, TRin, opts');
 end
@@ -183,6 +184,7 @@ QC = struct('figIntensity',[],'figRejected',[]);
 deConfUSIon_ui('progressupdate',progress,.95,'Preparing QC reports');
 
 if opts.saveQC || opts.showQC
+  try
 
     if opts.saveQC && ~exist(opts.qcDir,'dir')
         mkdir(opts.qcDir);
@@ -306,6 +308,17 @@ if opts.saveQC || opts.showQC
         QC.figIntensity = [];
         QC.figRejected  = [];
     end
+  catch ME
+    % QC graphics/file export must not discard completed registration.
+    QC.error=ME.message;
+    warning('deConfUSIon:QCExport','Registration completed, but QC export failed: %s',ME.message);
+    if ~opts.showQC
+        for h=[QC.figIntensity QC.figRejected]
+            if isgraphics(h), delete(h); end
+        end
+        QC.figIntensity=[]; QC.figRejected=[];
+    end
+  end
 end
 
 %% ------------------ OUTPUT ------------------

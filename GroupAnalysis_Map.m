@@ -3,6 +3,7 @@ function varargout = GroupAnalysis_Map(action, varargin)
 % GroupAnalysis_Map - self-contained map backend for modular GroupAnalysis.
 % MATLAB 2017b + 2023b compatible.
 
+deConfUSIon_setup();
 if nargin < 1 || isempty(action)
     error('GroupAnalysis_Map requires an action string.');
 end

@@ -1,4 +1,5 @@
 function cfg = showScmVideoSetupDialog(modeName, defaultBaseStart, defaultBaseEnd, defaultUnderlayIdx, varargin)
+deConfUSIon_setup();
 ctx = pickInputContext(varargin{:});
 externalStartPath = resolveSetupUnderlayStartPath(ctx);
 if nargin < 1 || isempty(modeName),           modeName = 'SCM / Video'; end

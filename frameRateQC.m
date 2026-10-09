@@ -5,6 +5,7 @@ function QC = frameRateQC(I, TR, tag, savePNG, opts)
 %   left  = intensity distribution
 %   right = rejected volumes over time
 
+deConfUSIon_setup();
 if nargin < 3 || isempty(tag), tag = 'ORIGINAL'; end
 if nargin < 4, savePNG = false; end %#ok<NASGU>
 if nargin < 5 || isempty(opts), opts=struct(); end

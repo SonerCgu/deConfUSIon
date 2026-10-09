@@ -1,5 +1,6 @@
 function P = studio_resolve_paths(par, fileLabel, exportRootOverride)
 
+deConfUSIon_setup();
 if nargin < 3
     exportRootOverride = '';
 end
