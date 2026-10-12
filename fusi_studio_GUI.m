@@ -621,6 +621,10 @@ function modernButtonClick(hBtn)
     try
         feval(ud.callback,hBtn,[]);
     catch ME
+        if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled')
+            if isgraphics(fig),addLog('Operation cancelled; the dataset is unchanged.');end
+            return;
+        end
         if isgraphics(fig)
             setappdata(fig,'StudioLastCallbackError',ME);
             state=guidata(fig); color=[0.36 0.12 0.38];
@@ -1007,8 +1011,16 @@ function loadDataCallback(~,~)
     % Finish saving the previous animal before its in-memory state is replaced.
     % If the drive is unavailable, leave that session intact for Save queue Retry.
     try
+        loadProgress=deConfUSIon_ui('progress','Loading dataset');
+        progressGuard=onCleanup(@()deConfUSIon_ui('progressclose',loadProgress)); %#ok<NASGU>
+        setappdata(fig,'StudioLoadProgress',loadProgress);
+        setProgramStatus(false);set(fig,'Pointer','watch');
+        deConfUSIon_ui('progressupdate',loadProgress,.01,'Finishing previous analysis saves...');
         DataIO('flushstudio',previousStudio);
     catch ME
+        if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled')
+            addLog('Load cancelled. Previous dataset preserved.');return;
+        end
         addLog(['Previous analysis is not saved: ' ME.message]);
         DataIO('show');
         errordlg(ME.message,'Finish saving before loading another animal');
@@ -1072,7 +1084,9 @@ studio.pipeline = struct( ...
 
     try
     fullInputFile = fullfile(path,file);
-    [data, meta] = loadFUSIData(fullInputFile, []);
+    [data, meta] = loadFUSIData(fullInputFile, [], ...
+        @(fraction,message)deConfUSIon_ui('progressupdate',loadProgress,.03+.72*fraction,message));
+    deConfUSIon_ui('progressupdate',loadProgress,.78,'Preparing scan timing and output folders...');
 
     [probeType, defaultTR] = detectProbeTypeFromMeta(data, meta);
     defaultTR = studio_probe_default_tr_seconds(probeType, data);
@@ -1119,11 +1133,14 @@ studio.pipeline = struct( ...
         if ~exist('TR','var') || isempty(TR) || ~isnumeric(TR) || ~isfinite(TR) || TR <= 0
             TR = studio_get_last_tr_default();
         end
+        set(loadProgress,'Visible','off');set(fig,'Pointer','arrow');
         [chosenTR, datasetFolder, outputWasCancelled, probeType, defaultTR] = studio_load_options_dark_dialog(chosenTR, datasetFolder, analysedRoot, datasetName, probeType, defaultTR, data, meta, fullInputFile);
         if outputWasCancelled
             addLog('Load cancelled in setup. Previous dataset preserved.');
             return;
         end
+        set(loadProgress,'Visible','on');set(fig,'Pointer','watch');
+        deConfUSIon_ui('progressupdate',loadProgress,.84,'Applying confirmed scan settings...');
 
         % A user override changes the analysis grid, never acquired samples.
         if isfield(data,'tsec'), data.sourceTsec=data.tsec; end
@@ -1227,7 +1244,9 @@ studio.meta.pscPath = pscFolder;
 
         % Register preprocessing datasets from saved MAT metadata.
         % Do not use shortened physical filenames as dropdown names.
+        deConfUSIon_ui('progressupdate',loadProgress,.90,'Finding saved preprocessing datasets...');
         studio = deConfUSIon_add_preproc_lazy_datasets(studio);
+        deConfUSIon_ui('progressupdate',loadProgress,1,'Dataset loaded successfully');
 
         guidata(fig, studio);
         transaction=getappdata(fig,'LoadTransaction'); transaction.committed=true;
@@ -1266,6 +1285,9 @@ addLog('---------------------------------------');
         setProgramStatus(true);
 
     catch ME
+        if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled')
+            addLog('Load cancelled. Previous dataset preserved.');return;
+        end
         addLog(['LOAD ERROR: ' ME.message]);
         setProgramStatus(true);
         errordlg(ME.message,'Load Failure');
@@ -1274,6 +1296,10 @@ end
 
     function finishLoad()
         if ~isgraphics(fig), return; end
+        if isappdata(fig,'StudioLoadProgress')
+            deConfUSIon_ui('progressclose',getappdata(fig,'StudioLoadProgress'));rmappdata(fig,'StudioLoadProgress');
+        end
+        set(fig,'Pointer','arrow');
         transaction=getappdata(fig,'LoadTransaction');
         if isappdata(fig,'LoadInProgress'), rmappdata(fig,'LoadInProgress'); end
         if isappdata(fig,'LoadTransaction'), rmappdata(fig,'LoadTransaction'); end
@@ -4737,6 +4763,7 @@ function functionalConnectivityCallback(~,~)
 
     % Functional source
     if strcmpi(cfg.functionalSource,'psc')
+        dataFC.fcPowerReference=mean(data.I,ndims(data.I),'omitnan');
         dataFC.I = single(data.PSC);
         dataFC.functionalSource = 'PSC';
     else
@@ -4818,6 +4845,7 @@ end
     opts.chunkVox = cfg.chunkVox;
 
     opts.askMaskAtStart = false;    % important: no extra popup
+    opts.maskMode=cfg.maskMode;
     opts.askAtlasAtStart = false;   % important: no extra popup
     opts.debugRethrow = false;
 opts.defaultUnderlayMode = cfg.defaultUnderlayMode;

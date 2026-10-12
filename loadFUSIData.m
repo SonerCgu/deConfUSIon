@@ -1,4 +1,4 @@
-function [data, meta] = loadFUSIData(dataFile, fallbackTR)
+function [data, meta] = loadFUSIData(dataFile, fallbackTR, progress)
 % loadFUSIData
 % ------------------------------------------------------------
 % Robust fUSI data loader with TR / time inference
@@ -6,6 +6,7 @@ function [data, meta] = loadFUSIData(dataFile, fallbackTR)
 % INPUT
 %   dataFile   : full path to .mat / .nii / .nii.gz
 %   fallbackTR : fallback TR (sec) if nothing found
+%   progress   : optional @(fraction,stage) callback; NaN means an unmetered read
 %
 % OUTPUT
 %   data.I             : [Y x X x T] or [Y x X x Z x T] single
@@ -28,6 +29,10 @@ function [data, meta] = loadFUSIData(dataFile, fallbackTR)
 % ------------------------------------------------------------
 
 deConfUSIon_setup();
+if nargin<3||isempty(progress),progress=[];end
+reportProgress(progress,0,'Inspecting dataset...');
+dataFile=fusiFindMovedDataPath(dataFile);
+if isfile(dataFile),fusiRememberDataRoot(dataFile);end
 if nargin < 2 || isempty(fallbackTR) || ~isfinite(fallbackTR) || fallbackTR <= 0
     fallbackTR = [];
 else
@@ -49,7 +54,8 @@ TRDetectionSource = '';
 switch extKey
 
     case '.mat'
-        S = localLoadSelected(dataFile);
+        S = localLoadSelected(dataFile,progress);
+        reportProgress(progress,.82,'Checking image dimensions and metadata...');
         meta.inputIsPSC=isfield(S,'inputIsPSC')&&isequal(S.inputIsPSC,true);
         if isfield(S,'newData')&&isstruct(S.newData)&&isfield(S.newData,'inputIsPSC')
             meta.inputIsPSC=meta.inputIsPSC||isequal(S.newData.inputIsPSC,true);
@@ -314,12 +320,15 @@ end
         end
 
     case {'.nii','.nii.gz'}
+        reportProgress(progress,NaN,'Reading NIfTI header...');
         ni = niftiinfo(dataFile);
         dimsN = double(ni.ImageSize);
         if numel(dimsN)<4 || dimsN(4)<2
             error('deConfUSIon:StaticNifti','Raw dataset import requires a 4D time series. This NIfTI is a spatial summary; select the original functional recording instead.');
         end
+        reportProgress(progress,NaN,'Reading NIfTI time series from disk...');
         [V,ni] = readFMRINifti(dataFile);
+        reportProgress(progress,.82,'Preparing NIfTI image geometry...');
         I = single(permute(V,[2 1 3 4]));
         if size(I,3)==1, I=reshape(I,size(I,1),size(I,2),size(I,4)); end
         meta.rawMetadata.nifti = ni;
@@ -363,6 +372,7 @@ nVols = nVols_data;
 meta.rawMetadata.reportedTotalTimeSec = TotalTimeSec;
 TotalTimeSec = nVols * TR;
 
+reportProgress(progress,.94,'Preparing dataset and acquisition timing...');
 data = struct();
 % Reopening a processed result must retain its processing history. Rebuilding
 % only I/TR discarded PCA/ICA and drift metadata (and could change its label).
@@ -431,7 +441,7 @@ try
 catch ME_load_motor
     warning('HUMoR:LoadMotorMetadata','Could not preserve motor metadata: %s', ME_load_motor.message);
 end
-
+reportProgress(progress,1,'Dataset read successfully');
 end
 
 
@@ -923,7 +933,7 @@ end
 out = searchByNames(val, names, depth+1, mode, false);
 
 end
-function S=localLoadSelected(file)
+function S=localLoadSelected(file,progress)
 % Avoid loading every large alternative movie/processed array in a MAT file.
 info=whos('-file',file); names={info.name}; chosen='';
 preferred={'I','IQR','img','image','volume','newData','data','D'};
@@ -949,7 +959,12 @@ if isempty(chosen)
 end
 selected=names(keep);
 if isempty(selected), error('deConfUSIon:NoImage','No supported imaging variable found.'); end
-S=load(file,selected{:});
+if isempty(progress),S=load(file,selected{:});
+else,S=fusiLoadMatVariables(file,selected,@(f,message)progress(.03+.75*f,message));end
+end
+
+function reportProgress(progress,fraction,message)
+if ~isempty(progress),progress(fraction,message);end
 end
 
 function scale=localTimeScale(S)

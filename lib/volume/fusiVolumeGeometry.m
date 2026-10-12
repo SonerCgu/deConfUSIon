@@ -4,7 +4,10 @@ par.scmSizeYXZ=shape;c=scmSpatialCalibration(par);
 info=struct('spacingUm',c.spacingUm,'source',c.source,'shapeYXZ',shape, ...
     'fieldOfViewMm',shape.*c.spacingUm/1000, ...
     'resolutionStatement','Acoustic resolution is not measured by voxel spacing. It requires pulse/bandwidth and aperture information or a measured point-spread function.');
-if nargin<3,sequencePath='Z:/fUS/Scripts_fUSI_Soner/paramMatrix15M_1024_V1.m';end
+if nargin<3
+    sequencePath=getpref('deConfUSIon','matrixSequenceFile','');
+    if isfield(par,'referenceSequenceFile'),sequencePath=par.referenceSequenceFile;end
+end
 % A matrix reference is not evidence for an fMRI or another probe's geometry.
 if shape(2)~=64 || shape(3)~=54,return;end
 if ~isfile(sequencePath),return;end

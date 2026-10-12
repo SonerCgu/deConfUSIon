@@ -4,6 +4,10 @@ try
     if nargin < 1 || isempty(fig) || ~ishghandle(fig), fig = gcf; end
     if nargin < 2 || isempty(mode), mode = 'restore'; end
     mode = lower(char(mode));
+    if isappdata(fig,'FUSIFCLayout')
+        if ~strcmp(mode,'capture'),deConfUSIon_FC_layout(fig);end
+        return;
+    end
 
     switch mode
         case 'capture'

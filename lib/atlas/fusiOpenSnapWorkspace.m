@@ -1,5 +1,5 @@
 function process=fusiOpenSnapWorkspace(executable,workspace)
-% Start the requested viewer with its own Qt environment and verify a window.
+% Start the native viewer with its own Qt environment (verify a window on Windows).
 if isempty(executable)||~isfile(executable),error('deConfUSIon:SnapMissing','ITK-SNAP executable was not found.');end
 if ~isfile(workspace),error('deConfUSIon:SnapWorkspace','The ITK-SNAP workspace is missing: %s',workspace);end
 if ispc
@@ -44,6 +44,15 @@ if ispc
     error('deConfUSIon:SnapLaunch','ITK-SNAP started (PID %d), but no visible window was detected within 15 seconds. Workspace: %s',process.Id,workspace);
 else
     args=java.util.ArrayList();args.add(executable);args.add('-w');args.add(workspace);
-    builder=java.lang.ProcessBuilder(args);process=builder.start();
+    builder=java.lang.ProcessBuilder(args);
+    environment=builder.environment();iterator=environment.keySet().iterator();remove={};
+    while iterator.hasNext()
+        name=char(iterator.next());if startsWith(upper(name),'QT_')||startsWith(upper(name),'QML'),remove{end+1}=name;end %#ok<AGROW>
+    end
+    for k=1:numel(remove),environment.remove(remove{k});end
+    paths=strsplit(getenv('PATH'),pathsep);paths=paths(~contains(paths,matlabroot));
+    environment.put('PATH',strjoin([{fileparts(executable)} paths],pathsep));
+    builder.redirectErrorStream(true);builder.redirectOutput(java.io.File([workspace '.itksnap.log']));
+    process=builder.start();
 end
 end

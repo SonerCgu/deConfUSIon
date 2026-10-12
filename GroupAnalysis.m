@@ -1382,7 +1382,7 @@ gaInstallEditSelection(hFig);
             return;
         end
         try
-            winopen(folder);
+            fusiOpenFolder(folder);
             setStatusText(['Opened ROI folder: ' folder]);
         catch ME
             setStatusText(['Could not open ROI folder: ' ME.message]);
@@ -6036,6 +6036,9 @@ function GA_export_write_ppt_local(outFile,pngFile,G,D)
     % Fallback method: PowerPoint COM / ActiveX.
     % Important: use invoke(...,'Add',...) instead of .Add().
     % ---------------------------------------------------------
+    if ~ispc || exist('actxserver','file')~=2
+        error('deConfUSIon:PowerPointDependency','PowerPoint export needs MATLAB Report Generator on this platform. The PNG remains available: %s',pngFile);
+    end
     pptApp = [];
     pres = [];
     try

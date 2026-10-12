@@ -25,6 +25,11 @@ end
 function q=initialise(par,I,TR,label)
 if isfield(par,'scanSequence')&&isstruct(par.scanSequence)&&isfield(par.scanSequence,'scans')
     q=par.scanSequence;
+    for k=1:numel(q.scans)
+        q.scans{k}.file=fusiFindMovedDataPath(q.scans{k}.file);
+        q.scans{k}.rawFile=fusiFindMovedDataPath(q.scans{k}.rawFile);
+        if isstruct(q.scans{k}.fileInfo),q.scans{k}.fileInfo.file=q.scans{k}.file;end
+    end
     if ~isfield(par,'fusiSequencePowerFile')
         q.originalKey=originalKey(par,q);return;
     elseif ~isempty(par.fusiSequencePowerFile)

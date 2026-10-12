@@ -785,13 +785,14 @@ if isempty(p)
     k = '';
     return;
 end
+p=strrep(char(p),'\',filesep);p=strrep(p,'/',filesep);
 try
     p = char(java.io.File(p).getCanonicalPath());
 catch
     p = char(p);
 end
 p = strrep(p, '/', filesep);
-p = strrep(p, '\\', filesep);
+p = strrep(p, '\', filesep);
 if ispc
     p = lower(p);
 end
