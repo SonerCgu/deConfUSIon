@@ -1337,13 +1337,14 @@ end
 
 
 function k = normalizePathKey(p)
+p=strrep(char(p),'\',filesep);p=strrep(p,'/',filesep);
 try
     p = char(java.io.File(p).getCanonicalPath());
 catch
     p = char(p);
 end
 p = strrep(p, '/', filesep);
-p = strrep(p, '\\', filesep);
+p = strrep(p, '\', filesep);
 if ispc
     p = lower(p);
 end
@@ -1460,4 +1461,3 @@ function tf = isNumericClassName(cl)
 tf = strcmp(cl,'double') || strcmp(cl,'single') || strcmp(cl,'uint16') || ...
      strcmp(cl,'uint8') || strcmp(cl,'int16') || strcmp(cl,'logical');
 end
-

@@ -1,0 +1,30 @@
+name: MATLAB portability
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Java for native macOS MATLAB
+        if: runner.os == 'macOS'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+      - uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2024b
+          products: Image_Processing_Toolbox
+      - uses: matlab-actions/run-command@v3
+        with:
+          command: run_deConfUSIon_tests

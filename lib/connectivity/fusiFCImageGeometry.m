@@ -1,10 +1,28 @@
-function fusiFCImageGeometry(ax,spacingUm,sz)
+function fusiFCImageGeometry(ax,spacingUm,sz,opt)
 % Retain pixel coordinates for ROI selection while displaying physical aspect.
+if nargin<4,opt=struct('showAxes',true,'showScaleBar',true,'lengthUm',NaN);end
+key={spacingUm,sz,opt};old=getappdata(ax,'FUSIFCGeometry');
+barOk=~opt.showScaleBar||any(isgraphics(findall(ax,'Tag','SCM_PhysicalRuler')));
+cached=isequaln(old,key)&&barOk&&isequal(ax.XLim,[.5 sz(2)+.5])&&isequal(ax.YLim,[.5 sz(1)+.5]);
+% Other FC renderers can restyle labels after the spatial geometry is cached.
+set(ax,'XColor',[.94 .94 .96],'YColor',[.94 .94 .96]);
+if cached
+ set(ax.XLabel,'Color',[.94 .94 .96]);set(ax.YLabel,'Color',[.94 .94 .96]);
+ bars=findall(ax,'Tag','SCM_PhysicalRuler');
+ for h=reshape(bars,1,[]),if isprop(h,'Color'),h.Color='w';end;end
+ if ~isempty(bars),uistack(bars,'top');end
+ if opt.showAxes&&numel(spacingUm)>=2&&all(isfinite(spacingUm(1:2))&spacingUm(1:2)>0)
+  xlabel(ax,'Horizontal (mm)','Color',[.94 .94 .96]);ylabel(ax,'Depth (mm)','Color',[.94 .94 .96]);
+ end
+ return;
+end
+setappdata(ax,'FUSIFCGeometry',key);
 set(ax,'XLim',[.5 sz(2)+.5],'YLim',[.5 sz(1)+.5],'YDir','reverse');
 if numel(spacingUm)>=2&&all(isfinite(spacingUm(1:2))&spacingUm(1:2)>0)
  set(ax,'DataAspectRatio',[1 spacingUm(2)/spacingUm(1) 1],'PlotBoxAspectRatioMode','auto');
  step=500;while step/spacingUm(2)>.5*sz(2),step=step/2;end
- fusiDrawScaleBar(ax,spacingUm,step,true);
+ if isfinite(opt.lengthUm),step=opt.lengthUm;end
+ fusiDrawScaleBar(ax,spacingUm,step,opt.showScaleBar);
  % Limit ruler density to about eight ticks per axis; use millimetres.
  steps=[.1 .2 .5 1 2 5 10 20];extent=max((sz([2 1])-1).*spacingUm([2 1]))/1000;
  tickStep=steps(find(steps>=extent/8,1));if isempty(tickStep),tickStep=20;end
@@ -13,8 +31,16 @@ if numel(spacingUm)>=2&&all(isfinite(spacingUm(1:2))&spacingUm(1:2)>0)
   'YTickLabel',compose('%g',(yt-1)*spacingUm(1)/1000),'XColor',[.8 .8 .8],'YColor',[.8 .8 .8], ...
   'XTickLabelRotation',0,'YTickLabelRotation',0,'FontSize',11,'TickDir','out','Box','off');
  ax.XAxis.Exponent=0;ax.YAxis.Exponent=0;
- xlabel(ax,'Horizontal (mm)');ylabel(ax,'Depth (mm)');
+ xlabel(ax,'Horizontal (mm)','Color',[.94 .94 .96]);ylabel(ax,'Depth (mm)','Color',[.94 .94 .96]);
 else
  set(ax,'DataAspectRatio',[1 1 1],'Visible','on','FontSize',11);xlabel(ax,'Column (px)');ylabel(ax,'Row (px)');
 end
+if ~opt.showAxes,set(ax,'Visible','off');end
+set(ax,'XColor',[.94 .94 .96],'YColor',[.94 .94 .96]);
+bars=findall(ax,'Tag','SCM_PhysicalRuler');
+for h=reshape(bars,1,[])
+ if isprop(h,'Color'),h.Color='w';end
+ if strcmp(h.Type,'text'),set(h,'BackgroundColor','k','FontSize',12,'FontWeight','bold','Margin',3);end
+end
+if ~isempty(bars),uistack(bars,'top');end
 end

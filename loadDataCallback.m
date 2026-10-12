@@ -19,10 +19,13 @@ catch ME
 end
 localLog(fig,'Loading dataset...');
 localStatus(fig,false);
-drawnow;
+progress=deConfUSIon_ui('progress','Loading dataset');
+guard=onCleanup(@()localFinishLoad(fig,progress)); %#ok<NASGU>
+set(fig,'Pointer','watch');deConfUSIon_ui('progressupdate',progress,0,'Opening dataset...');
 try
     fullInputFile = fullfile(path,file);
-    [data,meta] = loadFUSIData(fullInputFile,[]);
+    [data,meta] = loadFUSIData(fullInputFile,[], ...
+        @(fraction,message)deConfUSIon_ui('progressupdate',progress,.8*fraction,message));
     if ~isstruct(data) || ~isfield(data,'I') || isempty(data.I)
         error('Loaded data does not contain data.I.');
     end
@@ -45,13 +48,16 @@ try
     localMkdir(analysedRoot);
 
     if exist('studio_load_options_dark_dialog','file') == 2
+        set(progress,'Visible','off');set(fig,'Pointer','arrow');
         [chosenTR,datasetFolder,cancelled,probeType,defaultTR] = studio_load_options_dark_dialog(chosenTR,datasetFolder,analysedRoot,datasetName,probeType,defaultTR,data,meta,fullInputFile);
         if cancelled
             localLog(fig,'Load cancelled during TR/output-folder selection.');
             localStatus(fig,true);
             return;
         end
+        set(progress,'Visible','on');set(fig,'Pointer','watch');
     end
+    deConfUSIon_ui('progressupdate',progress,.85,'Preparing scan folders and settings...');
 
     data.TR = chosenTR;
     data.nVols = size(data.I,ndims(data.I));
@@ -102,7 +108,9 @@ try
     studio.meta.visualizationPath = visFolder;
     studio.meta.preprocessingPath = preFolder;
     studio.meta.pscPath = pscFolder;
+    deConfUSIon_ui('progressupdate',progress,.90,'Finding saved preprocessing datasets...');
     studio=deConfUSIon_add_preproc_lazy_datasets(studio);
+    deConfUSIon_ui('progressupdate',progress,1,'Dataset loaded successfully');
     guidata(fig,studio);
     localUnlock(fig);
     localRefreshDropdown(fig);
@@ -126,9 +134,17 @@ try
     localLog(fig,'---------------------------------------');
     localStatus(fig,true);
 catch ME
+    if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'),localLog(fig,'Load cancelled. Previous dataset preserved.');return;end
     localLog(fig,['LOAD ERROR: ' ME.message]);
     localStatus(fig,true);
     errordlg(ME.message,'Load Failure');
+end
+end
+
+function localFinishLoad(fig,progress)
+deConfUSIon_ui('progressclose',progress);
+if isgraphics(fig)
+    set(fig,'Pointer','arrow');state=guidata(fig);localStatus(fig,isfield(state,'isLoaded')&&state.isLoaded);
 end
 end
 

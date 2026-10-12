@@ -829,8 +829,20 @@ catch MEcap
     error('Could not capture map preview axis: %s', MEcap.message);
 end
 
+if exist('mlreportgen.ppt.Presentation','class') == 8
+    deck=mlreportgen.ppt.Presentation(outFile);open(deck);
+    try
+        slide=add(deck,'Title Only');replace(slide,'Title','Group Map Preview');
+        pic=mlreportgen.ppt.Picture(pngFile);pic.X='0.4in';pic.Y='1in';
+        pic.Width='9.2in';pic.Height='6in';add(slide,pic);close(deck);
+        fprintf('[saved] %s\n',outFile);return;
+    catch MEppt
+        try,close(deck);catch,end
+        error('deConfUSIon:PowerPointExport','PowerPoint export failed. PNG: %s. Reason: %s',pngFile,MEppt.message);
+    end
+end
 if ~(ispc && exist('actxserver','file') == 2)
-    error('PowerPoint export requires Windows with PowerPoint installed. PNG was saved here: %s', pngFile);
+    error('deConfUSIon:PowerPointDependency','PPTX export requires MATLAB Report Generator on this platform. PNG was saved here: %s', pngFile);
 end
 
 ppt = [];

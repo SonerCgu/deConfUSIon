@@ -53,6 +53,10 @@ deConfUSIon
 
 ## Current Code Status
 
+Loading raw data or a saved preprocessing dataset shows a progress window with
+read stages and a Cancel button. Large v7.3 MAT arrays show frame progress;
+formats read as a single block show a disk-read status until that step completes.
+
 Video and SCM support a baseline window from another recording, with a
 dropdown for that scan's saved preprocessing results and reusable saved
 references. See [the shared scan baseline guide](docs/shared-scan-baseline.md).
@@ -70,6 +74,11 @@ regression tests, user guides, and atlas assets (`allen_brain_atlas.mat`,
 
 Functional Connectivity opens maximized and supports an inclusive calculation
 range such as slices 5–50. See the [FC slice-range guide](docs/functional-connectivity-slices.md).
+It also supports up to ten selectable scans, per-scan FC comparison, full
+region names, visible hemisphere controls, seed-size shortcuts and rulers.
+See the [FC scan comparison guide](docs/functional-connectivity-scans.md).
+For input timing, stimulation windows, region selection, paper-figure exports
+and group-analysis interpretation, follow the [repeatable FC paper workflow](docs/functional-connectivity-paper-workflow.md).
 For 3D registration contrast, immutable saved versions and high-resolution
 SCM/Video atlas handoff, see the [atlas review guide](docs/atlas-registration-review.md).
 
@@ -99,7 +108,12 @@ Developed and tested mainly on:
 
 The code is written to remain compatible with older MATLAB syntax where possible. Some acquisition-related files use Windows serial-port names such as `COM8`, `COM9`, or `COM14`; these must be adapted for other computers.
 
-Some export workflows may depend on Windows-specific features, Microsoft PowerPoint, or ActiveX.
+Analysis paths, folder opening and native ITK-SNAP discovery support macOS.
+PPTX export uses MATLAB Report Generator on macOS; PowerPoint/ActiveX is an
+additional Windows fallback. Use MATLAB R2023b or newer for the current 3D
+workflows. See [macOS setup and verification](docs/macOS-compatibility.md).
+Local regression checks run on Windows R2023b; native macOS validation remains
+pending. A Windows/macOS GitHub Actions smoke-test workflow is included.
 
 ---
 

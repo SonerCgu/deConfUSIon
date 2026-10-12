@@ -82,10 +82,6 @@ saveRoot=fusiAnalysisOutputPath(saveRoot);
 opts.defaultUnderlayMode = 'scm';
 opts.defaultUnderlayViewMode = 5;
 
-% Force Functional Connectivity GUI startup seed box to 25 pixels.
-% This overrides older fUSI Studio callers that still pass seedBoxSize = 3.
-opts.seedBoxSize = 25;
-
 opts.saveRoot = saveRoot;
 
 subjects = fc_make_subjects(dataIn, opts);
@@ -147,11 +143,16 @@ if isfield(opts,'analysisSliceRange') && ~isempty(opts.analysisSliceRange)
  st.slice=max(st.analysisSliceRange(1),min(st.analysisSliceRange(2),st.slice));
 end
 st.sliceRegionOnly = (Z > 1);  % HUMOR_REPAIR_TRUE_SLICE_STATE_20260519
+st.fcRegionSliceSelections=struct('label',{},'slice',{});
+st.fcOverlaySmooth=false;st.fcOverlaySigma=1;
 st.sliceRegionOnly = (Z > 1);  % HUMOR_FC_STEP_SLICE_FILTER_DEFAULT_20260519  % HUMOR_FC_STEPMOTOR_NAMES_SLICE_UI_20260519
 
 st.seedX = max(1, round(X/2));
 st.seedY = max(1, round(Y/2));
 st.seedBoxSize = max(1, round(opts.seedBoxSize));
+st.seedRegionMode=false;
+st.fcBaseline=st.subjects(1).baseline;st.fcOriginalBaseline=st.fcBaseline;st.fcSignalSource=st.subjects(1).functionalSource;
+st.fcScanSequence=[];st.fcRuler=struct('showAxes',true,'showScaleBar',true,'lengthUm',500);
 st.useSliceOnly = false;
 
 st.analysisStartSec = 0;
@@ -184,6 +185,7 @@ st.loadedUnderlayDisplayReady = false;
 st.loadedUnderlayName = '';
 
 st.showAtlasLines = false;
+st.showRegionNames=false;
 st.showMaskLine = false;
 st.overlayMode = 'seed_fc';
 
@@ -255,7 +257,9 @@ C.fsBig   = 11;
 % FIGURE
 % -------------------------------------------------------------------------
 scr = get(0,'ScreenSize');
+initialVisibility=get(groot,'DefaultFigureVisible');
 fig = figure( ...
+    'Visible','off', ...
     'Name','fUSI Studio - Functional Connectivity', ...
     'Color',C.bgFig, ...
     'MenuBar','none', ...
@@ -448,7 +452,7 @@ uicontrol('Parent',pROI,'Style','pushbutton','Units','normalized', ...
 
 fc_label(pROI,[0.48 0.815 0.16 0.08],'Matrix value',C);
 ddROISpace = uicontrol('Parent',pROI,'Style','popupmenu','Units','normalized', ...
-    'Position',[0.61 0.79 0.18 0.12], 'String',{'Fisher z','Pearson r'}, 'Value',2, ...
+    'Position',[0.61 0.79 0.18 0.12], 'String',{'Pearson r'}, 'Value',1, ...
     'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg, ...
     'FontName',C.font,'FontSize',C.fsTiny,'Callback',@onROISpace);
 
@@ -568,7 +572,7 @@ cbEpochUseWin = uicontrol('Parent',pROI,'Style','checkbox','Units','normalized',
 fc_label(pSave,[0.02 0.80 0.12 0.10],'Overlay',C);
 ddOverlay = uicontrol('Parent',pSave,'Style','popupmenu','Units','normalized', ...
     'Position',[0.15 0.78 0.30 0.12], ...
-    'String',{'Seed FC','ROI compare map','Pick ROI label','Labels only','Mask only','None'}, 'Value',1, ...
+    'String',{'Seed FC','ROI compare map','Pick ROI label','Atlas boundaries','Show tissue mask boundary (optional)','None'}, 'Value',1,'Tag','FCOverlayMode', ...
     'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg, ...
     'FontName',C.font,'FontSize',C.fsTiny,'Callback',@onOverlay);
 
@@ -662,7 +666,7 @@ cbSliceRegionOnly = uicontrol('Parent',pSave,'Style','checkbox','Units','normali
 fc_label(pSave,[0.02 0.205 0.14 0.10],'Regions',C);
 ddRegionMode = uicontrol('Parent',pSave,'Style','popupmenu','Units','normalized', ...
     'Position',[0.16 0.19 0.34 0.12], ...
-    'String',{'Both L/R separate','Left only','Right only','Left vs Right','All merged no L/R'}, ...
+    'String',{'Both L/R separate','Left only','Right only','Left vs Right','Merge left + right'}, ...
     'Value',1, ...
     'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg, ...
     'FontName',C.font,'FontSize',C.fsTiny,'FontWeight','bold', ...
@@ -1947,7 +1951,7 @@ txtSeedSlice = uicontrol('Parent',pSeedView,'Style','text','Units','normalized',
     'String',sprintf('Seed map | slice Z %d / %d   mouse-wheel = change slice',st.slice,st.Z), ...
     'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
     'HorizontalAlignment','left','FontName',C.font,'FontWeight','bold','FontSize',C.fsSmall);
-axMap = axes('Parent',pSeedView,'Units','normalized','Position',[0.035 0.080 0.570 0.810], ...
+axMap = axes('Parent',pSeedView,'Units','normalized','Position',[0.080 0.080 0.525 0.810], ...
     'Color',C.bgAx,'XColor',C.dim,'YColor',C.dim);
 axis(axMap,'image'); axis(axMap,'off');
 hUnder = image(axMap,fc_get_underlay(st));
@@ -2373,6 +2377,10 @@ txtCompareSlice = uicontrol('Parent',pCompView,'Style','text','Units','normalize
     'String',sprintf('Compare map slice Z %d / %d   scroll = change slice',st.slice,st.Z), ...
     'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
     'HorizontalAlignment','left','FontName',C.font,'FontWeight','bold','FontSize',C.fsTiny);
+set(axCompareBar,'Position',[.10 .58 .84 .31]);
+set(axCompareMap,'Position',[.09 .16 .38 .31]);set(axCompareCB,'Position',[.09 .04 .38 .025]);
+set(axCompareTS,'Position',[.55 .25 .39 .21]);set(txtCompare,'Position',[.55 .055 .40 .145]);
+set(txtCompareSlice,'Position',[.09 .495 .38 .028]);
 
 % Pair ROI tab - positions fixed to avoid top cut-off
 uicontrol('Parent',pPairView,'Style','text','Units','normalized','Position',[0.055 0.900 0.080 0.055], ...
@@ -2456,6 +2464,7 @@ end
 % FC_FISHERZ_STATS_PATCH_20260512_END
 guidata(fig,st);
 setappdata(fig,'FUSILoadRegionLabels',@(file)onLoadAtlas([],[],file));
+setappdata(fig,'FUSILoadRegionNames',@(file)onLoadNames([],[],file));
 % HUMOR_FC_PRELOAD_SEGMENTATION_PATCH_20260519
 try
     sPre = guidata(fig);
@@ -2487,26 +2496,99 @@ catch ME_preloadSeg
 end
 refreshAll();
 % HUMOR_FORCE_LAYOUT_AFTER_INITIAL_REFRESH_20260527
-try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end; try, deConfUSIon_FC_remember_layout(fig,'capture'); catch, end % HUMOR_CAPTURE_GOOD_FC_LAYOUT_20260527 catch ME_forceLayout, try fprintf('FC layout force warning: %s\n',ME_forceLayout.message); catch, end, end
+% The figure remains hidden until the final responsive layout is ready.
 % One layout owns the final control positions and all later resize calls.
 ui=struct('controlPanel',panelCtrl,'viewPanel',panelViewWrap,'dataPanel',pData, ...
  'seedPanel',pSeed,'roiPanel',pROI,'savePanel',pSave,'subject',ddSubject, ...
  'sliceSlider',slSlice,'sliceEdit',edSlice,'status',txtStatus, ...
  'displayControls',[ddUnderlayStyle edUGamma edUSharp ddOverlay ddCmapGlobal edSeedCLim edSeedAlpha]);
 setappdata(fig,'FUSIFCRegionGrouping',@onAtlasGranularity);
+uicontrol(pData,'Style','pushbutton','String','Scans / order','Tag','FCScansOrder','Callback',@onManageScans);
+uicontrol(pData,'Style','pushbutton','String','PSC baseline...','Tag','FCBaselineSource','Callback',@onBaselineSource);
+uicontrol(pData,'Style','pushbutton','String','Reset baseline','Tag','FCResetBaseline','Callback',@onResetBaseline);
+uicontrol(pSave,'Style','pushbutton','String','Hide outlines / mask','Tag','FCHideOverlays','Callback',@onHideOverlays);
+for parent=[pSeed pROI pSave]
+ uicontrol(parent,'Style','edit','String','1','Tag','FCPearsonLimit','Callback',@onPearsonLimit, ...
+  'TooltipString','Symmetric colour range for Pearson r. Example 0.5 displays -0.5 to +0.5; calculated correlations do not change.');
+end
+uicontrol(pSeed,'Style','popupmenu','String',ddCmapGlobal.String,'Value',1,'Tag','FCColourMap','Callback',@onColourMap);
+
+uicontrol(pSave,'Style','pushbutton','String','Compare scans','Tag','FCCompareScans','Callback',@onCompareScans);
+uicontrol(pSeed,'Style','popupmenu','String',{'Size preset','4 px','8 px','15 px','25 px','50 px'}, ...
+    'Tag','FCSeedSizePreset','Callback',@onSeedSizePreset);
+uicontrol(pSeed,'Style','pushbutton','String','- 1 pixel','Tag','FCSeedSmaller','Callback',@onSeedSmaller);
+uicontrol(pSeed,'Style','pushbutton','String','+ 1 pixel','Tag','FCSeedLarger','Callback',@onSeedLarger);
+uicontrol(pSeed,'Style','checkbox','String','Use clicked atlas region as seed','Tag','FCSeedRegionMode','Callback',@onSeedRegionMode);
+uicontrol(pData,'Style','popupmenu','String',{'Valid signal + CSF exclusions','Loaded include mask','No intensity mask (CSF still excluded)'}, ...
+    'Tag','FCMaskPolicy','Callback',@onMaskPolicy);
+uicontrol(pData,'Style','text','String','','Tag','FCMaskSource','HorizontalAlignment','left');
+uicontrol(pData,'Style','edit','String',num2str(st.subjects(1).TR),'Tag','FCAnalysedTR','Callback',@onAnalysedTR, ...
+    'TooltipString','Seconds between saved functional volumes, after temporal averaging. Change only using verified acquisition timing. This affects this scan and invalidates its FC results.');
+uicontrol(pSave,'Style','checkbox','String','Region names','Tag','FCRegionNames','Callback',@onRegionNames, ...
+ 'TooltipString','Show abbreviations on the Compare ROI brain map.');
+rulerPanel=uipanel(pSeedView,'Units','normalized','Position',[.635 .025 .345 .205], ...
+    'Title','Ruler / scale bar','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontSize',12,'Tag','FCRulerPanel');
+uicontrol(rulerPanel,'Style','checkbox','Units','normalized','Position',[.04 .65 .48 .22], ...
+    'String','Axes (mm)','Value',1,'Tag','FCRulerAxes','Callback',@onRulerSettings,'BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontSize',11);
+uicontrol(rulerPanel,'Style','checkbox','Units','normalized','Position',[.54 .65 .44 .22], ...
+    'String','Scale bar','Value',1,'Tag','FCRulerBar','Callback',@onRulerSettings,'BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontSize',11);
+uicontrol(rulerPanel,'Style','text','Units','normalized','Position',[.04 .36 .5 .22], ...
+    'String','Bar length (um)','BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontSize',11,'HorizontalAlignment','left');
+uicontrol(rulerPanel,'Style','edit','Units','normalized','Position',[.57 .35 .37 .25], ...
+    'String','500','Tag','FCRulerLength','Callback',@onRulerSettings,'BackgroundColor',C.bgEdit,'ForegroundColor',C.fg,'FontSize',12);
+uicontrol(rulerPanel,'Style','text','Units','normalized','Position',[.04 .04 .92 .24], ...
+    'String','Calibrated spacing; otherwise pixels.', ...
+    'BackgroundColor',C.bgPane,'ForegroundColor',C.dim,'FontSize',10,'HorizontalAlignment','left');
 uicontrol(pROI,'Style','pushbutton','String','ROI all periods','Callback',@onComputePeriods);
+uicontrol(pROI,'Style','popupmenu','String',{'Volume regions','Displayed slice','Regions + slices'}, ...
+ 'Value',1+double(st.sliceRegionOnly),'Tag','FCROIScope','Callback',@onROIScope, ...
+ 'TooltipString','Volume pools each region across Calculate slices. Displayed slice uses the current Z. Regions + slices uses explicitly chosen region/slice pairs.');
+uicontrol(pROI,'Style','pushbutton','String','Regions / slices...','Tag','FCRegionSlices','Callback',@onRegionSlices);
+uicontrol(pSave,'Style','checkbox','String','Smooth overlay','Tag','FCOverlaySmooth','Callback',@onOverlaySmoothing, ...
+ 'TooltipString','Display only: masked in-plane Gaussian smoothing of Pearson r. Calculated seed maps, ROI matrices and statistics remain unchanged.');
+uicontrol(pSave,'Style','edit','String','1','Tag','FCOverlaySigma','Callback',@onOverlaySmoothing, ...
+ 'TooltipString','Gaussian sigma in native pixels (not micrometres). No smoothing across slices or time.');
 uicontrol(pROI,'Style','pushbutton','String','Seed vs regions','Callback',@onSelectHeatmapSeed);
 uicontrol(pROI,'Style','pushbutton','String','Seed vs strongest','Callback',@onStrongestHeatmap);
-setappdata(fig,'FUSIFCLayout',ui);
+pScanView=uipanel(panelViewWrap,'Units','normalized','Position',pSeedView.Position, ...
+ 'BackgroundColor',C.bgPane,'BorderType','none','Visible','off','Tag','FCScanDifferenceView');
+viewColours=[viewColours;.45 .30 .12];
+tabBtns(6)=uicontrol(panelViewWrap,'Style','togglebutton','String','Scan differences','Tag','FCScanDifferenceTab', ...
+ 'Callback',@(~,~)switchTab('scans'),'BackgroundColor',viewColours(6,:),'ForegroundColor','w');
+scanAxes=gobjects(1,3);
+for j=1:3,scanAxes(j)=axes(pScanView,'Units','normalized','Position',[.045+(j-1)*.32 .22 .265 .62],'Color',C.bgAx,'Tag',sprintf('FCScanDifference%d',j));end
+ddScanA=uicontrol(pScanView,'Style','popupmenu','Units','normalized','Position',[.025 .10 .35 .05], ...
+ 'String',{st.subjects.name},'Tag','FCComparisonA');
+ddScanB=uicontrol(pScanView,'Style','popupmenu','Units','normalized','Position',[.40 .10 .35 .05], ...
+ 'String',{st.subjects.name},'Tag','FCComparisonB');
+uicontrol(pScanView,'Style','pushbutton','Units','normalized','Position',[.78 .10 .19 .05],'String','Compare A / B', ...
+ 'Tag','FCComparisonRun','Callback',@onComputeScanComparison,'BackgroundColor',C.green,'ForegroundColor','w','FontSize',12);
+scanSummary=uicontrol(pScanView,'Style','text','Units','normalized','Position',[.025 .015 .73 .075], ...
+ 'String','Choose reference A and comparison B. Uses each scan''s selected time window.','HorizontalAlignment','left', ...
+ 'BackgroundColor',C.bgPane,'ForegroundColor',C.fg,'FontSize',11,'Tag','FCComparisonSummary');
+uicontrol(pScanView,'Style','pushbutton','Units','normalized','Position',[.78 .025 .19 .05],'String','Save comparison', ...
+ 'Tag','FCComparisonSave','Callback',@onSaveScanComparison,'BackgroundColor',C.green,'ForegroundColor','w','FontSize',12);
+for parent=[pHeatView pGraphView]
+ uicontrol(parent,'Style','pushbutton','Units','normalized','Position',[.75 .005 .23 .045],'String','Export paper figure', ...
+  'Tag','FCPaperFigure','Callback',@onExportPaperFigure,'BackgroundColor',C.green,'ForegroundColor','w','FontSize',12);
+end
+ui.viewButtons=tabBtns;setappdata(fig,'FUSIFCLayout',ui);
+set(axMap,'Tag','FCSeedMap');set(axCompareMap,'Tag','FCCompareMap');
+hold(axMap,'on');hSeedRegion=image(axMap,nan(st.Y,st.X,3),'AlphaData',zeros(st.Y,st.X),'HitTest','off','Tag','FCSeedRegionOutline');hold(axMap,'off');
 setappdata(fig,'FUSILoadUnderlay',@(file)onLoadUnderlay([],[],file));
 setappdata(fig,'FUSIFCExportGroup',@()fc_export_group_analysis_bundle_auto_v4(guidata(fig)));
 setappdata(fig,'FUSIFCApplySliceRange',@(range)onAnalysisSliceRange([],[],range));
+setappdata(fig,'FUSIFCManageScans',@onManageScans);
+setappdata(fig,'FUSIFCSelectSeed',@selectSeedPosition);
+setappdata(fig,'FUSIFCRegionCatalog',@currentRegionCatalog);
+deConfUSIon_ui('present',fig);
 try,set(fig,'WindowState','maximized');catch,set(fig,'Units','normalized','Position',[0 0 1 1]);end
 deConfUSIon_FC_layout(fig,@onAnalysisSliceRange);
 set(fig,'ResizeFcn',@(~,~)deConfUSIon_FC_layout(fig));
 set(findall(fig,'Tag','FC_MatrixTickMode'),'Value',1); % Sparse automatic labels for large matrices.
 refreshAll();
 deConfUSIon_FC_remember_layout(fig,'capture');
+drawnow;setappdata(fig,'FUSIFCStartupReady',true);set(fig,'Visible',initialVisibility);
 
 % =========================================================================
 % CALLBACKS
@@ -2552,7 +2634,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         try, set(edSliceBox,'String',num2str(s.slice)); catch, end
         guidata(fig,s);
         set(txtStatus,'String',sprintf('Slice Z %d / %d',s.slice,s.Z));
-        refreshAll();
+        refreshSliceViews(s);
     end
 
     function setStatus(msg,col)
@@ -2572,6 +2654,228 @@ deConfUSIon_FC_remember_layout(fig,'capture');
     function onHelp(~,~)
         deConfUSIon_ui('help','FunctionalConnectivity'); return;
         fc_help_dialog(C);
+    end
+
+    function scanProgress(fraction,message)
+        setStatus(sprintf('%s (%.0f%%)',message,100*fraction),C.dim);
+    end
+    function onAnalysedTR(src,~)
+        s=guidata(fig);v=str2double(src.String);i=s.currentSubject;
+        if ~isscalar(v)||~isfinite(v)||v<=0
+            src.String=num2str(s.subjects(i).TR);setStatus('Analysed TR must be positive, in seconds per saved volume.',C.warn);return;
+        end
+        if v==s.subjects(i).TR,return;end
+        try
+            s=initialiseScanSequence(s);d=s.fcScanSequence.scans{i};
+            factor=d.TR/d.rawTR;d.TR=v;if isfinite(factor)&&factor>0,d.rawTR=v/factor;end
+            s.fcScanSequence.scans{i}=d;s.subjects(i).TR=v;s.subjects(i).TRUserSec=v;
+            if strcmpi(s.subjects(i).functionalSource,'PSC')&&~fusiBaselineReference('isExternal',s.subjects(i).baseline)
+                s.subjects(i).I4=[];s=fusiFCLoadScan(s,i,@scanProgress);
+            end
+            s.seedResults(i,:)={[]};s.roiResults(i,:)={[]};guidata(fig,s);clearScanComparison();refreshAll();
+            setStatus(sprintf('Analysed TR %.6g s for this scan. Recalculate FC with the corrected time window.',v),C.good);
+        catch ME
+            src.String=num2str(guidata(fig).subjects(i).TR);setStatus(['TR update: ' ME.message],C.warn);
+            if s.opts.debugRethrow,rethrow(ME);end
+        end
+    end
+    function indices=includedFCScans(s)
+        indices=1:s.nSub;
+        if ~isempty(s.fcScanSequence),indices=find(fusiScanSequence('included',s.fcScanSequence));end
+        assert(~isempty(indices),'deConfUSIon:FCScansEmpty','Include at least one scan in Scans / order.');
+    end
+    function onManageScans(varargin)
+        s=guidata(fig);
+        try
+            s=initialiseScanSequence(s);q=s.fcScanSequence;
+            if isappdata(fig,'FUSIFCScanSequenceRequest')
+                q=getappdata(fig,'FUSIFCScanSequenceRequest');rmappdata(fig,'FUSIFCScanSequenceRequest');
+            else
+                b=struct('start',q.localWindowSec(1),'end',q.localWindowSec(2),'mode','sec');
+                q=fusiScanSequenceDialog(q,s.fcBaseline,fusiBaselineRawStart(s.opts,pwd),'fc');
+            end
+            if isempty(q),return;end
+            assert(numel(q.scans)<=fusiScanSequence('maxScans'),'Choose up to ten scans.');
+            anchor=find(cellfun(@(d)strcmp(d.key,q.originalKey),q.scans),1);
+            assert(~isempty(anchor),'Keep the originally loaded scan in the list; untick it to exclude it.');
+            old=s.subjects;oldQ=s.fcScanSequence;template=s.fcOriginalSubject;
+            s.subjects=repmat(template,numel(q.scans),1);
+            s.seedResults=cell(numel(q.scans),4);s.roiResults=cell(numel(q.scans),4);
+            for j=1:numel(q.scans)
+                d=q.scans{j};s.subjects(j).I4=[];s.subjects(j).name=d.label;s.subjects(j).TR=d.TR;
+                s.subjects(j).sourceFile=d.rawFile;s.subjects(j).powerFile=d.file;
+                s.subjects(j).baseline=s.fcBaseline;
+                s.subjects(j).functionalSource=s.fcSignalSource;
+                if isfile(d.rawFile),P=fusiResolveAnalysisFolder(d.rawFile);s.subjects(j).analysisDir=P.datasetFolder;end
+                if j==anchor&&isequaln(template.baseline,s.fcBaseline)&&strcmpi(template.functionalSource,s.fcSignalSource),s.subjects(j).I4=template.I4;end
+                if ~isempty(oldQ)
+                    prior=find(cellfun(@(c)strcmp(c.key,d.key),oldQ.scans),1);
+                    if ~isempty(prior),s.subjects(j)=old(prior);end
+                end
+            end
+            s.nSub=numel(q.scans);s.currentSubject=anchor;s.fcScanSequence=q;s.fcScanSequence.active=anchor;
+            if isappdata(fig,'FUSIFCScanSequenceError'),rmappdata(fig,'FUSIFCScanSequenceError');end
+            set(ddSubject,'String',{s.subjects.name},'Value',anchor);guidata(fig,s);refreshAll();
+            setStatus(sprintf('%d scans available; %d included. Each uses its own acquisition time.',s.nSub,sum(fusiScanSequence('included',q))),C.good);
+        catch ME
+            setappdata(fig,'FUSIFCScanSequenceError',ME);setStatus(['Scan selection: ' ME.message],C.warn);
+            if s.opts.debugRethrow,rethrow(ME);end
+        end
+    end
+    function s=initialiseScanSequence(s)
+        if ~isempty(s.fcScanSequence),return;end
+        original=s.subjects(s.currentSubject);s.fcOriginalSubject=original;
+        par=s.opts;par.loadedFile=original.sourceFile;par.fusiSequencePowerFile=original.powerFile;par.voxelSizeUm=original.spacingUm;
+        I=original.I4;if s.Z==1,I=reshape(I,s.Y,s.X,size(I,4));end
+        q=fusiScanSequence('init',par,I,original.TR,original.name);q.scans{q.active}.label=original.name;
+        q.localWindowSec=[original.baseline.start original.baseline.end];s.fcScanSequence=q;
+    end
+    function onBaselineSource(varargin)
+        s=guidata(fig);
+        try
+            s=initialiseScanSequence(s);context=s.opts;subj=s.subjects(s.currentSubject);
+            context.loadedFile=subj.sourceFile;context.voxelSizeUm=subj.spacingUm;
+            if isappdata(fig,'FUSIFCBaselineRequest'),b=getappdata(fig,'FUSIFCBaselineRequest');rmappdata(fig,'FUSIFCBaselineRequest');
+            else,b=fusiBaselineSourceDialog(s.fcBaseline,subj.TR,[s.Y s.X s.Z],fc_start_dir(subj,s.opts),context);end
+            if isempty(b),return;end
+            if fusiBaselineReference('isExternal',b),fusiBaselineReference('validate',b.reference,[s.Y s.X s.Z]);end
+            s.fcBaseline=b;s.fcSignalSource='PSC';s.fcScanSequence.localWindowSec=[b.start b.end];
+            for j=1:s.nSub
+                assert(isfile(s.subjects(j).powerFile)||(~isempty(s.fcOriginalSubject.I4)&&strcmpi(s.fcOriginalSubject.functionalSource,'I')), ...
+                    'deConfUSIon:FCBaselinePower','PSC baseline changes require the saved power dataset. Load its original power / preprocessing file.');
+                s.subjects(j).baseline=b;s.subjects(j).functionalSource='PSC';s.subjects(j).I4=[];
+            end
+            s.seedResults(:)={[]};s.roiResults(:)={[]};
+            s=fusiFCLoadScan(s,s.currentSubject,@scanProgress);guidata(fig,s);clearScanComparison();refreshAll();
+            setStatus(['PSC baseline: ' fusiBaselineReference('label',b) '. FC calculated separately per scan.'],C.good);
+        catch ME,setStatus(['Baseline: ' ME.message],C.warn);if s.opts.debugRethrow,rethrow(ME);end,end
+    end
+    function onResetBaseline(varargin)
+        s=guidata(fig);s.fcBaseline=s.fcOriginalBaseline;
+        if isempty(s.fcScanSequence),guidata(fig,s);refreshAll();return;end
+        s.fcSignalSource=s.fcOriginalSubject.functionalSource;
+        for j=1:s.nSub,s.subjects(j).baseline=s.fcOriginalBaseline;s.subjects(j).functionalSource=s.fcOriginalSubject.functionalSource;s.subjects(j).I4=[];end
+        s.seedResults(:)={[]};s.roiResults(:)={[]};s=fusiFCLoadScan(s,s.currentSubject,@scanProgress);
+        guidata(fig,s);clearScanComparison();refreshAll();setStatus('Restored the originally loaded signal and baseline.',C.good);
+    end
+    function onHideOverlays(varargin)
+        s=guidata(fig);s.overlayMode='seed_fc';s.showMaskLine=false;s.showAtlasLines=false;
+        guidata(fig,s);refreshAll();setStatus('Mask and atlas outlines hidden. Tissue exclusions still apply to calculations.',C.good);
+    end
+    function onPearsonLimit(src,~)
+        s=guidata(fig);v=str2double(src.String);
+        if ~isscalar(v)||~isfinite(v)||v<=0||v>1,src.String=num2str(s.roiCLim);setStatus('Colour range must be > 0 and <= 1.',C.warn);return;end
+        s.roiCLim=v;guidata(fig,s);set(findall(fig,'Tag','FCPearsonLimit'),'String',num2str(v));refreshVisibleView();
+    end
+    function onColourMap(src,~)
+        ddCmapGlobal.Value=src.Value;onColorSettings([],[]);
+    end
+    function clearScanComparison()
+        if isappdata(fig,'FUSIFCScanComparison'),rmappdata(fig,'FUSIFCScanComparison');end
+    end
+    function onSeedSizePreset(src,~)
+        sizes=[4 8 15 25 50];if src.Value>1,set(edSeedSize,'String',num2str(sizes(src.Value-1)));onSeedEdit([],[]);end
+    end
+    function onSeedSmaller(varargin),changeSeedSize(-1);end
+    function onSeedLarger(varargin),changeSeedSize(1);end
+    function changeSeedSize(delta)
+        s=guidata(fig);set(edSeedSize,'String',num2str(s.seedBoxSize+delta));onSeedEdit([],[]);
+    end
+    function onRulerSettings(varargin)
+        s=guidata(fig);length=str2double(get(findall(fig,'Tag','FCRulerLength'),'String'));
+        if ~isfinite(length)||length<=0,setStatus('Scale-bar length must be positive, in micrometres.',C.warn);return;end
+        s.fcRuler=struct('showAxes',logical(get(findall(fig,'Tag','FCRulerAxes'),'Value')), ...
+            'showScaleBar',logical(get(findall(fig,'Tag','FCRulerBar'),'Value')),'lengthUm',length);
+        guidata(fig,s);refreshVisibleView();
+    end
+    function onCompareScans(varargin)
+        s=guidata(fig);
+        try
+            assert(s.nSub>=2,'Add at least two scans using Scans / order.');
+            if isappdata(fig,'FUSIFCCompareRequest'),pair=getappdata(fig,'FUSIFCCompareRequest');rmappdata(fig,'FUSIFCCompareRequest');
+            else,switchTab('scans');return;end
+            if isempty(pair),return;end
+            assert(numel(pair)==2&&all(pair>=1&pair<=s.nSub)&&pair(1)~=pair(2),'Choose two different scans.');
+            useRegions=all(arrayfun(@(k)~isempty(s.subjects(k).roiAtlas),pair));
+            matrices=cell(1,2);matrixNames=cell(1,2);metadata=cell(1,2);
+            slot=0;
+            for k=pair
+                slot=slot+1;
+                if useRegions,s=computeROI(s,k,s.currentEpoch);else,s=computeSeed(s,k,s.currentEpoch);end
+                if useRegions
+                    % The display can restrict FC to the selected slice. Extract
+                    % its matrix while this scan's movie is still loaded.
+                    state=s;state.currentSubject=k;
+                    [matrices{slot},matrixNames{slot},order,metadata{slot}]=fc_current_matrix(state,s.roiResults{k,s.currentEpoch});
+                    [matrices{slot},matrixNames{slot},~,metadata{slot}]=fc_apply_region_visibility(state,matrices{slot},matrixNames{slot},order,metadata{slot});
+                    state=[]; % Release the temporary movie reference before loading the other scan.
+                end
+            end
+            if useRegions
+                A=matrices{1};B=matrices{2};namesA=matrixNames{1};aMeta=metadata{1};bMeta=metadata{2};
+                rowsA=aMeta.displayLabels;colsA=rowsA;rowsB=bMeta.displayLabels;colsB=rowsB;
+                if aMeta.isRectangular,rowsA=aMeta.displayLabelsY;colsA=aMeta.displayLabelsX;end
+                if bMeta.isRectangular,rowsB=bMeta.displayLabelsY;colsB=bMeta.displayLabelsX;end
+                result=fusiFCCompareScans(A,B,rowsA,colsA,rowsB,colsB);result.kind='Region correlation';
+                result.names=namesA(result.rowIndexA);result.fullNames=fusiFCFullRegionNames(result.names,s.subjects(pair(1)).roiNameTable);
+                colNames=namesA;if aMeta.isRectangular,colNames=aMeta.namesX;end
+                result.columnNames=colNames(result.columnIndexA);
+            else
+                volA=s.seedResults{pair(1),s.currentEpoch}.rMap;volB=s.seedResults{pair(2),s.currentEpoch}.rMap;
+                A=double(volA(:,:,s.slice));
+                B=double(s.seedResults{pair(2),s.currentEpoch}.rMap(:,:,s.slice));
+                result=struct('reference',A,'comparison',B,'difference',B-A,'kind','Seed correlation', ...
+                    'definition','Comparison minus reference Pearson r. Same seed coordinates and per-scan period. Descriptive difference.');
+            end
+            if ~useRegions,result.referenceVolume=volA;result.comparisonVolume=volB;end
+            result.scanIndices=pair;result.scanNames={s.subjects(pair).name};result.period=s.fcEpochMode;
+            result.TR=[s.subjects(pair).TR];result.hemisphere=s.roiHemiMode;guidata(fig,s);
+            result.analysisSliceRange=s.analysisSliceRange;result.sliceRegionOnly=s.sliceRegionOnly;result.displaySlice=s.slice;
+            setappdata(fig,'FUSIFCScanComparison',result);refreshAll();switchTab('scans');
+        catch ME,setStatus(['Compare scans: ' ME.message],C.warn);if s.opts.debugRethrow,rethrow(ME);end,end
+    end
+    function onComputeScanComparison(varargin)
+        setappdata(fig,'FUSIFCCompareRequest',[ddScanA.Value ddScanB.Value]);onCompareScans();
+    end
+    function onSaveScanComparison(varargin)
+        if ~isappdata(fig,'FUSIFCScanComparison'),setStatus('Calculate a scan comparison first.',C.warn);return;end
+        saveScanComparison(fig,getappdata(fig,'FUSIFCScanComparison'));
+    end
+    function refreshScanComparisonView()
+        s=guidata(fig);names={s.subjects.name};set(ddScanA,'String',names,'Value',min(ddScanA.Value,s.nSub));
+        set(ddScanB,'String',names,'Value',min(ddScanB.Value,s.nSub));
+        if ddScanA.Value==ddScanB.Value&&s.nSub>1,ddScanB.Value=find((1:s.nSub)~=ddScanA.Value,1);end
+        if ~isappdata(fig,'FUSIFCScanComparison')
+            for j=1:3,fc_nodata(scanAxes(j),'Select two scans, then Compare A / B',C);end
+            return;
+        end
+        r=getappdata(fig,'FUSIFCScanComparison');ddScanA.Value=r.scanIndices(1);ddScanB.Value=r.scanIndices(2);
+        if r.sliceRegionOnly&&r.displaySlice~=s.slice&&~isfield(r,'referenceVolume')
+            for j=1:3,fc_nodata(scanAxes(j),'Slice changed: click Compare A / B',C);end
+            scanSummary.String='The previous comparison used another slice. Click Compare A / B to recalculate this slice.';return;
+        end
+        if isfield(r,'referenceVolume')
+            r.reference=double(r.referenceVolume(:,:,s.slice));r.comparison=double(r.comparisonVolume(:,:,s.slice));r.difference=r.comparison-r.reference;
+            r.displaySlice=s.slice;setappdata(fig,'FUSIFCScanComparison',r);
+        end
+        maps={r.reference,r.comparison,r.difference};titles={'A: Reference scan','B: Comparison scan','B minus A (descriptive)'};
+        for j=1:3
+            ax=scanAxes(j);cla(ax);imagesc(ax,maps{j});fc_ax(ax,C);colormap(ax,fc_get_cmap(s.cmapName,256));
+            lim=s.roiCLim;if j==3,lim=2*lim;end;caxis(ax,[-lim lim]);cb=colorbar(ax,'southoutside');cb.Color=C.fg;
+            if isfield(r,'referenceVolume'),fusiFCImageGeometry(ax,s.subjects(r.scanIndices(1)).spacingUm,[s.Y s.X],s.fcRuler);
+            else
+                axis(ax,'normal');axis(ax,'tight');ax.YDir='reverse';n=min(numel(r.names),20);
+                if numel(r.names)<=20,set(ax,'YTick',1:n,'YTickLabel',r.names,'XTick',1:numel(r.columnNames),'XTickLabel',r.columnNames,'XTickLabelRotation',60,'TickLabelInterpreter','none','FontSize',9);end
+            end
+            title(ax,titles{j},'Color',C.fg,'FontSize',12,'Interpreter','none');
+        end
+        scanSummary.String=sprintf('A: %s\nB: %s | %s period. Difference = B - A; no significance test.',r.scanNames{1},r.scanNames{2},r.period);
+    end
+    function saveScanComparison(f,result)
+        s=guidata(fig);folder=fusiUniqueOutputFolder(s.qcDir,['ScanComparison_' datestr(now,'yyyymmdd_HHMMSS')]);
+        file=fullfile(folder,'FC_scan_comparison.mat');save(file,'result','-v7.3');
+        print(f,fullfile(folder,'FC_scan_comparison.png'),'-dpng','-r200');
+        fusiExportSavedDialog({file,fullfile(folder,'FC_scan_comparison.png')});
     end
 
     function onOpenRegionKey(~,~)
@@ -2602,7 +2906,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
                 end
             end
             s.subjects(s.currentSubject)=fc_apply_registered_regions(subj,P,subj.registeredRegionFile);
-            s.opts.roiNameTable=s.subjects(s.currentSubject).roiNameTable;s.roiResults(s.currentSubject,:)={[]};
+            s.opts.roiNameTable=s.subjects(s.currentSubject).roiNameTable;s.roiResults(s.currentSubject,:)={[]};s.seedResults(s.currentSubject,:)={[]};clearScanComparison();
             s.fcSelectedRegionIdx=[];s.fcSelectedRegionY=[];s.fcSelectedRegionX=[];s.fcHeatmapSeedLabel=[];
             guidata(fig,s);refreshAll();setStatus('Atlas granularity changed. Press ROI current to calculate.',C.good);
         catch ME
@@ -2615,7 +2919,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         s=guidata(fig);res=s.roiResults{s.currentSubject,s.currentEpoch};if isempty(res),setStatus('Compute ROI FC first.',C.warn);return;end
         [~,names,~,meta]=fc_current_matrix(s,res);
         if meta.isRectangular,setStatus('Use Custom regions to choose rows/columns in Left-vs-Right mode.',C.warn);return;end
-        catalog=fc_selection_catalog(names);
+        catalog=fc_selection_catalog(fusiFCFullRegionNames(names,s.subjects(s.currentSubject).roiNameTable));
         [chosen,ok]=scmAtlasRegionSelectionDialog(catalog,catalog([]),false,'Choose seed region');if ~ok||isempty(chosen),return;end
         s.fcHeatmapSeedLabel=meta.displayLabels(chosen.id);s.fcHeatmapPartnerLabels=[];
         targets=catalog;targets(chosen.id)=[];
@@ -2629,7 +2933,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         s=guidata(fig);res=s.roiResults{s.currentSubject,s.currentEpoch};if isempty(res),return;end
         [~,names,~,meta]=fc_current_matrix(s,res);
         if meta.isRectangular,setStatus('Use Custom regions to choose rows/columns in Left-vs-Right mode.',C.warn);return;end
-        catalog=fc_selection_catalog(names);
+        catalog=fc_selection_catalog(fusiFCFullRegionNames(names,s.subjects(s.currentSubject).roiNameTable));
         [chosen,ok]=scmAtlasRegionSelectionDialog(catalog,catalog([]),false,'Choose seed region');if ~ok||isempty(chosen),return;end
         s.fcHeatmapSeedLabel=meta.displayLabels(chosen.id);s.fcHeatmapPartnerLabels=[];s.fcHeatmapStrongest=true;
         guidata(fig,s);switchTab('heatmap');
@@ -2662,7 +2966,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         try, set(ddUnderlayStyle,'Value',1); catch, end
         try, set(ddCmapGlobal,'Value',1); catch, end
         try, set(ddSeedDisplay,'Value',1); catch, end
-        try, set(ddROISpace,'Value',2); catch, end
+        try, set(ddROISpace,'Value',1); catch, end
         try, set(ddOrder,'Value',1); catch, end
         try, set(ddSort,'Value',1); catch, end
         try, set(cbAtlasLine,'Value',0); catch, end
@@ -2689,6 +2993,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         set(pCompView,'Visible','off');
         set(pPairView,'Visible','off');
         set(pGraphView,'Visible','off');
+        if exist('pScanView','var')&&isgraphics(pScanView),set(pScanView,'Visible','off');end
         for kk = 1:numel(tabBtns)
             if ishandle(tabBtns(kk))
                 set(tabBtns(kk),'Value',0,'BackgroundColor',viewColours(kk,:)*.55,'ForegroundColor',C.fg);
@@ -2705,6 +3010,8 @@ deConfUSIon_FC_remember_layout(fig,'capture');
                 set(pPairView,'Visible','on'); idx = 4;
             case 'graph'
                 set(pGraphView,'Visible','on'); idx = 5;
+            case 'scans'
+                set(pScanView,'Visible','on');idx=6;
             otherwise
                 set(pSeedView,'Visible','on'); idx = 1;
         end
@@ -2748,7 +3055,11 @@ deConfUSIon_FC_remember_layout(fig,'capture');
 
     function onSubject(~,~)
         s = guidata(fig);
+        previous=s.currentSubject;
         s.currentSubject = get(ddSubject,'Value');
+        if ~isempty(s.fcScanSequence),s.fcScanSequence.active=s.currentSubject;end
+        try,s=fusiFCLoadScan(s,s.currentSubject,@scanProgress);
+        catch ME,set(ddSubject,'Value',previous);setStatus(ME.message,C.warn);return;end
         subj=s.subjects(s.currentSubject);s.loadedUnderlay=subj.displayUnderlay;s.loadedUnderlayIsRGB=subj.displayUnderlayIsRGB;
         s.loadedUnderlayDisplayReady=subj.displayUnderlayReady;s.loadedUnderlayName=subj.displayUnderlayName;
         s.opts.roiNameTable=s.subjects(s.currentSubject).roiNameTable;
@@ -2775,15 +3086,58 @@ deConfUSIon_FC_remember_layout(fig,'capture');
     end
     function onSliceRegionOnly(~,~)
         s = guidata(fig);
+        if ~isempty(s.fcRegionSliceSelections)
+            s.fcRegionSliceSelections=struct('label',{},'slice',{});s.roiResults(:)={[]};
+        end
         s.sliceRegionOnly = logical(get(cbSliceRegionOnly,'Value'));
         try, s.fcSelectedRegionIdx = []; s.fcSelectedRegionY = []; s.fcSelectedRegionX = []; catch, end
         guidata(fig,s);
+        clearScanComparison();
         refreshAll();
         if s.sliceRegionOnly
             try, setStatus(sprintf('Slice ROI filter ON: Z %d/%d.',s.slice,s.Z),C.good); catch, end
         else
             try, setStatus('Slice ROI filter OFF.',C.dim); catch, end
         end
+    end
+    function onROIScope(src,~)
+        if src.Value==3,onRegionSlices();return;end
+        s=guidata(fig);wasCustom=~isempty(s.fcRegionSliceSelections);
+        s.fcRegionSliceSelections=struct('label',{},'slice',{});s.sliceRegionOnly=(src.Value==2);
+        if wasCustom,s.roiResults(:)={[]};end
+        s.fcSelectedRegionIdx=[];s.fcSelectedRegionY=[];s.fcSelectedRegionX=[];
+        guidata(fig,s);clearScanComparison();refreshAll();
+        setStatus('ROI scope changed. Volume regions can compare anatomy across different slices.',C.good);
+    end
+    function onRegionSlices(varargin)
+        s=guidata(fig);
+        try
+            subj=s.subjects(s.currentSubject);assert(~isempty(subj.roiAtlas),'Load registered region labels first.');
+            if isappdata(fig,'FUSIFCRegionSliceRequest')
+                selections=getappdata(fig,'FUSIFCRegionSliceRequest');rmappdata(fig,'FUSIFCRegionSliceRequest');ok=true;
+            else
+                [selections,ok]=fusiFCRegionSliceDialog(subj,s.fcRegionSliceSelections,s.analysisSliceRange,s.opts.roiMinVox);
+            end
+            if ~ok,refreshAll();return;end
+            assert(numel(selections)>=2,'Choose at least two region/slice entries.');
+            assert(all([selections.slice]>=s.analysisSliceRange(1)&[selections.slice]<=s.analysisSliceRange(2)), ...
+                'Selected slices must be inside Calculate slices.');
+            fusiFCRegionSliceResult(subj,selections,1:min(3,size(subj.I4,4)),s.opts.roiMinVox);
+            s.fcRegionSliceSelections=selections;s.sliceRegionOnly=false;s.roiResults(:)={[]};
+            s.fcSelectedRegionIdx=[];s.fcSelectedRegionY=[];s.fcSelectedRegionX=[];
+            guidata(fig,s);clearScanComparison();refreshAll();
+            setStatus(sprintf('%d region/slice traces selected. Press ROI current or ROI all to calculate their connections.',numel(selections)),C.good);
+        catch ME,refreshAll();setStatus(['Regions / slices: ' ME.message],C.warn);if s.opts.debugRethrow,rethrow(ME);end,end
+    end
+    function onOverlaySmoothing(varargin)
+        s=guidata(fig);sigma=str2double(findall(fig,'Tag','FCOverlaySigma').String);
+        if ~isfinite(sigma)||sigma<=0||sigma>20
+            set(findall(fig,'Tag','FCOverlaySigma'),'String',num2str(s.fcOverlaySigma));
+            setStatus('Choose Gaussian sigma greater than 0 and at most 20 pixels.',C.warn);return;
+        end
+        s.fcOverlaySigma=sigma;s.fcOverlaySmooth=logical(findall(fig,'Tag','FCOverlaySmooth').Value);guidata(fig,s);
+        refreshSeedView();refreshCompareView();
+        setStatus('Overlay display updated. FC values, ROI matrices and exported statistics are unchanged.',C.good);
     end
     function onSliceSlider(~,~)
         s = guidata(fig);
@@ -2794,7 +3148,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         try, set(txtCompareSlice,'String',sprintf('Compare map slice Z %d / %d   scroll = change slice',s.slice,s.Z)); catch, end
         try, s.fcSelectedRegionIdx = []; s.fcSelectedRegionY = []; s.fcSelectedRegionX = []; catch, end
         guidata(fig,s);
-        refreshAll();
+        refreshSliceViews(s);
         if isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
             try, setStatus(sprintf('Slice ROI filter updated for Z %d/%d.',s.slice,s.Z),C.good); catch, end
         end
@@ -2817,7 +3171,13 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         try, set(txtSeedSlice,'String',sprintf('Seed map | slice Z %d / %d   mouse-wheel = change slice',s.slice,s.Z)); catch, end
         try, set(txtCompareSlice,'String',sprintf('Compare map slice Z %d / %d   scroll = change slice',s.slice,s.Z)); catch, end
         guidata(fig,s);
-        refreshAll();
+        refreshSliceViews(s);
+    end
+
+    function refreshSliceViews(s)
+        set(txtSeedSlice,'String',sprintf('Seed map | slice Z %d / %d   mouse-wheel = change slice',s.slice,s.Z));
+        set(txtCompareSlice,'String',sprintf('Compare map slice Z %d / %d   scroll = change slice',s.slice,s.Z));
+        refreshVisibleView();
     end
 
     function onSeedEdit(~,~)
@@ -2830,14 +3190,17 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         if ~isfinite(bs), bs = s.seedBoxSize; end
         s.seedX = fc_clip(round(x),1,s.X);
         s.seedY = fc_clip(round(y),1,s.Y);
-        s.seedBoxSize = max(1,round(bs));
+        s.seedBoxSize = fc_clip(round(bs),1,min(s.X,s.Y));
+        s.seedResults(:)={[]};
         guidata(fig,s);
+        clearScanComparison();
         refreshAll();
     end
 
     function onSliceOnly(~,~)
         s = guidata(fig);
         s.useSliceOnly = logical(get(cbSliceOnly,'Value'));
+        s.seedResults(:)={[]};clearScanComparison();
         guidata(fig,s);
         refreshAll();
     end
@@ -2976,11 +3339,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
 
     function onROISpace(~,~)
         s = guidata(fig);
-        if get(ddROISpace,'Value') == 1
-            s.roiDisplaySpace = 'r';
-        else
-            s.roiDisplaySpace = 'r';
-        end
+        s.roiDisplaySpace = 'r'; % Fisher z is exported separately for group statistics.
         guidata(fig,s);
         refreshHeatmapView();
     end
@@ -3127,28 +3486,27 @@ deConfUSIon_FC_remember_layout(fig,'capture');
             s.showHemisphere = true;
         end
         guidata(fig,s);
-        refreshHeatmapView();
-        refreshCompareView();
-        refreshPairView();
-        refreshGraphView();
-        refreshSeedView();
+        refreshVisibleView();
     end
-    function onRegionMode(~,~)
+    function onRegionNames(src,~)
+        s=guidata(fig);s.showRegionNames=logical(src.Value);guidata(fig,s);refreshVisibleView();
+    end
+    function onRegionMode(src,~)
         s = guidata(fig);
         try
-            items = get(ddRegionMode,'String');
-            val = get(ddRegionMode,'Value');
+            items = get(src,'String');
+            val = get(src,'Value');
             if ischar(items), items = cellstr(items); end
             val = fc_clip(round(val),1,numel(items));
             choice = lower(strtrim(items{val}));
             if ~isempty(strfind(choice,'left vs right'))
                 s.roiHemiMode = 'lvr';
+            elseif contains(choice,'merge') || contains(choice,'no l/r')
+                s.roiHemiMode = 'merged';
             elseif ~isempty(strfind(choice,'left'))
                 s.roiHemiMode = 'left';
             elseif ~isempty(strfind(choice,'right'))
                 s.roiHemiMode = 'right';
-            elseif ~isempty(strfind(choice,'merged')) || ~isempty(strfind(choice,'no l/r'))
-                s.roiHemiMode = 'merged';
             else
                 s.roiHemiMode = 'both';
             end
@@ -3164,6 +3522,7 @@ deConfUSIon_FC_remember_layout(fig,'capture');
             s.roiHemiMode = 'both';
         end
         guidata(fig,s);
+        clearScanComparison();
         refreshAll();
         try, setStatus(['Region mode: ' s.roiHemiMode],C.good); catch, end
     end
@@ -3177,13 +3536,14 @@ deConfUSIon_FC_remember_layout(fig,'capture');
         s.fcEpochMode = vals{v};s.currentEpoch=v;
         s = readEpochGuiToState(s);
         guidata(fig,s);
-        refreshAll();setStatus(['FC window selected: ' fc_epoch_label(s)],C.good);
+        clearScanComparison();refreshAll();setStatus(['FC window selected: ' fc_epoch_label(s)],C.good);
     end
 
     function onEpochEdit(~,~)
         s = guidata(fig);
         s = readEpochGuiToState(s);
         guidata(fig,s);
+        clearScanComparison();
         setStatus(['FC window updated: ' fc_epoch_label(s)],C.good);
     end
 
@@ -3299,13 +3659,13 @@ function onMapClick(~,~)
                 return;
             end
             [~,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
-            dispIdx = fc_display_index_from_raw_label(res,meta,lab);
+            dispIdx = fc_display_index_from_raw_label(res,meta,lab,s.slice);
             if isempty(dispIdx)
                 setStatus(sprintf('Label %.0f was clicked, but it is not available in current region mode.',lab),C.warn);
                 return;
             end
             s.compareROI = dispIdx;
-            set(ddCompareROI,'String',fc_abbrev_list(names,18,s.showHemisphere),'Value',dispIdx);
+            set(ddCompareROI,'String',fusiFCFullRegionNames(names,subj.roiNameTable),'Value',dispIdx);
             guidata(fig,s);
             setStatus(['Selected ROI: ' fc_roi_abbrev(names{dispIdx},20,s.showHemisphere)],C.good);
             refreshCompareView();
@@ -3313,10 +3673,34 @@ function onMapClick(~,~)
             return;
         end
 
-        s.seedX = x;
-        s.seedY = y;
+        selectSeedPosition(x,y,s.slice);
+    end
+
+    function selectSeedPosition(x,y,z)
+        s=guidata(fig);s.seedX=fc_clip(round(x),1,s.X);s.seedY=fc_clip(round(y),1,s.Y);
+        s.slice=fc_clip(round(z),1,s.Z);set(slSlice,'Value',s.slice);set(edSlice,'String',num2str(s.slice));
+        set(edSeedX,'String',num2str(s.seedX));set(edSeedY,'String',num2str(s.seedY));
+        set(edSliceBox,'String',num2str(s.slice));
+        set(txtSeedSlice,'String',sprintf('Seed map | slice Z %d / %d   mouse-wheel = change slice',s.slice,s.Z));
+        hadResult=~isempty(s.seedResults{s.currentSubject,s.currentEpoch});
+        s.seedResults(:,s.currentEpoch)={[]};
         guidata(fig,s);
-        refreshAll();
+        clearScanComparison();
+        if hadResult||s.seedRegionMode,onComputeSeedCurrent([],[]);else,refreshSeedView();end
+    end
+
+    function onSeedRegionMode(src,~)
+        s=guidata(fig);s.seedRegionMode=logical(src.Value);s.seedResults(:)={[]};guidata(fig,s);clearScanComparison();refreshSeedView();
+    end
+
+    function onMaskPolicy(src,~)
+        s=guidata(fig);subj=s.subjects(s.currentSubject);policies={'auto','provided','none'};policy=policies{src.Value};
+        if strcmp(policy,'provided')&&isempty(subj.baseMask)
+            setStatus('No include mask loaded. Use Load mask first, or choose Automatic / No intensity mask.',C.warn);refreshAll();return;
+        end
+        subj.maskPolicy=policy;s.subjects(s.currentSubject)=fusiFCExcludeNonTissue(subj);
+        s.seedResults(s.currentSubject,:)={[]};s.roiResults(s.currentSubject,:)={[]};guidata(fig,s);clearScanComparison();refreshAll();
+        setStatus(['Mask: ' s.subjects(s.currentSubject).maskSource],C.good);
     end
 
     function onCompareMapClick(~,~)
@@ -3339,13 +3723,13 @@ function onMapClick(~,~)
             return;
         end
         [~,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
-        dispIdx = fc_display_index_from_raw_label(res,meta,lab);
+        dispIdx = fc_display_index_from_raw_label(res,meta,lab,s.slice);
         if isempty(dispIdx)
             setStatus(sprintf('Clicked label %.0f is not available in current region mode.',lab),C.warn);
             return;
         end
         s.compareROI = dispIdx;
-        try, set(ddCompareROI,'String',fc_abbrev_list(names,18,s.showHemisphere),'Value',dispIdx); catch, end
+        try, set(ddCompareROI,'String',fusiFCFullRegionNames(names,subj.roiNameTable),'Value',dispIdx); catch, end
         guidata(fig,s);
         setStatus(['Benchmark ROI changed to: ' fc_roi_abbrev(names{dispIdx},20,s.showHemisphere)],C.good);
         refreshCompareView();
@@ -3382,16 +3766,14 @@ function onMapClick(~,~)
         subj = s.subjects(s.currentSubject);
         [f,p] = fc_uigetfile_start({'*.mat','MAT files (*.mat)'},'Load mask MAT',fc_start_dir(subj,s.opts));
         if isequal(f,0), return; end
-        S = load(fullfile(p,f));
-        m = fc_pick_volume(S,s.Y,s.X,s.Z);
-        if isempty(m)
-            errordlg('No compatible mask volume found.');
-            return;
-        end
-        s.subjects(s.currentSubject).mask = logical(m);
+        try,m=fusiFCReadMask(load(fullfile(p,f)),[s.Y s.X s.Z]);
+        catch ME,setStatus(['Mask load error: ' ME.message],C.warn);errordlg(ME.message,'Mask grid / format');return;end
+        s.subjects(s.currentSubject).baseMask=logical(m);s.subjects(s.currentSubject).maskPolicy='provided';
+        s.subjects(s.currentSubject)=fusiFCExcludeNonTissue(s.subjects(s.currentSubject));
         s.seedResults(s.currentSubject,:) = {[]};
         s.roiResults(s.currentSubject,:) = {[]};
         guidata(fig,s);
+        clearScanComparison();
         setStatus(['Loaded mask: ' f],C.good);
         refreshAll();
     end
@@ -3657,13 +4039,15 @@ function onMapClick(~,~)
         end
         [~,~,extNow] = fileparts(fullFile); extNow = lower(extNow);
         if any(strcmp(extNow,{'.txt','.csv','.tsv'}))&&s.Z>1
-            atlasFile=fullfile(p,'Regions_All.mat');if ~isfile(atlasFile),atlasFile=fullfile(p,'Regions_Merged.mat');end
+            atlasName='Regions_All.mat';if contains(lower(f),'merged'),atlasName='Regions_Merged.mat';end
+            atlasFile=fullfile(p,atlasName);if ~isfile(atlasFile),atlasFile=fullfile(p,'Regions_Merged.mat');end
             if isfile(atlasFile),onLoadAtlas([],[],atlasFile);s=guidata(fig);end
             T=deConfUSIon_FC_read_region_names_file(fullFile);
             assert(~isempty(T.labels),'No region names were found in this file.');
             if any(s.subjects(s.currentSubject).roiAtlas(:)<0)&&~any(T.labels<0)
                 T.labels=[-T.labels(:);T.labels(:)];T.names=[strcat('L_',T.names(:));strcat('R_',T.names(:))];
             end
+            T=fusiFCMergeNameTable(T,s.subjects(s.currentSubject).roiNameTable);
             s.subjects(s.currentSubject).roiNameTable=T;s.opts.roiNameTable=T;s.loadedRegionNameFile=fullFile;
             guidata(fig,s);refreshAll();onOpenRegionKey([],[]);setStatus(sprintf('Loaded %d region names',numel(T.labels)),C.good);return;
         end
@@ -3701,7 +4085,7 @@ function onMapClick(~,~)
                 try
                     for ii=indices
                         s.subjects(ii)=fc_apply_registered_regions(s.subjects(ii),regionPayload,fullFile);
-                        s.roiResults(ii,:)={[]};
+                        s.roiResults(ii,:)={[]};s.seedResults(ii,:)={[]};
                     end
                     s.opts.roiNameTable=s.subjects(s.currentSubject).roiNameTable;
                     s.loadedRegionNameFile=fullFile;guidata(fig,s);
@@ -3735,7 +4119,7 @@ function onMapClick(~,~)
         refreshAll();
     end
 
-    function onLoadNames(~,~)
+    function onLoadNames(~,~,selectedFile)
         s = guidata(fig);
         subj = s.subjects(s.currentSubject);
 
@@ -3794,10 +4178,10 @@ function onMapClick(~,~)
             return;
         end
 
-        [f,p] = fc_uigetfile_start( ...
-            {'*.txt;*.csv;*.tsv;*.mat','Region names (*.txt,*.csv,*.tsv,*.mat)'}, ...
-            'Load region names / AtlasRegions_slice TXT', ...
-            fc_start_dir(subj,s.opts));
+        if nargin>=3,[p,n,e]=fileparts(char(selectedFile));f=[n e];
+        else
+            [f,p]=fc_uigetfile_start({'*.txt;*.csv;*.tsv;*.mat','Region names'},'Load region names',fc_start_dir(subj,s.opts));
+        end
 
         if isequal(f,0), return; end
 
@@ -3812,6 +4196,7 @@ function onMapClick(~,~)
             if any(subj.roiAtlas(:)<0)&&~any(T.labels<0)
                 T.labels=[-T.labels(:);T.labels(:)];T.names=[strcat('L_',T.names(:));strcat('R_',T.names(:))];
             end
+            T=fusiFCMergeNameTable(T,subj.roiNameTable);
             s.opts.roiNameTable = T;
             s.loadedRegionNameFile = fullFile;
 
@@ -3949,7 +4334,23 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
             s.loadedUnderlayDisplayReady = isDisplayReady;
             s.loadedUnderlayName = f;
             s.underlayMode = 'loaded';
+            if endsWith(lower(f),'.mat')
+                payload=load(fullfile(p,f));
+                if isfield(payload,'atlasUnderlayMeta')&&isfield(payload,'atlasMode')&&strcmpi(payload.atlasMode,'regions')
+                    s.subjects(s.currentSubject)=fc_apply_registered_regions(s.subjects(s.currentSubject),payload,fullfile(p,f));
+                    s.roiResults(s.currentSubject,:)={[]};s.seedResults(s.currentSubject,:)={[]};
+                elseif isfield(payload,'maskEditorInfo')||isfield(payload,'maskBundle')||isfield(payload,'brainMask')||isfield(payload,'overlayMask')
+                    bundle=scmReadMaskEditorBundle(payload);hasMask=isempty(bundle)||~isempty(bundle.includeMask);
+                    if hasMask
+                        m=fusiFCReadMask(payload,[s.Y s.X s.Z]);s.subjects(s.currentSubject).baseMask=m;s.subjects(s.currentSubject).maskPolicy='provided';
+                        s.subjects(s.currentSubject)=fusiFCExcludeNonTissue(s.subjects(s.currentSubject));
+                        s.roiResults(s.currentSubject,:)={[]};s.seedResults(s.currentSubject,:)={[]};
+                    end
+                end
+            end
+            s.showMaskLine=false;s.showAtlasLines=false;if any(strcmp(s.overlayMode,{'mask','atlas'})),s.overlayMode='seed_fc';end
             guidata(fig,s);
+            clearScanComparison();
             setStatus(['Loaded underlay/histology: ' f],C.good);
             refreshAll();
         catch ME
@@ -3983,7 +4384,11 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
             setStatus('Computing seed FC for current subject...',C.dim);
             s = computeSeed(s,s.currentSubject,s.currentEpoch);
             guidata(fig,s);
-            setStatus('Seed FC done.',C.good);
+            set(edSeedX,'String',num2str(s.seedX));set(edSeedY,'String',num2str(s.seedY));set(edSeedSize,'String',num2str(s.seedBoxSize));
+            set(edSlice,'String',num2str(s.slice));set(slSlice,'Value',s.slice);set(edSliceBox,'String',num2str(s.slice));
+            set(txtSeedSlice,'String',sprintf('Seed map | slice Z %d / %d   mouse-wheel = change slice',s.slice,s.Z));
+            sr=s.seedResults{s.currentSubject,s.currentEpoch};
+            setStatus(sprintf('Seed FC done: %d acquired samples, TR %.6g s. Colour range changes display only.',numel(sr.timeIdx),s.subjects(s.currentSubject).TR),C.good);
             refreshSeedView();
             switchTab('seed');
         catch ME
@@ -3995,7 +4400,7 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
     function onComputeSeedAll(~,~)
         s = guidata(fig);
         try
-            for i = 1:s.nSub
+            for i = includedFCScans(s)
                 setStatus(sprintf('Computing seed FC %d/%d...',i,s.nSub),C.dim);
                 s = computeSeed(s,i,s.currentEpoch);
             end
@@ -4010,14 +4415,27 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
     end
 
     function s = computeSeed(s,subIdx,epIdx)
+        s=fusiFCLoadScan(s,subIdx,@scanProgress);
         subj = s.subjects(subIdx);
         [t0,t1,epName] = fc_epoch_window_sec(s,subj.TR,size(subj.I4,4));
         idxT = fc_time_idx(subj.TR,size(subj.I4,4),t0,t1);
         range=s.analysisSliceRange;selected=range(1):range(2);
         if s.slice<range(1)||s.slice>range(2),error('The seed slice must be inside the analysis slice range.');end
         mask=subj.mask;if ~isempty(mask),mask=mask(:,:,selected);end
+        regionSeed=[];
+        if s.seedRegionMode
+            assert(~isempty(subj.roiAtlas),'deConfUSIon:FCSeedRegion','Load registered region labels before using an atlas region as seed.');
+            lab=subj.roiAtlas(s.seedY,s.seedX,s.slice);
+            assert(lab~=0,'deConfUSIon:FCSeedRegion','The clicked voxel has no included atlas region label.');
+            regionSeed=subj.roiAtlas(:,:,selected)==lab;
+            if strcmp(s.roiHemiMode,'merged'),regionSeed=abs(subj.roiAtlas(:,:,selected))==abs(lab);end
+            if s.useSliceOnly
+                keep=false(size(regionSeed));keep(:,:,s.slice-range(1)+1)=true;regionSeed=regionSeed&keep;
+            end
+        end
         res = fc_seed_fc(subj.I4(:,:,selected,idxT),subj.TR,mask, ...
-            s.seedX,s.seedY,s.slice-range(1)+1,s.seedBoxSize,s.useSliceOnly,s.opts.chunkVox);
+            s.seedX,s.seedY,s.slice-range(1)+1,s.seedBoxSize,s.useSliceOnly,s.opts.chunkVox,regionSeed);
+        res.seedInfo.regionMode=s.seedRegionMode;
         % Keep display coordinates in the original recording, with excluded
         % slices explicitly missing. Only selected slices were calculated.
         small=res.rMap;res.rMap=nan(s.Y,s.X,s.Z,'single');res.rMap(:,:,selected)=small;
@@ -4053,7 +4471,7 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
         try
             for ep=1:4
                 s.fcEpochMode=modes{ep};s.currentEpoch=ep;
-                for ii=1:s.nSub
+                for ii=includedFCScans(s)
                     fusiBaselineProgress('update',h,done/(4*s.nSub),sprintf('Subject %d / %d: %s period',ii,s.nSub,modes{ep}));
                     try,s=computeROI(s,ii,ep);
                     catch ME
@@ -4074,7 +4492,7 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
     function onComputeROIAll(~,~)
         s = guidata(fig);
         try
-            for i = 1:s.nSub
+            for i = includedFCScans(s)
                 setStatus(sprintf('Computing ROI FC %d/%d...',i,s.nSub),C.dim);
                 s = computeROI(s,i,s.currentEpoch);
             end
@@ -4090,6 +4508,7 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
     end
 
     function s = computeROI(s,subIdx,epIdx)
+        s=fusiFCLoadScan(s,subIdx,@scanProgress);
         subj = s.subjects(subIdx);
         if isempty(subj.roiAtlas)
             error('No ROI atlas/label map loaded for subject %s.',subj.name);
@@ -4100,7 +4519,13 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
         if ~isempty(subj.roiNameTable.labels),roiOptions.roiNameTable=subj.roiNameTable;end
         selected=s.analysisSliceRange(1):s.analysisSliceRange(2);
         mask=subj.mask;if ~isempty(mask),mask=mask(:,:,selected);end
-        res = fc_roi_fc(subj.I4(:,:,selected,idxT),subj.TR,mask,subj.roiAtlas(:,:,selected),roiOptions);
+        if ~isempty(s.fcRegionSliceSelections)
+            assert(all([s.fcRegionSliceSelections.slice]>=selected(1)&[s.fcRegionSliceSelections.slice]<=selected(end)), ...
+                'A selected region/slice is outside Calculate slices. Update Regions / slices or the slice range.');
+            res=fusiFCRegionSliceResult(subj,s.fcRegionSliceSelections,idxT,s.opts.roiMinVox);
+        else
+            res = fc_roi_fc(subj.I4(:,:,selected,idxT),subj.TR,mask,subj.roiAtlas(:,:,selected),roiOptions);
+        end
         res.analysisSliceRange=s.analysisSliceRange;res.atlasRegionInfo=subj.atlasRegionInfo;
         res.timeMin=(double(idxT(:))-1)*subj.TR/60;res.nSamples=numel(idxT);
         res.timeIdx = idxT;
@@ -4118,8 +4543,11 @@ try, drawnow; deConfUSIon_FC_force_layout(fig); catch, end
         end
         try
             [M,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
-            outFile = fullfile(s.qcDir,['ROI_heatmap_' s.tag '.csv']);
-            fc_write_matrix_csv(outFile,M,names);
+            [M,names,~,meta]=fc_apply_region_visibility(s,M,names,order,meta);
+            columns=names;if meta.isRectangular,columns=meta.namesX;end
+            folder=fusiUniqueOutputFolder(s.qcDir,['MatrixCSV_' datestr(now,'yyyymmdd_HHMMSS')]);
+            outFile=fullfile(folder,'ROI_heatmap.csv');
+            writecell([{'Region'} columns(:)';names(:) num2cell(M)],outFile);
             setStatus(['Saved heatmap CSV: ' outFile],C.good);
         catch ME
             setStatus(['CSV export error: ' ME.message],C.warn);
@@ -4194,8 +4622,7 @@ end
             try
                 epNow = s.currentEpoch;
                 nDone = 0;
-                for ii = 1:s.nSub
-                    hasI4 = isfield(s.subjects(ii),'I4') && ~isempty(s.subjects(ii).I4);
+                for ii = includedFCScans(s)
                     hasAtlas = isfield(s.subjects(ii),'roiAtlas') && ~isempty(s.subjects(ii).roiAtlas);
                     resEmpty = true;
                     try
@@ -4205,7 +4632,7 @@ end
                     catch
                         resEmpty = true;
                     end
-                    if hasI4 && hasAtlas && resEmpty
+                    if hasAtlas && resEmpty
                         setStatus(sprintf('ROI FC missing before GA export. Computing subject %d/%d...',ii,s.nSub),C.dim);
                         s = computeROI(s,ii,epNow);
                         nDone = nDone + 1;
@@ -4234,6 +4661,22 @@ end
 % =========================================================================
     function refreshAll()
         s = guidata(fig);
+        if ~isempty(s.fcScanSequence)&&fusiScanSequence('shareAtlas',s.fcScanSequence)
+            reference=s.subjects(s.currentSubject);
+            fields={'anat','anatIsDisplayReady','roiAtlas','roiNameTable','atlasRegionInfo','atlasSourceFile', ...
+                'registeredRegionPayload','registeredRegionFile','referenceMean','referenceMedian', ...
+                'displayUnderlay','displayUnderlayIsRGB','displayUnderlayReady','displayUnderlayName','spacingUm','spacingSource', ...
+                'atlasExcludedMask','baseMask','maskPolicy'};
+            for j=1:s.nSub
+                if j==s.currentSubject,continue;end
+                previousAtlas=s.subjects(j).roiAtlas;previousMask=s.subjects(j).mask;
+                for k=1:numel(fields),s.subjects(j).(fields{k})=reference.(fields{k});end
+                s.subjects(j)=fusiFCExcludeNonTissue(s.subjects(j));
+                if ~isequal(s.subjects(j).roiAtlas,previousAtlas)||~isequal(s.subjects(j).mask,previousMask)
+                    s.roiResults(j,:)=cell(1,size(s.roiResults,2));s.seedResults(j,:)=cell(1,size(s.seedResults,2));
+                end
+            end
+        end
         if ~isfield(s,'showHemisphere') || isempty(s.showHemisphere)
             s.showHemisphere = true;
         end % FC_LR_LABEL_DISPLAY_PATCH_V2_REFRESH_DEFAULT
@@ -4262,6 +4705,23 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         set(cbMaskLine,'Value',double(s.showMaskLine));
         try, set(cbShowLR,'Value',double(s.showHemisphere)); catch, end % FC_LR_LABEL_DISPLAY_PATCH_V2_REFRESH_CHECKBOX
         try, set(ddRegionMode,'Value',fc_region_mode_to_popup_value(s.roiHemiMode)); catch, end % FC_REGION_MODE_PATCH_REFRESH_POPUP
+        set(findall(fig,'Tag','FCPageHemisphereMode'),'Value',fc_region_mode_to_popup_value(s.roiHemiMode));
+        scope=1+double(s.sliceRegionOnly);if ~isempty(s.fcRegionSliceSelections),scope=3;end
+        set(findall(fig,'Tag','FCROIScope'),'Value',scope);
+        set(cbSliceRegionOnly,'Enable',fc_if(scope==3,'off','on'));
+        set(findall(fig,'Tag','FCOverlaySmooth'),'Value',double(s.fcOverlaySmooth));
+        set(findall(fig,'Tag','FCOverlaySigma'),'String',num2str(s.fcOverlaySigma));
+        subj=s.subjects(s.currentSubject);policies={'auto','provided','none'};
+        set(findall(fig,'Tag','FCMaskPolicy'),'Value',find(strcmp(policies,subj.maskPolicy),1));
+        set(findall(fig,'Tag','FCMaskSource'),'String',subj.maskSource,'TooltipString',subj.maskSource);
+        set(findall(fig,'Tag','FCAnalysedTR'),'String',num2str(subj.TR));
+        set(findall(fig,'Tag','FCSeedRegionMode'),'Value',double(s.seedRegionMode));
+        overlayModes={'seed_fc','roi_compare','roi_pick','atlas','mask','none'};set(ddOverlay,'Value',find(strcmp(overlayModes,s.overlayMode),1));
+        maps={'bwr','winter','hot','jet','gray','parula'};set(findall(fig,'Tag','FCColourMap'),'Value',find(strcmp(maps,s.cmapName),1));
+        set(findall(fig,'Tag','FCPearsonLimit'),'String',num2str(s.roiCLim));
+        set(findall(fig,'Tag','FCBaselineSource'),'TooltipString',fusiBaselineReference('label',s.fcBaseline));
+        set(findall(fig,'Tag','FCSeedRegionMode'),'String','Atlas region seed');
+
         try, set(ddEpochMode,'Value',fc_epoch_mode_to_popup_value(s.fcEpochMode)); catch, end % FC_LR_EPOCH_PATCH_REFRESH_EPOCH_POPUP
 
         try, set(cbEpochUseWin,'Value',double(s.fcUseEpochWin)); catch, end % FC_USE_WINDOW_REFRESH_CHECKBOX        try, set(edInjStart,'String',sprintf('%.2f',s.fcInjStartMin)); catch, end % FC_LR_EPOCH_PATCH_REFRESH_INJ_START
@@ -4284,6 +4744,12 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
             gran.Value=1;if isstruct(subj.atlasRegionInfo)&&isfield(subj.atlasRegionInfo,'grouping'),gran.Value=1+strcmpi(subj.atlasRegionInfo.grouping,'Parent');end
         end
         guidata(fig,s);
+        res=s.roiResults{s.currentSubject,s.currentEpoch};
+        if ~isempty(res)
+            [~,names]=fc_current_matrix(s,res);updateROIDropdowns(names);
+        else
+            updateROIDropdowns({'n/a'});
+        end
         refreshVisibleView();
     end
 
@@ -4292,7 +4758,8 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         elseif strcmp(pHeatView.Visible,'on'),refreshHeatmapView();
         elseif strcmp(pCompView.Visible,'on'),refreshCompareView();
         elseif strcmp(pPairView.Visible,'on'),refreshPairView();
-        elseif strcmp(pGraphView.Visible,'on'),refreshGraphView();end
+        elseif strcmp(pGraphView.Visible,'on'),refreshGraphView();
+        elseif exist('pScanView','var')&&isgraphics(pScanView)&&strcmp(pScanView.Visible,'on'),refreshScanComparisonView();end
     end
 
     function refreshSeedView()
@@ -4303,8 +4770,9 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         set(hCrossV,'XData',[s.seedX s.seedX]);
 
         if exist('hSeedBox','var') && ishghandle(hSeedBox)
+            visible='on';if s.seedRegionMode,visible='off';end
             set(hSeedBox,'Position',fc_seed_box_position(s.seedX,s.seedY,s.seedBoxSize,s.X,s.Y), ...
-                'Visible','on','EdgeColor',C.seedBox,'LineWidth',2.5);
+                'Visible',visible,'EdgeColor',C.seedBox,'LineWidth',2.5);
         end
 
         ovRGB = nan(s.Y,s.X,3);
@@ -4317,8 +4785,8 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
             case 'seed_fc'
                 res = s.seedResults{s.currentSubject,s.currentEpoch};
                 if ~isempty(res)
-                    rS = res.rMap(:,:,s.slice);
-                    zS = res.zMap(:,:,s.slice);
+                    rS = fc_display_correlation(s,res.rMap(:,:,s.slice),subj.mask(:,:,s.slice));
+                    zS = atanh(max(-.999999,min(.999999,double(rS))));zS(~isfinite(rS))=NaN;
                     vis = abs(rS) >= s.seedAbsThr;
                     if ~isempty(subj.mask), vis = vis & subj.mask(:,:,s.slice); end
                     if strcmpi(s.seedDisplay,'z')
@@ -4327,7 +4795,7 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
                         cbLabel = 'Fisher z';
                     else
                         M = rS;
-                        cbClim = [-1 1];
+                        cbClim = [-s.roiCLim s.roiCLim];
                         cbLabel = 'Pearson r';
                     end
                     ovRGB = fc_map_rgb(M,cmap,cbClim);
@@ -4345,7 +4813,7 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
             case 'roi_compare'
                 [mapS,ok] = fc_compare_slice(s);
                 if ok
-                    cbClim = [-1 1];
+                    cbClim = [-s.roiCLim s.roiCLim];
                     cbLabel = 'ROI Pearson r';
                     ovRGB = fc_map_rgb(mapS,cmap,cbClim);
                     ovA = 0.65 * double(isfinite(mapS) & abs(mapS) >= max(0,s.roiAbsThr));
@@ -4358,7 +4826,8 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
                     cbClim = [0 1];
                 end
         end
-        set(hOver,'CData',ovRGB,'AlphaData',ovA);
+        ovA(~all(isfinite(ovRGB),3))=0;set(hOver,'CData',ovRGB,'AlphaData',ovA,'Tag','FCSignalOverlay');
+        if s.fcOverlaySmooth&&any(ovA(:)>0),cbLabel=[cbLabel ' (display smoothed)'];end
 
         atlasRGB = nan(s.Y,s.X,3); atlasA = zeros(s.Y,s.X);
         if s.showAtlasLines
@@ -4371,16 +4840,28 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         if s.showMaskLine && ~isempty(subj.mask)
             [maskRGB,maskA] = fc_line_overlay(subj.mask(:,:,s.slice),double(subj.mask(:,:,s.slice)),C.mask);
         end
-        set(hMask,'CData',maskRGB,'AlphaData',maskA);
+        set(hMask,'CData',maskRGB,'AlphaData',maskA,'Tag','FCMaskBoundary');
+        if exist('hSeedRegion','var')&&isgraphics(hSeedRegion)
+            seedRes=s.seedResults{s.currentSubject,s.currentEpoch};edgeRGB=nan(s.Y,s.X,3);edgeAlpha=zeros(s.Y,s.X);
+            if s.seedRegionMode&&~isempty(seedRes)
+                region=seedRes.seedMask(:,:,s.slice);[edgeRGB,edgeAlpha]=fc_line_overlay(region,double(region),C.seedBox);
+            end
+            set(hSeedRegion,'CData',edgeRGB,'AlphaData',edgeAlpha);
+        end
 
-        axis(axMap,'ij');fusiFCImageGeometry(axMap,subj.spacingUm,[s.Y s.X]);
-        fc_colorbar_legend(axSeedCB,cmap,cbClim,cbLabel,C);
+        axis(axMap,'ij');fusiFCImageGeometry(axMap,subj.spacingUm,[s.Y s.X],s.fcRuler);
+        cbKey={s.cmapName,cbClim,cbLabel};
+        if ~isequal(getappdata(axSeedCB,'FUSIFCColourKey'),cbKey)
+            fc_colorbar_legend(axSeedCB,cmap,cbClim,cbLabel,C);setappdata(axSeedCB,'FUSIFCColourKey',cbKey);
+        end
 
         res = s.seedResults{s.currentSubject,s.currentEpoch};
         if isempty(res)
-            setappdata(axSeedTS,'FUSIFCTraceKey',[]);
-            fc_nodata(axSeedTS,'Seed ROI mean timecourse',C);
-            fc_nodata(axSeedHist,'Voxelwise seed-FC distribution',C);
+            if ~isequal(getappdata(axSeedTS,'FUSIFCTraceKey'),'empty')
+                setappdata(axSeedTS,'FUSIFCTraceKey','empty');
+                fc_nodata(axSeedTS,'Seed ROI mean timecourse',C);
+                fc_nodata(axSeedHist,'Voxelwise seed-FC distribution',C);
+            end
             return;
         end
 
@@ -4394,7 +4875,8 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         plot(axSeedTS,t,ts,'LineWidth',1.5,'Color',[0.2 0.75 1.0]);
         fc_ax(axSeedTS,C); grid(axSeedTS,'on');
         xlabel(axSeedTS,'Time (min)','Color',C.dim);
-        ylabel(axSeedTS,'Mean signal (a.u.)','Color',C.dim);
+        units='Mean signal (a.u.)';if strcmpi(subj.functionalSource,'PSC'),units='Mean PSC (%)';end
+        ylabel(axSeedTS,units,'Color',C.dim);
         title(axSeedTS,'Seed ROI mean timecourse','Color',C.fg,'Interpreter','none');
 
         rr = double(res.rMap(:));
@@ -4419,7 +4901,7 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         try
             set(axHeat,'Position',[0.15 0.22 0.73 0.70]);
             set(axHeatCB,'Position',[0.955 0.215 0.022 0.600]);
-            set(txtHeat,'Position',[0.945 0.865 0.055 0.115]);
+            set(txtHeat,'Position',[.025 .005 .70 .045],'FontSize',10,'HorizontalAlignment','left');
         catch
         end
 
@@ -4482,7 +4964,8 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         fc_ax(axHeat,C);
         colormap(axHeat,cmap);
 
-        title(axHeat,sprintf('Region-by-region FC heatmap | Z %d/%d',s.slice,s.Z), ...
+        heatTitle=['Region correlations | ' fc_slice_filter_text(s)];
+        title(axHeat,heatTitle, ...
             'Color',C.fg, ...
             'Interpreter','none', ...
             'FontWeight','bold','FontSize',14);
@@ -4498,7 +4981,7 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         else
             xlabel(axHeat,'Atlas region','Color',C.fg,'FontWeight','bold','FontSize',11);
             ylabel(axHeat,'Atlas region','Color',C.fg,'FontWeight','bold','FontSize',11);
-            title(axHeat,sprintf('Region-by-region FC heatmap | Z %d/%d',s.slice,s.Z), ...
+            title(axHeat,heatTitle, ...
                 'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',11);
         end
         fc_colorbar_legend(axHeatCB,cmap,clim,cbLabel,C);
@@ -4509,15 +4992,17 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         else
             regionTxt = sprintf('%d',numel(names));
         end
-        set(txtHeat,'String',sprintf('Regions: %s\nSlice: %s\nValue: %s\n|r| thr: %.2f', regionTxt, fc_slice_filter_text(s), cbLabel, s.roiAbsThr));
+        set(txtHeat,'String',sprintf('%s ROIs | %s | %s | cells below |r| %.2f displayed white', regionTxt, fc_slice_filter_text(s), cbLabel, s.roiAbsThr));
     end
 
     function refreshCompareView()
         s = guidata(fig);
+        subjNow=s.subjects(s.currentSubject);
         res = s.roiResults{s.currentSubject,s.currentEpoch};
         cla(axCompareBar); cla(axCompareMap); cla(axCompareTS);
         cmap = fc_get_cmap(s.cmapName,256);
-        fc_colorbar_legend(axCompareCB,cmap,[-1 1],'Pearson r',C);
+        label='Pearson r';if s.fcOverlaySmooth,label='Pearson r (display smoothed)';end
+        fc_colorbar_legend(axCompareCB,cmap,[-s.roiCLim s.roiCLim],label,C);
         if isempty(res)
             fc_nodata(axCompareBar,'Selected ROI vs all regions',C);
             fc_nodata(axCompareMap,'Atlas correlation map',C);
@@ -4535,6 +5020,7 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
             set(txtCompare,'String','Left-vs-Right mode is a rectangular matrix for Heatmap/Graph. Use Left only, Right only, Both, or Merged for Compare ROI.');
             return;
         end
+        if isfield(meta,'sourceResult'),res=meta.sourceResult;end
         updateROIDropdowns(names);
         sel = fc_clip(get(ddCompareROI,'Value'),1,numel(names));
         rawSel = order(sel); tsSel = fc_display_ts_for_index(res,meta,sel);
@@ -4579,18 +5065,18 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
             cla(axCompareMap);
             image(axCompareMap,fc_get_underlay(s));
             hold(axCompareMap,'on');
-            hCmpImg = imagesc(axCompareMap,mapS,[-1 1]);
+            hCmpImg = imagesc(axCompareMap,mapS,[-s.roiCLim s.roiCLim]);
             set(hCmpImg,'AlphaData',double(isfinite(mapS)));
             hold(axCompareMap,'off');
             set(hCmpImg,'ButtonDownFcn',@onCompareMapClick);
-            set(axCompareMap,'ButtonDownFcn',@onCompareMapClick);
-            axis(axCompareMap,'ij');fusiFCImageGeometry(axCompareMap,subjNow.spacingUm,[s.Y s.X]);
+            set(axCompareMap,'ButtonDownFcn',@onCompareMapClick,'Tag','FCCompareMap');
+            axis(axCompareMap,'ij');fusiFCImageGeometry(axCompareMap,subjNow.spacingUm,[s.Y s.X],s.fcRuler);
             set(axCompareMap,'XLim',[0.5 s.X+0.5],'YLim',[0.5 s.Y+0.5]);
             colormap(axCompareMap,cmap);
-            title(axCompareMap,sprintf('Click region | Z %d/%d  scroll = slice',s.slice,s.Z),'Color',C.fg,'Interpreter','none');
+            title(axCompareMap,'');
             try
                 subjNow = s.subjects(s.currentSubject);
-                fc_draw_roi_abbrev_on_map(axCompareMap,double(subjNow.roiAtlas(:,:,s.slice)),res.labels,res.names,C,s.showHemisphere);
+                if s.showRegionNames,fc_draw_roi_abbrev_on_map(axCompareMap,double(subjNow.roiAtlas(:,:,s.slice)),res.labels,res.names,C,s.showHemisphere);end
             catch
             end
         else
@@ -4617,7 +5103,7 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
                 'Location','best','TextColor',C.fg,'Interpreter','none');
             try
                 set(lgdC,'Color',C.bgPane,'EdgeColor',C.dim,'TextColor',C.fg, ...
-                    'FontName',C.font,'FontSize',12,'FontWeight','bold','FontSize',14);
+                    'FontName',C.font,'FontSize',11,'FontWeight','normal');
             catch
             end
         end
@@ -4636,7 +5122,7 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         if isempty(idxShow)
             txtTop = 'none';
         else
-            nList = min(6,numel(idxShow));
+            nList = min(3,numel(idxShow));
             lines = cell(nList,1);
             for k = 1:nList
                 lines{k} = sprintf('%s: r = %.3f',fc_roi_abbrev(names{idxShow(k)},16,s.showHemisphere),valShow(k));
@@ -4730,95 +5216,45 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
     end
 
     function refreshGraphView()
-        s = guidata(fig);
-        res = s.roiResults{s.currentSubject,s.currentEpoch};
-
+        s=guidata(fig);res=s.roiResults{s.currentSubject,s.currentEpoch};
+        set(axAdj,'Position',[.04 .28 .81 .58]);set(axGraphCB,'Position',[.90 .32 .025 .48]);
+        set(axDeg,'Visible','off');set(txtGraph,'Position',[.04 .055 .91 .21],'FontSize',11,'ForegroundColor',C.fg,'HorizontalAlignment','left','Tag','FCGraphExplanation');
+        explanation=['Nodes = selected regions (or region/slice ROIs). Edge colour = signed Pearson r; width = |r|. ' ...
+            'Positive: signals tend to rise/fall together. Negative: opposite fluctuations; this does not establish inhibition. ' ...
+            'The circular layout is not anatomical distance. Lines have no direction and do not establish direct pathways or causality. ' ...
+            'The |r| threshold hides weaker edges; it is not a significance test. Shared stimulation, movement and vascular fluctuations can create edges.'];
+        cmap=fc_get_cmap(s.cmapName,256);
+        if isempty(res),fc_nodata(axAdj,'Compute ROI FC, then choose regions',C);setappdata(txtGraph,'FUSIFCGraphText',{explanation});set(txtGraph,'String',textwrap(txtGraph,{explanation}),'TooltipString',explanation);return;end
+        [M,names,order,meta]=fc_current_matrix(s,res);[M,names,~,meta]=fc_apply_region_visibility(s,M,names,order,meta);
+        short=fc_abbrev_list(names,24,s.showHemisphere);columns={};if meta.isRectangular,columns=fc_abbrev_list(meta.namesX,24,s.showHemisphere);end
+        [g,~]=fusiFCNetworkPlot(axAdj,M,short,s.roiAbsThr,s.roiCLim,cmap,columns);
+        title(axAdj,'Region network (signed Pearson correlation)','Color',C.fg,'FontSize',14);
+        fc_colorbar_legend(axGraphCB,cmap,[-s.roiCLim s.roiCLim],'Pearson r',C);
+        header=sprintf('%d regions | %d connections | display threshold |r| >= %.2g',numnodes(g),numedges(g),s.roiAbsThr);
+        setappdata(txtGraph,'FUSIFCGraphText',{header,explanation});
+        set(txtGraph,'String',textwrap(txtGraph,{header,explanation}),'TooltipString',explanation);
+    end
+    function onExportPaperFigure(varargin)
+        s=guidata(fig);res=s.roiResults{s.currentSubject,s.currentEpoch};
         try
-            set(axAdj,'Position',[0.070 0.115 0.845 0.845]);
-            set(axGraphCB,'Position',[0.955 0.215 0.022 0.600]);
-            set(axDeg,     'Visible','off');
-            set(txtGraph,'Position',[0.945 0.865 0.055 0.115]);
-        catch
-        end
-
-        cla(axAdj);
-        cla(axGraphCB);
-        try
-            cla(axDeg);
-            set(axDeg,'Visible','off');
-        catch
-        end
-
-        cmap = fc_get_cmap(s.graphCmapName,256);
-
-        if isempty(res)
-            fc_nodata(axAdj,'Thresholded weighted FC matrix',C);
-            fc_colorbar_legend(axGraphCB,cmap,[-1 1],'Pearson r',C);
-            set(txtGraph,'String','No graph yet. Compute ROI current first.');
-            return;
-        end
-
-        [M,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
-        [M,names,order,meta] = fc_apply_region_visibility(s,M,names,order,meta);
-
-        A = abs(M) >= s.roiAbsThr;
-        if ~(isfield(meta,'isRectangular') && meta.isRectangular)
-            A(1:size(A,1)+1:end) = false;
-        end
-
-        W = M;
-        W(~A) = 0;
-
-        imagesc(axAdj,W,[-1 1]);
-        if isfield(meta,'isRectangular') && meta.isRectangular
-            axis(axAdj,'tight');
-        else
-            axis(axAdj,'tight'); axis(axAdj,'normal');
-        end
-        colormap(axAdj,cmap);
-        fc_ax(axAdj,C);
-
-        title(axAdj,sprintf('Thresholded weighted FC matrix | Z %d/%d',s.slice,s.Z), ...
-            'Color',C.fg, ...
-            'Interpreter','none', ...
-            'FontWeight','bold','FontSize',14);
-        xlabel(axAdj,'Atlas region','Color',C.dim,'FontWeight','bold','FontSize',11);
-        ylabel(axAdj,'Atlas region','Color',C.dim,'FontWeight','bold','FontSize',11);
-
-        fc_set_matrix_ticks(axAdj,W,names,meta,s.showHemisphere,C);
-        if isfield(meta,'isRectangular') && meta.isRectangular
-            xlabel(axAdj,'Right atlas region','Color',C.fg,'FontWeight','bold','FontSize',11);
-            ylabel(axAdj,'Left atlas region','Color',C.fg,'FontWeight','bold','FontSize',11);
-            title(axAdj,'Left-vs-Right thresholded weighted FC matrix', ...
-                'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',11);
-        else
-            xlabel(axAdj,'Atlas region','Color',C.fg,'FontWeight','bold','FontSize',11);
-            ylabel(axAdj,'Atlas region','Color',C.fg,'FontWeight','bold','FontSize',11);
-            title(axAdj,sprintf('Thresholded weighted FC matrix | Z %d/%d',s.slice,s.Z), ...
-                'Color',C.fg,'Interpreter','none','FontWeight','bold','FontSize',11);
-        end
-        fc_colorbar_legend(axGraphCB,cmap,[-1 1],'Pearson r',C);
-
-        if isfield(meta,'isRectangular') && meta.isRectangular
-            nEdges = nnz(A);
-            possibleEdges = max(1,numel(A));
-            regionTxt = sprintf('%d L x %d R',size(A,1),size(A,2));
-        else
-            nEdges = nnz(triu(A,1));
-            possibleEdges = max(1,(size(A,1)*(size(A,1)-1)/2));
-            regionTxt = sprintf('%d',size(A,1));
-        end
-        density = nEdges / possibleEdges;
-
-        set(txtGraph,'String',sprintf([ ...
-            'Graph matrix\n\n' ...
-            'Entry = Pearson r\n' ...
-            'shown only when |r| >= threshold.\n\n' ...
-            '|r| threshold: %.2f\n' ...
-            'Regions: %s\n' ...
-            'Connections: %d\n' ...
-            'Density: %.4f'], ...
-            s.roiAbsThr,regionTxt,fc_slice_filter_text(s),nEdges,density));
+            assert(~isempty(res),'Calculate ROI current and choose your regions first.');
+            [M,names,order,meta]=fc_current_matrix(s,res);[M,names,~,meta]=fc_apply_region_visibility(s,M,names,order,meta);
+            columns=names;if meta.isRectangular,columns=meta.namesX;end
+            subj=s.subjects(s.currentSubject);
+            result=struct('R',M,'names',{names},'columnNames',{columns}, ...
+                'fullNames',{fusiFCFullRegionNames(names,subj.roiNameTable)},'colourLimit',s.roiCLim,'cmap',fc_get_cmap(s.cmapName,256), ...
+                'threshold',s.roiAbsThr,'sourceFile',subj.sourceFile,'powerFile',subj.powerFile,'TR',subj.TR, ...
+                'baseline',subj.baseline,'hemisphere',s.roiHemiMode,'atlasRegionInfo',subj.atlasRegionInfo,'maskSource',subj.maskSource, ...
+                'analysisSliceRange',s.analysisSliceRange,'displaySlice',s.slice,'sliceRegionOnly',s.sliceRegionOnly,'timeIdx',res.timeIdx,'epochWindowSec',res.epochWindowSec);
+            result.columnFullNames=fusiFCFullRegionNames(columns,subj.roiNameTable);result.rowLabels=meta.displayLabels;
+            result.columnLabels=meta.displayLabels;if meta.isRectangular,result.columnLabels=meta.displayLabelsX;end
+            result.registeredRegionFile=subj.registeredRegionFile;result.maskPolicy=subj.maskPolicy;result.includeMask=subj.mask;
+            result.sourceRegionResult=res;result.TRUserSec=subj.TRUserSec;
+            result.regionSliceSelections=s.fcRegionSliceSelections;result.overlaySmoothing=struct('enabled',s.fcOverlaySmooth,'sigmaPixels',s.fcOverlaySigma,'displayOnly',true);
+            result.caption=sprintf('%s | %s | %.3g-%.3g min | %d samples | TR %.6g s. Region mean correlations; descriptive single-recording figure. Display threshold applies only to network edges.',subj.name,res.epochName,res.epochWindowSec/60,numel(res.timeIdx),subj.TR);
+            folder=fusiUniqueOutputFolder(s.qcDir,['PaperFigure_' datestr(now,'yyyymmdd_HHMMSS')]);
+            files=fusiFCExportPaperFigure(result,folder);setappdata(fig,'FUSIFCPaperFiles',files);setStatus(['Paper figure and matching values saved: ' folder],C.good);fusiExportSavedDialog(files);
+        catch ME,setStatus(['Paper figure: ' ME.message],C.warn);if s.opts.debugRethrow,rethrow(ME);end,end
     end
 % FC_LABEL_REGION_PICK_CALLBACKS_20260512_START
     function onMatrixTickMode(~,~)
@@ -4832,53 +5268,53 @@ if ~isfield(s,'roiHemiMode') || isempty(s.roiHemiMode)
         s.fcSelectedRegionY = [];
         s.fcSelectedRegionX = [];s.fcHeatmapSeedLabel=[];s.fcHeatmapPartnerLabels=[];
         guidata(fig,s);
+        clearScanComparison();
         refreshHeatmapView();
         refreshGraphView();
         setStatus('Showing all regions again.',C.good);
     end
 
-    function onCustomRegionList(~,~)
-        s = guidata(fig);
-        res = s.roiResults{s.currentSubject,s.currentEpoch};
+    function [catalog,meta]=currentRegionCatalog()
+        s=guidata(fig);res=s.roiResults{s.currentSubject,s.currentEpoch};subj=s.subjects(s.currentSubject);
         if isempty(res)
-            setStatus('No ROI result yet. Load Seg MAT or compute ROI current first.',C.warn);
-            return;
+            labels=unique(double(subj.roiAtlas(:)));labels=labels(isfinite(labels)&labels~=0);
+            names=arrayfun(@(id)fc_roi_name(id,struct('roiNameTable',subj.roiNameTable)),labels,'UniformOutput',false);
+            meta=struct('displayLabels',labels,'isRectangular',false);
+        else
+            [~,names,~,meta]=fc_current_matrix(s,res);labels=meta.displayLabels;
         end
+        catalog=fusiFCRegionCatalog(names,subj.roiNameTable,labels,subj.roiAtlas);
+        if ~isempty(res)&&isfield(res,'roiSlices')
+            for k=1:numel(catalog),catalog(k).voxelCount=sum(res.counts(meta.groups{k}));end
+        end
+    end
+    function onCustomRegionList(varargin)
+        s=guidata(fig);
         try
-            [M,names,order,meta] = fc_current_matrix(s,res); %#ok<ASGLU>
-            if isfield(meta,'isRectangular') && meta.isRectangular
-                yNames = fc_abbrev_list(meta.namesY,42,false);
-                xNames = fc_abbrev_list(meta.namesX,42,false);
-                yDefault = 1:numel(yNames);
-                xDefault = 1:numel(xNames);
-                if isfield(s,'fcSelectedRegionY') && ~isempty(s.fcSelectedRegionY), yDefault = s.fcSelectedRegionY; end
-                if isfield(s,'fcSelectedRegionX') && ~isempty(s.fcSelectedRegionX), xDefault = s.fcSelectedRegionX; end
-                [selY,selX,ok] = fc_checkbox_select_two_dialog(yNames,xNames,yDefault,xDefault,'Visible FC regions: Left/Y and Right/X');
-                if ~ok || isempty(selY) || isempty(selX), return; end
-                s.fcSelectedRegionY = selY(:)';
-                s.fcSelectedRegionX = selX(:)';
-                s.fcSelectedRegionIdx = [];
-                guidata(fig,s);
-                refreshHeatmapView();
-                refreshGraphView();
-                setStatus(sprintf('Custom visible regions: %d left/Y x %d right/X.',numel(selY),numel(selX)),C.good);
-            else
-                listNames = fc_abbrev_list(names,46,s.showHemisphere);
-                def = 1:numel(listNames);
-                if isfield(s,'fcSelectedRegionIdx') && ~isempty(s.fcSelectedRegionIdx), def = s.fcSelectedRegionIdx; end
-                [sel,ok] = fc_checkbox_select_dialog(listNames,def,'Visible FC regions');
-                if ~ok || isempty(sel), return; end
-                s.fcSelectedRegionIdx = sel(:)';
-                s.fcSelectedRegionY = [];
-                s.fcSelectedRegionX = [];
-                guidata(fig,s);
-                refreshHeatmapView();
-                refreshGraphView();
-                setStatus(sprintf('Custom visible regions: %d.',numel(sel)),C.good);
+            res=s.roiResults{s.currentSubject,s.currentEpoch};
+            if isempty(res)
+                assert(~isempty(s.subjects(s.currentSubject).roiAtlas),'Load region labels first.');
+                s=computeROI(s,s.currentSubject,s.currentEpoch);guidata(fig,s);res=s.roiResults{s.currentSubject,s.currentEpoch};
             end
-        catch ME_custom
-            setStatus(['Custom region selector error: ' ME_custom.message],C.warn);
-        end
+            [~,names,~,meta]=fc_current_matrix(s,res);subj=s.subjects(s.currentSubject);
+            if meta.isRectangular
+                yCat=fusiFCRegionCatalog(meta.namesY,subj.roiNameTable,meta.displayLabelsY,subj.roiAtlas);
+                xCat=fusiFCRegionCatalog(meta.namesX,subj.roiNameTable,meta.displayLabelsX,subj.roiAtlas);
+                [y,ok]=scmAtlasRegionSelectionDialog(yCat,yCat,true,'Heatmap row regions (left)');if ~ok,return;end
+                [x,ok]=scmAtlasRegionSelectionDialog(xCat,xCat,true,'Heatmap column regions (right)');if ~ok,return;end
+                s.fcSelectedRegionY=[y.id];s.fcSelectedRegionX=[x.id];s.fcSelectedRegionIdx=[];
+            else
+                catalog=currentRegionCatalog();
+                selected=catalog;if ~isempty(s.fcSelectedRegionIdx),selected=catalog(s.fcSelectedRegionIdx(s.fcSelectedRegionIdx<=numel(catalog)));end
+                if isappdata(fig,'FUSIFCRegionSelectionRequest')
+                    ids=getappdata(fig,'FUSIFCRegionSelectionRequest');rmappdata(fig,'FUSIFCRegionSelectionRequest');chosen=catalog(ids);ok=true;
+                else,[chosen,ok]=scmAtlasRegionSelectionDialog(catalog,selected,true,'Choose regions for FC heatmap and network');end
+                if ~ok,return;end
+                s.fcSelectedRegionIdx=[chosen.id];s.fcSelectedRegionY=[];s.fcSelectedRegionX=[];
+            end
+            s.fcHeatmapSeedLabel=[];s.fcHeatmapPartnerLabels=[];guidata(fig,s);clearScanComparison();refreshAll();switchTab('heatmap');
+            setStatus('Selected regions applied to the heatmap, network and scan comparisons.',C.good);
+        catch ME,setStatus(['Regions: ' ME.message],C.warn);if s.opts.debugRethrow,rethrow(ME);end,end
     end
 % FC_LABEL_REGION_PICK_CALLBACKS_20260512_END
 
@@ -4890,7 +5326,7 @@ function updateROIDropdowns(names)
         if isempty(names)
             names = {'n/a'};
         end
-        namesDisplay = fc_abbrev_list(names,18,sTmp.showHemisphere);
+        namesDisplay = fusiFCFullRegionNames(names,sTmp.subjects(sTmp.currentSubject).roiNameTable);
         oldC = get(ddCompareROI,'Value');
         oldA = get(ddPairA,'Value');
         oldB = get(ddPairB,'Value');
@@ -4905,7 +5341,10 @@ function updateROIDropdowns(names)
         subj = s.subjects(s.currentSubject);
         if isempty(res) || isempty(subj.roiAtlas), return; end
 
-        [M,~,~,meta] = fc_current_matrix(s,res);
+        [M,names,order,meta] = fc_current_matrix(s,res);
+        [M,~,~,meta]=fc_apply_region_visibility(s,M,names,order,meta);
+        if isfield(meta,'sourceResult'),res=meta.sourceResult;end
+        if meta.isRectangular||isempty(M),return;end
         sel = fc_clip(get(ddCompareROI,'Value'),1,size(M,1));
         valsDisplay = M(sel,:);
         valsRaw = fc_display_values_to_raw(res,meta,valsDisplay);
@@ -4920,6 +5359,10 @@ function updateROIDropdowns(names)
         mapS = nan(size(atlasS));
         for k = 1:numel(res.labels)
             labK = round(double(res.labels(k)));
+            if isfield(res,'roiSlices')
+                if res.roiSlices(k)~=s.slice,continue;end
+                labK=res.atlasLabels(k);
+            end
             nameK = '';
             try
                 if isfield(res,'names') && k <= numel(res.names), nameK = res.names{k}; end
@@ -4929,10 +5372,13 @@ function updateROIDropdowns(names)
                 continue;
             end
             if k <= numel(valsRaw) && isfinite(valsRaw(k))
-                m = fc_label_mask_for_slice(atlasS,labK);
+                m = atlasS==labK;
+                if ~any(atlasS(:)<0)&&~isfield(res,'roiSlices'),m=fc_label_mask_for_slice(atlasS,labK);end
+                if ~isempty(subj.mask),m=m&subj.mask(:,:,s.slice);end
                 mapS(m) = valsRaw(k);
             end
         end
+        mapS=fc_display_correlation(s,mapS,subj.mask(:,:,s.slice));
         ok = true;
     end
 end
@@ -4940,6 +5386,10 @@ end
 
 % HELPER FUNCTIONS
 % =========================================================================
+function values=fc_display_correlation(s,values,mask)
+if isfield(s,'fcOverlaySmooth')&&s.fcOverlaySmooth,values=fusiFCSmoothCorrelation(values,mask,s.fcOverlaySigma);end
+end
+
 function p = fc_panel(parent,pos,titleStr,C)
 p = uipanel('Parent',parent,'Units','normalized','Position',pos, ...
     'BackgroundColor',C.bgPane,'ForegroundColor',C.fg, ...
@@ -5022,18 +5472,21 @@ function s = fc_empty_subject()
 s = struct();
 s.I4 = [];
 s.TR = 1;
+s.TRUserSec=NaN;
 s.mask = [];
+s.baseMask=[];s.maskPolicy='auto';s.maskSource='';s.atlasExcludedMask=[];
 s.anat = [];
 s.anatIsDisplayReady = false;
 s.roiAtlas = [];
 s.roiNameTable = struct('labels',[],'names',{{}});
 s.atlasRegionInfo=[];s.atlasSourceFile='';
 s.registeredRegionPayload=[];s.registeredRegionFile='';s.referenceMean=[];s.referenceMedian=[];
-s.spacingUm=[NaN NaN NaN];s.spacingSource='Uncalibrated';s.sourceFile='';
+s.spacingUm=[NaN NaN NaN];s.spacingSource='Uncalibrated';s.sourceFile='';s.referenceValid=[];s.referenceVersion=0;
 s.displayUnderlay=[];s.displayUnderlayIsRGB=false;s.displayUnderlayReady=false;s.displayUnderlayName='';
 s.name = '';
 s.group = 'All';
 s.analysisDir = '';
+s.functionalSource='I';s.baseline=struct('start',0,'end',180,'mode','sec');s.powerFile='';
 end
 
 function [s,ok] = fc_one_subject(in,opts,idx)
@@ -5046,6 +5499,7 @@ if isnumeric(in)
     s.I4 = fc_force4d(in);
     s=fusiFCReferenceImages(s,opts);
     s.analysisDir = opts.saveRoot;
+    if isfield(opts,'maskMode')&&strcmpi(opts.maskMode,'none'),s.maskPolicy='none';end
     if isfield(opts,'atlasRegionFile')&&~isempty(opts.atlasRegionFile)
         s=fc_apply_registered_regions(s,load(opts.atlasRegionFile),opts.atlasRegionFile);
     end
@@ -5055,6 +5509,11 @@ end
 
 if ~isstruct(in), return; end
 if isfield(in,'sourceFile'),s.sourceFile=char(in.sourceFile);end
+for field={'savedFile','lazyFile','sourceFile'}
+    if isfield(in,field{1})&&isfile(in.(field{1})),s.powerFile=char(in.(field{1}));break;end
+end
+if isfield(in,'functionalSource'),s.functionalSource=char(in.functionalSource);end
+if isfield(in,'baseline')&&isstruct(in.baseline),s.baseline=in.baseline;end
 if isfield(in,'name') && ~isempty(in.name), s.name = char(in.name); end
 if isfield(in,'group') && ~isempty(in.group), s.group = char(in.group); end
 if isfield(in,'TR') && ~isempty(in.TR), s.TR = double(in.TR); end
@@ -5067,10 +5526,14 @@ s=fusiFCReferenceImages(s,in);
 [Y,X,Z] = fc_size3(s.I4);
 
 if isfield(in,'mask') && ~isempty(in.mask)
+    fc_validate_mask_grid(in.mask,Y,X,Z);
     s.mask = fc_fit_volume(in.mask,Y,X,Z,true);
 elseif isfield(in,'brainMask') && ~isempty(in.brainMask)
+    fc_validate_mask_grid(in.brainMask,Y,X,Z);
     s.mask = fc_fit_volume(in.brainMask,Y,X,Z,true);
 end
+if ~isempty(s.mask),s.baseMask=s.mask;s.maskPolicy='provided';end
+if isfield(opts,'maskMode')&&strcmpi(opts.maskMode,'none'),s.maskPolicy='none';end
 
 if isfield(in,'anatomical_reference') && ~isempty(in.anatomical_reference)
     s.anat = fc_fit_volume(in.anatomical_reference,Y,X,Z,false);
@@ -5130,10 +5593,11 @@ ok = true;
 end
 
 function s=fc_apply_registered_regions(s,payload,file)
-[matched,A,meta]=fusiAtlasRegionInput(payload,size(s.I4,[1 2 3]));
+shape=size(s.I4,[1 2 3]);if isempty(s.I4),shape=size(s.referenceMean,[1 2 3]);end
+[matched,A,meta]=fusiAtlasRegionInput(payload,shape);
 assert(matched,'deConfUSIon:AtlasRegionInput','Select a saved 3D Regions_All / Regions_Merged bundle.');
 A=int32(A);excluded=ismember(abs(A),meta.excludedRegionIDs);A(excluded)=0;
-if isempty(s.mask),s.mask=true(size(A));end;s.mask(excluded)=false;
+s.atlasExcludedMask=excluded;
 A(meta.leftHemisphereMask)=-abs(A(meta.leftHemisphereMask));
 s.roiAtlas=A;s.atlasSourceFile=file;
 s.registeredRegionPayload=payload;s.registeredRegionFile=file;
@@ -5143,7 +5607,8 @@ s.atlasRegionInfo=struct('space',meta.space,'grouping',meta.regionGrouping, ...
 ids=meta.nameTable.labels;names=meta.nameTable.names;fullNames=meta.nameTable.fullNames;
 s.roiNameTable=struct('labels',[-ids;ids], ...
  'names',{[strcat('L_',names);strcat('R_',names)]}, ...
- 'fullNames',{[strcat('Left ',fullNames);strcat('Right ',fullNames)]});
+ 'fullNames',{[cellfun(@(n)['Left ' n],fullNames,'UniformOutput',false);cellfun(@(n)['Right ' n],fullNames,'UniformOutput',false)]});
+s=fusiFCExcludeNonTissue(s);
 end
 
 function [I,ok] = fc_get_functional(s,opts)
@@ -5213,10 +5678,16 @@ end
 if ~isempty(V) && makeLogical, V = logical(V); end
 end
 
+function fc_validate_mask_grid(mask,Y,X,Z)
+sz=size(mask,[1 2 3]);
+assert(isequal(sz,[Y X Z]),'deConfUSIon:FCMaskGrid', ...
+ 'Mask grid %s does not match functional grid %s. Select the matching mask; FC will not resize or transpose a mask silently.',mat2str(sz),mat2str([Y X Z]));
+end
+
 function [subjects,msg] = fc_startup_masks(subjects,opts)
 if ~opts.askMaskAtStart
     for i = 1:numel(subjects)
-        if isempty(subjects(i).mask), subjects(i).mask = fc_auto_mask(subjects(i).I4); end
+        subjects(i)=fusiFCExcludeNonTissue(subjects(i));
     end
     msg = 'Mask: auto for missing.';
     return;
@@ -5233,21 +5704,20 @@ end
 if isempty(choice), choice = 'Auto masks'; end
 if strcmpi(choice,'Use provided')
     for i = 1:numel(subjects)
-        if isempty(subjects(i).mask), subjects(i).mask = fc_auto_mask(subjects(i).I4); end
+        subjects(i)=fusiFCExcludeNonTissue(subjects(i));
     end
     msg = 'Mask: provided with auto fallback.';
 elseif strcmpi(choice,'No mask')
+    for i=1:numel(subjects),subjects(i).maskPolicy='none';subjects(i)=fusiFCExcludeNonTissue(subjects(i));end
     msg = 'Mask: none.';
 else
-    for i = 1:numel(subjects), subjects(i).mask = fc_auto_mask(subjects(i).I4); end
+    for i=1:numel(subjects),subjects(i).maskPolicy='auto';subjects(i)=fusiFCExcludeNonTissue(subjects(i));end
     msg = 'Mask: automatic.';
 end
 end
 
 function mask = fc_auto_mask(I4)
-m = mean(I4,4);
-thr = fc_prctile(m(:),25);
-mask = m > thr;
+mask = isfinite(mean(I4,4))&max(I4,[],4)>min(I4,[],4);
 end
 
 function [atlas,regionPayload,regionFile] = fc_ask_common_atlas(subj,opts,Y,X,Z)
@@ -5473,6 +5943,13 @@ ext = lower(ext);
 
 if strcmp(ext,'.mat')
     S = load(fullf);
+    bundle=scmReadMaskEditorBundle(S);
+    if ~isempty(bundle)
+        context=struct('sizeYXZ',[Y X Z],'nativeSizeYXZ',[Y X Z],'isAtlasWarped',false,'mapping',[]);
+        bundle=scmReadMaskEditorBundle('align',bundle,context);U=bundle.image;
+        if ~isempty(bundle.brainMask),U(~bundle.brainMask)=NaN;end
+        isDisplayReady=bundle.isProcessed;return;
+    end
     [matched,registered,meta]=fusiReadAtlasUnderlay3D(S);
     if matched
         native=double(meta.transform.scanGeometry.originalSize);fixed=double(meta.transform.outputSize);
@@ -5668,7 +6145,7 @@ y1 = max(1,seedY-left);
 y2 = min(Y,seedY+right);
 end
 
-function res = fc_seed_fc(I4,TR,mask,seedX,seedY,seedZ,boxSize,useSliceOnly,chunkVox)
+function res = fc_seed_fc(I4,TR,mask,seedX,seedY,seedZ,boxSize,useSliceOnly,chunkVox,regionSeed)
 [Y,X,Z,T] = size(I4); %#ok<ASGLU>
 if isempty(mask), mask = fc_auto_mask(I4); end
 seedX = fc_clip(seedX,1,X); seedY = fc_clip(seedY,1,Y); seedZ = fc_clip(seedZ,1,Z);
@@ -5676,8 +6153,9 @@ seedMask2D = false(Y,X);
 [x1,x2,y1,y2] = fc_seed_bounds(seedX,seedY,boxSize,X,Y);
 seedMask2D(y1:y2,x1:x2) = true;
 seedMask = false(Y,X,Z); seedMask(:,:,seedZ) = seedMask2D; seedMask = seedMask & mask;
+if nargin>=10&&~isempty(regionSeed),seedMask=regionSeed & mask;end
 seedIdx = find(seedMask(:));
-assert(~isempty(seedIdx),'deConfUSIon:FCSeedOutsideMask','The seed has no included tissue voxels. Move it inside the brain mask and outside ventricles.');
+assert(~isempty(seedIdx),'deConfUSIon:FCSeedOutsideMask','This seed is excluded by the active mask or atlas tissue/CSF labels. Check Data / atlas > Tissue mask and show the Mask overlay.');
 V = Y*X*Z; D = reshape(I4,[V size(I4,4)]);
 seedTS = mean(double(D(seedIdx,:)),1)';
 s = seedTS - mean(seedTS); sNorm = sqrt(sum(s.^2));
@@ -5850,6 +6328,7 @@ if strcmpi(mode,'lvr')
         meta.displayLabels = labels0(leftIdx);
         meta.rawLabels = labels0(:);
         meta.rawNames = names0(:);
+        meta.sourceResult=res;
         meta.groups = cell(numel(leftIdx),1);
         for ii = 1:numel(leftIdx), meta.groups{ii} = leftIdx(ii); end
         return;
@@ -5858,7 +6337,8 @@ end
 % FC_LR_EPOCH_PATCH_20260505_LVR_MATRIX_END
 
 if strcmpi(mode,'merged') && isfield(res,'meanTS') && ~isempty(res.meanTS) && size(res.meanTS,2) == n0
-    [TSmerge,names,labelsDisplay,groups,order] = fc_merge_lr_timecourses(res.meanTS,names0,labels0);
+    counts=ones(n0,1);if isfield(res,'counts')&&numel(res.counts)==n0,counts=res.counts(:);end
+    [TSmerge,names,labelsDisplay,groups,order] = fc_merge_lr_timecourses(res.meanTS,names0,labels0,counts);
     M = fc_corr_matrix(TSmerge);
 else
     keep = true(n0,1);
@@ -5916,6 +6396,7 @@ meta.groups = groups(:);
 meta.displayLabels = labelsDisplay(:);
 meta.rawLabels = labels0(:);
 meta.rawNames = names0(:);
+meta.sourceResult=res;
 end
 function mode = fc_region_mode_from_state(s)
 mode = 'both';
@@ -5973,13 +6454,16 @@ catch
 end
 end
 
-function [TSmerge,namesMerge,labelsMerge,groups,order] = fc_merge_lr_timecourses(meanTS,names0,labels0)
+function [TSmerge,namesMerge,labelsMerge,groups,order] = fc_merge_lr_timecourses(meanTS,names0,labels0,counts)
 n = numel(labels0);
+if nargin<4,counts=ones(n,1);end
+counts=double(counts(:));counts(~isfinite(counts)|counts<=0)=1;
 keys = cell(n,1);
 stems = cell(n,1);
 absLabs = zeros(n,1);
 for ii = 1:n
     [keys{ii},stems{ii},absLabs(ii)] = fc_region_merge_key(names0{ii},labels0(ii));
+    if any(labels0<0),keys{ii}=sprintf('roi%.0f',absLabs(ii));end
 end
 
 uniqueKeys = {};
@@ -6005,18 +6489,19 @@ for gg = 1:nG
     X = double(meanTS(:,idx));
     good = isfinite(X);
     X(~good) = 0;
-    cnt = sum(good,2);
-    TSmerge(:,gg) = sum(X,2) ./ max(1,cnt);
-    TSmerge(cnt == 0,gg) = 0;
+    weights=counts(idx)';cnt=sum(good.*weights,2);
+    TSmerge(:,gg) = sum(X.*weights,2) ./ max(1,cnt);
+    TSmerge(cnt == 0,gg) = NaN;
     order(gg) = idx(1);
     labelsMerge(gg) = absLabs(idx(1));
-    namesMerge{gg} = sprintf('%s [%g]',stems{idx(1)},labelsMerge(gg));
+    namesMerge{gg} = sprintf('%s [%.0f]',stems{idx(1)},labelsMerge(gg));
 end
 end
 
 function [key,stem,absLab] = fc_region_merge_key(name,label)
 absLab = abs(round(double(label)));
 stem = fc_region_fullname_no_lr(name);
+if contains(stem,'|'),stem=strtrim(extractBefore(stem,'|'));end
 stem = regexprep(stem,'\s*\[[^\]]*\]\s*$','');
 stem = strtrim(stem);
 if isempty(stem)
@@ -6032,7 +6517,7 @@ function s = fc_region_fullname_no_lr(name)
 s = strtrim(char(name));
 s = regexprep(s,'\s*\[[^\]]*\]\s*$','');
 s = regexprep(s,'^\s*-?\d+\s*','');
-s = regexprep(s,'^\s*[LR][_\-\s]+','');
+s = regexprep(s,'^\s*(?:Left|Right|[LR])[_\-\s]+','','ignorecase');
 s = strrep(s,'_',' ');
 s = regexprep(s,'\s+',' ');
 s = strtrim(s);
@@ -6040,22 +6525,31 @@ end
 
 function ts = fc_display_ts_for_index(res,meta,dispIdx)
 try
+    if isfield(meta,'sourceResult'),res=meta.sourceResult;end
     dispIdx = max(1,min(numel(meta.groups),round(dispIdx)));
     idx = meta.groups{dispIdx};
     X = double(res.meanTS(:,idx));
     good = isfinite(X);
     X(~good) = 0;
-    cnt = sum(good,2);
-    ts = sum(X,2) ./ max(1,cnt);
-    ts(cnt == 0) = 0;
+    weights=ones(1,numel(idx));if isfield(res,'counts'),weights=double(res.counts(idx))';end
+    cnt = sum(good.*weights,2);
+    ts = sum(X.*weights,2) ./ max(1,cnt);
+    ts(cnt == 0) = NaN;
 catch
     ts = zeros(size(res.meanTS,1),1);
 end
 end
 
-function dispIdx = fc_display_index_from_raw_label(res,meta,rawLabel)
+function dispIdx = fc_display_index_from_raw_label(res,meta,rawLabel,z)
 dispIdx = [];
 try
+    if isfield(meta,'sourceResult'),res=meta.sourceResult;end
+    if isfield(res,'roiSlices')
+        if nargin<4,return;end
+        hit=find(res.atlasLabels==rawLabel&res.roiSlices==z,1);
+        if isempty(hit),return;end
+        rawLabel=res.labels(hit);
+    end
     rawIdx = find(round(double(res.labels(:))) == round(double(rawLabel)),1,'first');
     if isempty(rawIdx)
         rawIdx = find(abs(round(double(res.labels(:)))) == abs(round(double(rawLabel))),1,'first');
@@ -6146,6 +6640,14 @@ end
 
 function rgb = fc_get_underlay(s)
 subj = s.subjects(s.currentSubject);
+persistent cacheKeys cacheValues
+if isempty(cacheKeys),cacheKeys={};cacheValues={};end
+cached=any(strcmp(s.underlayMode,{'scm','mean','median'}));
+if cached
+ key={subj.referenceVersion,s.slice,s.underlayMode,s.underlayViewMode,s.underlayBrightness, ...
+  s.underlayContrast,s.underlayGamma,s.underlayLogGain,s.underlaySharpness,s.underlayVesselSize,s.underlayVesselLev};
+ for k=1:numel(cacheKeys),if isequaln(cacheKeys{k},key),rgb=cacheValues{k};return;end,end
+end
 I4 = subj.I4;
 meanImg=subj.referenceMean;medImg=subj.referenceMedian;
 if isempty(medImg),medImg=fc_fast_median_time(I4);end
@@ -6196,6 +6698,10 @@ switch lower(s.underlayMode)
         end
     otherwise
         rgb = fc_underlay_to_rgb(medImg(:,:,s.slice),s,false);
+end
+if cached
+ cacheKeys=[{key} cacheKeys];cacheValues=[{rgb} cacheValues];
+ cacheKeys=cacheKeys(1:min(24,end));cacheValues=cacheValues(1:min(24,end));
 end
 end
 
@@ -6420,17 +6926,17 @@ zeroFrac = (0 - clim(1)) ./ max(eps,(clim(2)-clim(1)));
 zeroFrac = max(0,min(1,zeroFrac));
 
 if isVertical
-    img = reshape(nC:-1:1,[],1);
+    img = reshape(1:nC,[],1);
     imagesc(ax,img);
     colormap(ax,cmap);
     hold(ax,'on');
 
-    y0 = round(1 + (1-zeroFrac) .* (nC - 1));
+    y0 = round(1 + zeroFrac .* (nC - 1));
     y0 = max(1,min(nC,y0));
     try, line(ax,[0.55 1.45],[y0 y0],'Color',[1 1 1],'LineWidth',1.8); catch, end
 
     tickVals = [1 y0 nC];
-    tickLabs = {num2str(clim(2),'%.2g'),'0',num2str(clim(1),'%.2g')};
+    tickLabs = {num2str(clim(1),'%.2g'),'0',num2str(clim(2),'%.2g')};
     [tickVals,ia] = unique(tickVals,'stable');
     tickLabs = tickLabs(ia);
     [tickVals,ord] = sort(tickVals,'ascend');
@@ -7104,6 +7610,10 @@ function fcBundle = fc_make_group_bundle(s)
 %   - Fisher z = atanh(r) is stored as Z.
 %   - Group analysis should average/statistically compare Z, not R.
 
+if isfield(s,'fcRegionSliceSelections')&&~isempty(s.fcRegionSliceSelections)
+    fcBundle=fc_auto_make_bundle_v4(s);fcBundle.tag=s.tag;fcBundle.saveRoot=s.saveRoot;fcBundle.qcDir=s.qcDir;
+    return;
+end
 fcBundle = struct();
 
 fcBundle.version = 'FC_GroupBundle_v1';
@@ -7914,6 +8424,18 @@ end
 
 function sliceResults = deConfUSIon_FC_build_slice_bundle(s,subIdx,resWhole)
 sliceResults = struct([]);
+if isfield(resWhole,'roiSlices')
+    % Preserve explicit region/slice IDs; never recalculate them as atlas IDs.
+    for z=unique(resWhole.roiSlices(:))'
+        keep=resWhole.roiSlices==z;r=struct('sliceIndex',z,'sliceLabel',sprintf('Slice%03d',z), ...
+            'labels',resWhole.labels(keep),'names',{resWhole.names(keep)},'counts',resWhole.counts(keep), ...
+            'meanTS',resWhole.meanTS(:,keep),'R',resWhole.M(keep,keep),'M',resWhole.M(keep,keep), ...
+            'timeIdx',resWhole.timeIdx,'labelMap',resWhole.labelMap(:,:,z));
+        r.Z=atanh(max(-.999999,min(.999999,r.R)));r.Z(1:size(r.Z,1)+1:end)=0;
+        sliceResults=[sliceResults r]; %#ok<AGROW>
+    end
+    return;
+end
 try
     if ~isfield(s,'Z') || s.Z < 1 || isempty(resWhole), return; end
     n = 0;
@@ -8232,7 +8754,9 @@ end
 
 function txt = fc_slice_filter_text(s)
 try
-    if isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
+    if isfield(s,'fcRegionSliceSelections')&&~isempty(s.fcRegionSliceSelections)
+        txt=sprintf('%d explicit region/slice ROIs',numel(s.fcRegionSliceSelections));
+    elseif isfield(s,'sliceRegionOnly') && s.sliceRegionOnly
         txt = sprintf('Z %d/%d only',s.slice,s.Z);
     else
         txt = sprintf('all regions; Z %d/%d display',s.slice,s.Z);
@@ -8782,6 +9306,17 @@ if nargin < 1 || ~isstruct(s)
     error('Expected FunctionalConnectivity GUI state struct.');
 end
 
+% Capture true slice matrices before a lazy movie is released. Read one scan
+% at a time; exporting never requires concatenating the acquisition movies.
+if isfield(s,'fcScanSequence')&&~isempty(s.fcScanSequence)
+    for index=find(fusiScanSequence('included',s.fcScanSequence))
+        rr=s.roiResults{index,s.currentEpoch};
+        if isempty(rr),continue;end
+        s=fusiFCLoadScan(s,index);
+        rr.sliceResults=deConfUSIon_FC_build_slice_bundle(s,index,rr);
+        s.roiResults{index,s.currentEpoch}=rr;
+    end
+end
 % Build rich but struct-safe bundle.
 fcBundle = fc_auto_make_bundle_v4(s);
 
@@ -8866,6 +9401,7 @@ fcBundle.note = ['Auto-saved FC GroupAnalysis bundle. R = Pearson correlation fo
                  'Z = Fisher z for group statistics. Includes ROI matrices, heatmap info, ' ...
                  'ROI mean timecourses, seed results, compare ROI information, and sliceResults when available.'];
 fcBundle.settings = fc_settings_auto_v4(s);
+fcBundle.note=[fcBundle.note ' Repeated scans from one animal are repeated measurements, not independent animals.'];
 
 nSub = 0;
 try, nSub = numel(s.subjects); catch, nSub = 0; end
@@ -8873,15 +9409,26 @@ tmpl = fc_subject_template_auto_v4();
 fcBundle.subjects = repmat(tmpl,1,max(0,nSub));
 
 for i = 1:nSub
+    if isfield(s,'fcScanSequence')&&~isempty(s.fcScanSequence)
+        included=fusiScanSequence('included',s.fcScanSequence);if ~included(i),continue;end
+    end
     try, subj = s.subjects(i); catch, subj = struct(); end
 
     rec = tmpl;
     rec.name = fc_getc_auto_v4(subj,'name',sprintf('Subject_%02d',i));
     rec.group = fc_getc_auto_v4(subj,'group','');
     rec.TR = fc_getn_auto_v4(subj,'TR',NaN);
+    rec.TRUserSec=fc_getn_auto_v4(subj,'TRUserSec',NaN);
     rec.analysisDir = fc_getc_auto_v4(subj,'analysisDir','');
     rec.isStepMotor3D = fc_getn_auto_v4(s,'Z',1) > 1;
-    rec.nSlices = size(subj.I4,3);
+    rec.nSlices = s.Z;
+    rec.powerFile=subj.powerFile;rec.baseline=subj.baseline;rec.functionalSource=subj.functionalSource;
+    rec.maskSource=subj.maskSource;rec.maskPolicy=subj.maskPolicy;
+    rec.animalId='';rec.scanKey='';rec.sequenceIndex=i;
+    if isfield(s,'fcScanSequence')&&~isempty(s.fcScanSequence)
+        d=s.fcScanSequence.scans{i};rec.scanKey=d.key;
+        [~,animalStem]=fileparts(d.rawFile);rec.animalId=regexprep(animalStem,'_scan\d+(?:_.*)?$','','ignorecase');
+    end
     rec.referenceImage=subj.referenceMedian;rec.anatomy=subj.anat;
     rec.analysisSliceRange=s.analysisSliceRange;rec.spacingUm=subj.spacingUm;
     rec.atlasRegionInfo=subj.atlasRegionInfo;rec.hemisphereConvention='Signed labels: negative anatomical Left, positive anatomical Right; saved registration determines image orientation.';
@@ -8923,15 +9470,15 @@ for i = 1:nSub
         % TARGETED_FC_AUTO_V4_SPATIAL_FULLNAMES_20260622
         rec.fullNames = fc_cellstr_auto_v4(fc_get_auto_v4(res,'fullNames',{}));
         if isempty(rec.fullNames), rec.fullNames = rec.names; end
-        rec.sourceFile = fc_getc_auto_v4(res,'sourceFile','');
-        rec.roiSourceFile = rec.sourceFile;
+        rec.sourceFile = fc_getc_auto_v4(subj,'sourceFile','');
+        rec.roiSourceFile = fc_getc_auto_v4(res,'sourceFile',rec.sourceFile);
         try
             atlasNow = fc_get_auto_v4(res,'roiAtlas',[]);
             if isempty(atlasNow), atlasNow = fc_get_auto_v4(res,'labelMap',[]); end
             if isempty(atlasNow), atlasNow = fc_get_auto_v4(subj,'roiAtlas',[]); end
             if isempty(atlasNow), atlasNow = fc_get_auto_v4(s,'roiAtlas',[]); end
             if ~isempty(atlasNow)
-                atlasNow = int32(round(double(atlasNow)));
+                if ~isfield(res,'roiSlices'),atlasNow = int32(round(double(atlasNow)));end
                 rec.roiAtlas = atlasNow;
                 rec.labelMap = atlasNow;
                 rec.roiMap = atlasNow;
@@ -8941,6 +9488,9 @@ for i = 1:nSub
         end
         rec.counts = double(fc_get_auto_v4(res,'counts',[])); rec.counts = rec.counts(:);
         rec.meanTS = double(fc_get_auto_v4(res,'meanTS',[]));
+        rec.roiScope=fc_getc_auto_v4(res,'roiScope','volume');
+        rec.atlasLabels=fc_get_auto_v4(res,'atlasLabels',rec.labels);rec.roiSlices=fc_get_auto_v4(res,'roiSlices',[]);
+        rec.regionSliceSelections=fc_get_auto_v4(res,'regionSliceSelections',struct([]));
         rec.timeIdx = fc_get_auto_v4(res,'timeIdx',[]);
         rec.epochWindowSec=fc_get_auto_v4(res,'epochWindowSec',[]);rec.nSamples=size(rec.meanTS,1);
         rec.R = R;
@@ -8982,6 +9532,8 @@ settings.seedZ = fc_getn_auto_v4(s,'slice',NaN);
 settings.seedBoxSize = fc_getn_auto_v4(s,'seedBoxSize',NaN);
 settings.useSliceOnly = fc_get_auto_v4(s,'useSliceOnly',false);
 settings.analysisSliceRange=s.analysisSliceRange;
+settings.regionSliceSelections=s.fcRegionSliceSelections;
+settings.overlaySmoothing=struct('enabled',s.fcOverlaySmooth,'sigmaPixels',s.fcOverlaySigma,'displayOnly',true);
 settings.fcEpochMode=s.fcEpochMode;settings.fcInjStartMin=s.fcInjStartMin;settings.fcInjEndMin=s.fcInjEndMin;
 settings.fcEpochWinMin=s.fcEpochWinMin;settings.fcUseEpochWin=s.fcUseEpochWin;
 settings.note = 'Use Fisher Z for group statistics; use Pearson R for display. Slices are repeated spatial samples, not independent animals.';
@@ -9013,6 +9565,7 @@ end
 
 function sliceResults = fc_slice_results_auto_v4(s,i,res)
 sliceResults = struct([]);
+if isfield(res,'sliceResults'),sliceResults=res.sliceResults;return;end
 try
     sliceResults = deConfUSIon_FC_build_slice_bundle(s,i,res);
 catch
@@ -9077,6 +9630,9 @@ for e = 1:nEp
             E.sliceResults=fc_slice_results_auto_v4(s,i,rr);E.epochWindowSec=fc_get_auto_v4(rr,'epochWindowSec',[]);
             E.roi = struct('labels',labels,'names',{names},'counts',double(fc_get_auto_v4(rr,'counts',[])), ...
                 'meanTS',double(fc_get_auto_v4(rr,'meanTS',[])),'timeIdx',fc_get_auto_v4(rr,'timeIdx',[]),'R',R,'Z',Z);
+            for field={'fullNames','roiScope','atlasLabels','roiSlices','regionSliceSelections'}
+                if isfield(rr,field{1}),E.roi.(field{1})=rr.(field{1});end
+            end
             E.heatmap = struct('R',R,'Z',Z,'labels',labels,'names',{names});
         end
     catch
@@ -9263,9 +9819,14 @@ end
 try
     if isfield(fcBundle,'subjects')
         for ii = 1:numel(fcBundle.subjects)
-            if isfield(fcBundle,'roiMap'), fcBundle.subjects(ii).roiMap = fcBundle.roiMap; end
-            if isfield(fcBundle,'labelMap'), fcBundle.subjects(ii).labelMap = fcBundle.labelMap; end
-            if isfield(fcBundle,'spatialMapNote'), fcBundle.subjects(ii).spatialMapNote = fcBundle.spatialMapNote; end
+            % A legacy workspace map must not overwrite a computed subject's
+            % atlas or the exact composite region/slice label map.
+            hasMap=isfield(fcBundle.subjects(ii),'roiMap')&&~isempty(fcBundle.subjects(ii).roiMap);
+            if ~hasMap
+                if isfield(fcBundle,'roiMap'), fcBundle.subjects(ii).roiMap = fcBundle.roiMap; end
+                if isfield(fcBundle,'labelMap'), fcBundle.subjects(ii).labelMap = fcBundle.labelMap; end
+                if isfield(fcBundle,'spatialMapNote'), fcBundle.subjects(ii).spatialMapNote = fcBundle.spatialMapNote; end
+            end
             if isfield(fcBundle,'sliceResults') && ~isfield(fcBundle.subjects(ii),'sliceResults')
                 fcBundle.subjects(ii).sliceResults = fcBundle.sliceResults;
                 fcBundle.subjects(ii).nSlices = numel(fcBundle.sliceResults);

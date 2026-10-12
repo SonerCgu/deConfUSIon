@@ -9,7 +9,7 @@ for k=1:numel(subjects)
  end
  assert(~isempty(hit),'deConfUSIon:FCPeriodMissing','%s has no calculated %s period. Calculate it in FC and export again.',subjects(k).name,period);
  rec=epochs(hit);roi=rec.roi;
- for field={'R','Z','labels','names','meanTS','timeIdx','counts'}
+ for field={'R','Z','labels','names','meanTS','timeIdx','counts','fullNames','roiScope','atlasLabels','roiSlices','regionSliceSelections'}
   if isfield(roi,field{1}),subjects(k).(field{1})=roi.(field{1});end
  end
  subjects(k).epochName=rec.epochName;subjects(k).displayMatrix=roi.R;subjects(k).displayZ=roi.Z;

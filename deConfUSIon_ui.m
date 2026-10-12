@@ -41,18 +41,23 @@ if isempty(h), return; end
 if ~isgraphics(h) || isequal(getappdata(h,'CancelProcessing'),true)
     error('deConfUSIon:ProcessingCancelled','Processing cancelled; the input dataset is unchanged.');
 end
-fraction=min(1,max(0,fraction));
-if fraction<1 && toc(getappdata(h,'ProgressUpdated'))<.15, return; end
+unmetered=isnan(fraction);
+stageChanged=~isequal(getappdata(h,'ProgressStage'),stage);
+if ~unmetered,fraction=min(1,max(0,fraction));end
+if ~stageChanged&&fraction<1&&toc(getappdata(h,'ProgressUpdated'))<.15,return;end
 elapsed=toc(getappdata(h,'ProgressStarted'));
 estimate='Estimating remaining time...';
-if fraction>=.02 && elapsed>=1
+if unmetered
+    estimate=sprintf('Reading from disk | elapsed %s',durationText(elapsed));
+elseif fraction>=.02 && elapsed>=1
     remaining=elapsed*(1-fraction)/max(eps,fraction);
     estimate=sprintf('Elapsed %s | about %s remaining',durationText(elapsed),durationText(remaining));
 end
-waitbar(fraction,h,'');
-set(findall(h,'Tag','ProcessingStatus'),'String',sprintf('%s  (%d%%)',stage,round(100*fraction)));
+if unmetered,status=stage;
+else,waitbar(fraction,h,'');status=sprintf('%s  (%d%%)',stage,round(100*fraction));end
+set(findall(h,'Tag','ProcessingStatus'),'String',status);
 set(findall(h,'Tag','ProcessingETA'),'String',estimate);
-setappdata(h,'ProgressUpdated',tic); drawnow;
+setappdata(h,'ProgressUpdated',tic);setappdata(h,'ProgressStage',stage);drawnow;
 if ~isgraphics(h) || isequal(getappdata(h,'CancelProcessing'),true)
     error('deConfUSIon:ProcessingCancelled','Processing cancelled; the input dataset is unchanged.');
 end
@@ -355,7 +360,9 @@ switch lower(topicKey)
         checks='Fast mode starts automatically above 4096 frames; shorter recordings retain exact PCA. The residual measures basis approximation, not anatomical or physiological validity. Weak components can differ from exact PCA. Method, seed and iterations are recorded with applied results. Component sign/order do not establish a source as artifact; inspect the time course and spatial pattern.';
     case 'fc'
         definition='Functional connectivity compares time courses between voxels or regions after the selected preprocessing.';
-        math='Pearson r= cov(x,y)/(sd(x)sd(y)); t=r*sqrt((n-2)/(1-r^2)). Multiple tests are controlled with Benjamini-Hochberg FDR.';
+        math='Pearson r = covariance(x,y)/(SD(x) SD(y)). Region traces are voxel means; merging Left + Right uses voxel-count weights. Group export includes Fisher z = atanh(r). Colour range and network edge threshold change display only; network edges are not significance tests.';
+        workflow='1) Load comparable processed data and verify Analysed TR. 2) Load registered Histology and region labels; inspect alignment and tissue inclusion. 3) Add recordings with Scans / order; unchanged positioning permits sharing one reviewed atlas alignment. PSC baseline references amplitudes; FC calculates each scan separately. 4) Set Pre / During / Post and local times. In Regions choose Volume regions, Displayed slice, or Regions + slices (e.g. CPu at Z7 and dentate gyrus at Z20), then ROI current or all periods. 5) Choose heatmap/network regions, inspect Graph explanation, Export paper figure and Export to Group. Image / labels offers optional display-only Gaussian smoothing in pixels. See docs/functional-connectivity-paper-workflow.md.';
+        checks='Check motion, true acquired sample count, timing, preprocessing and atlas coverage. Shared stimulus timing can produce correlations without altered neural interactions. Stimulation responses in SCM do not guarantee FC effects. The current FC GUI does not remove an event-averaged stimulus response. Use independent animals for group inference; scans and slices from the same animal are repeated measurements.';
     case {'registration','registration_3d'}
         definition='Registration estimates a transform that places the functional volume and atlas/underlay in the same coordinate system.';
         math='Rigid: xregistered=R*x+t. Affine adds scale/shear. 2D automatic refinement maximizes normalized mutual information NMI=(H(F)+H(W))/H(F,W), with entropy H(p)=-sum(p*log(p)); W is the warped source. It searches position, rotation and uniform incremental scale without shear or mirroring. 3D scores several foreground-center positions before Greedy NCC/MI or MATLAB MI refinement. Fitting clips the 1st/99.5th percentiles and applies square-root contrast compression; functional amplitudes remain unchanged.';

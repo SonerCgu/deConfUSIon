@@ -303,7 +303,7 @@ for i = 1:numel(fileList)
         if isfield(subj,'sourceFile') && ~isempty(subj.sourceFile), FC.subjects(idx).roiSourceFile = subj.sourceFile; else, FC.subjects(idx).roiSourceFile = ''; end
         if isfield(subj,'roiSourceFile') && ~isempty(subj.roiSourceFile), FC.subjects(idx).roiSourceFile = subj.roiSourceFile; end
         FC.subjects(idx).bundleFile = fp;
-        for field={'spacingUm','analysisSliceRange','atlasRegionInfo','epochName','epochWindowSec','hemisphereConvention','nSamples','referenceImage','anatomy'}
+        for field={'spacingUm','analysisSliceRange','atlasRegionInfo','epochName','epochWindowSec','hemisphereConvention','nSamples','referenceImage','anatomy','animalId','scanKey','sequenceIndex','powerFile','baseline','functionalSource','maskSource','maskPolicy','TRUserSec','roiScope','atlasLabels','roiSlices','regionSliceSelections'}
             if isfield(subj,field{1}),FC.subjects(idx).(field{1})=subj.(field{1});else,FC.subjects(idx).(field{1})=[];end
         end
         spatialFields = {'roiMap','labelMap','parcelMap','labelMask','roiLabelMask','roiAtlas','atlasLabels2D','maskLabels','segmentationMap','segMap','labels2D'};

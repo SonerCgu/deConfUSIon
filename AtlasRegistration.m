@@ -701,17 +701,7 @@ end
 end
 
 function exe=findGreedy()
-exe=''; candidates={getpref('deConfUSIon','greedyExecutable','')};
-dirs=strsplit(getenv('PATH'),pathsep);
-if ispc, name='greedy.exe'; else, name='greedy'; end
-for k=1:numel(dirs), candidates{end+1}=fullfile(dirs{k},name); end %#ok<AGROW>
-if ispc
-    installs=dir(fullfile(getenv('ProgramFiles'),'ITK-SNAP*'));
-    for k=numel(installs):-1:1, candidates{end+1}=fullfile(installs(k).folder,installs(k).name,'bin',name); end %#ok<AGROW>
-end
-for k=1:numel(candidates)
-    if ~isempty(candidates{k}) && exist(candidates{k},'file')==2, exe=candidates{k}; return; end
-end
+exe=fusiFindRegistrationExecutable('greedy');
 end
 
 function Y=warpSeries(X,T)
@@ -794,15 +784,7 @@ if requested(3),[u,v]=meshgrid(1:sz(1),1:sz(2)); sag=sample(v,u,index(3)*ones(si
 end
 
 function exe=findSnap()
-exe=getpref('deConfUSIon','itksnapExecutable','');
-if ~isempty(exe) && exist(exe,'file')==2, return; end
-exe=''; greedy=findGreedy();
-if ispc, name='ITK-SNAP.exe'; else, name='itksnap'; end
-dirs=[{fileparts(greedy)} strsplit(getenv('PATH'),pathsep)];
-for k=1:numel(dirs)
-    candidate=fullfile(dirs{k},name);
-    if exist(candidate,'file')==2, exe=candidate; return; end
-end
+exe=fusiFindRegistrationExecutable('snap');
 end
 
 function bundle=exportReview(fixed,moving,regions,regionInfo,M,spacingUm,folder,launch)

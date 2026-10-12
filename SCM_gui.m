@@ -380,6 +380,11 @@ fig = figure( ...
     'NumberTitle', 'off');
 
 set(fig, 'DefaultUicontrolFontName', 'Arial');
+% Keep the launch image on the figure, outside the mutable underlay workspace.
+% A callback therefore does not depend on newly introduced closure variables.
+nativeResetSnapshot=struct('image',origBG,'appearance',uState,'meta',defaultUnderlayMeta(),'source',[]);
+if ~isempty(state.scanSequence),nativeResetSnapshot.source=state.scanSequence.scans{state.scanSequence.active};end
+setappdata(fig,'SCMInitialNativeUnderlay',nativeResetSnapshot);
 set(fig, 'DefaultUicontrolFontSize', 15);
 try
     set(fig, 'WindowState', 'maximized');
@@ -742,9 +747,10 @@ set(slVlv, 'SliderStep', [1/max(1,MAX_CONLEV) 10/max(1,MAX_CONLEV)]);
 txtVlv = mkValBox(pUnderlay, sprintf('%d', uState.conectLev));
 
 btnLoadUnder = mkBtn(pUnderlay, 'LOAD NEW UNDERLAY', @loadNewUnderlayCB, colBtnNeutral, 12);
-btnLoadAtlasFolder=mkBtn(pUnderlay,'LOAD ATLAS FOLDER',@loadAtlasUnderlayFolderCB,colBtnNeutral,12);
+btnLoadAtlasFolder=mkBtn(pUnderlay,'LOAD ATLAS',@loadAtlasUnderlayFolderCB,colBtnNeutral,12);
 set(btnLoadAtlasFolder,'Tag','SCM_LoadAtlasFolder','TooltipString', ...
- 'Choose one saved step-motor session folder. Loads all registered source planes and histology, vascular and region modes together.');
+ 'Choose a single saved atlas/transform file or a registration/session folder. Starts at this animal''s atlas folder.');
+setappdata(fig,'FUSILoadAtlas',@(path)loadAtlasUnderlayFolderCB([],[],path));
 setappdata(fig,'FUSILoadUnderlay',@(file)loadNewUnderlayCB([],[],file));
 setappdata(fig,'FUSILoadMask',@(file)loadMaskCB([],[],file));
 setappdata(fig,'FUSIUnderlayData',@underlayData);
@@ -2259,15 +2265,17 @@ function refreshRegistered2DUnderlays()
     if isempty(entries),updateROIPhysicalSize();return;end
     state.atlasInPlaneSpacingUm=entries{1}.meta.voxelSizeUm;
     updateROIPhysicalSize();
-    selected=1;
+    selected=1;preferred=state.atlasUnderlayChoice;
     for k=1:numel(entries)
-        if (state.isColorUnderlay&&entries{k}.meta.isColor&&strcmp(entries{k}.grouping,'Detailed'))||(~state.isColorUnderlay&&strcmp(entries{k}.meta.atlasMode,'histology')),selected=k;end
+        if strcmpi(entries{k}.meta.atlasMode,preferred)
+            if ~strcmpi(preferred,'regions')||strcmp(entries{k}.grouping,'Detailed'),selected=k;end
+        end
     end
     setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',entries);setappdata(popAtlasChoice,'AtlasRegionContext2D',ctx);
     setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});
     set(popAtlasChoice,'String',names,'Value',selected,'Enable','on');
     state.atlasRegionSearch=ctx;
-    if state.isColorUnderlay&&~isempty(ctx)
+    if entries{selected}.meta.isColor&&strcmpi(preferred,'regions')&&~isempty(ctx)
         state.regionLabelUnderlay=entries{selected}.meta.regionLabels;state.regionInfo=entries{selected}.meta.regionInfo;
     end
 end
@@ -2276,6 +2284,7 @@ function result=underlayData()
         'isAtlasWarped',state.isAtlasWarped,'mapping',state.currentROIMapping,'regionLabels',state.regionLabelUnderlay, ...
         'roiDefinitions',{roiDefinitionsForCurrentView()}, ...
         'regionInfo',state.regionInfo,'atlasRegionSearch',state.atlasRegionSearch,'transformFile',state.atlasTransformFile, ...
+        'underlayMode',state.atlasUnderlayChoice,'appearance',uState, ...
         'imageGeometry',struct('xlim',ax.XLim,'ylim',ax.YLim,'aspect',ax.DataAspectRatio, ...
         'underlayX',hBG.XData,'underlayY',hBG.YData,'overlayX',hOV.XData,'overlayY',hOV.YData, ...
         'underlayTextureSize',size(hBG.CData,[1 2])),'displayRGB',hBG.CData);
@@ -2285,6 +2294,7 @@ function atlasUnderlayChoiceCB(~,~)
     if ~isempty(entries)
         entry=entries{get(popAtlasChoice,'Value')};
         bg=entry.data;applyUnderlayMeta(entry.meta,bg);
+        state.atlasUnderlayChoice=entry.meta.atlasMode;
         applyRecommendedUnderlayDisplayForModeLocal(entry.meta.atlasMode);
         state.atlasRegionSearch=getappdata(popAtlasChoice,'AtlasRegionContext2D');
         if entry.meta.isColor
@@ -2311,15 +2321,55 @@ function refreshAtlasUnderlayChoices(space)
     end
     state.atlasRegionSearch=fusiAtlasSearchContext(bundle,space,state.atlasRegionSearch);
 end
-function loadAtlasUnderlayFolderCB(~,~)
-    folder=uigetdir(getUnderlayStartPathFast(),'Choose a saved atlas session or underlay folder');
-    if isequal(folder,0),return;end
+function loadAtlasUnderlayFolderCB(~,~,selected)
+    if nargin<3
+        lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+        dialogs=struct();if isappdata(fig,'FUSIAtlasPickerDialogs'),dialogs=getappdata(fig,'FUSIAtlasPickerDialogs');end
+        [selected,options]=fusiChooseAtlasSource(par,getDatasetRootForSelectors(),state.atlasTransformFile,lastFile,dialogs);
+        setappdata(fig,'FUSIUnderlayPickerOptions',options);
+        if isempty(selected),return;end
+    end
+    if isfile(selected)
+        contents=whos('-file',selected);fields={contents.name};
+        isTransform=any(ismember({'Transf','Reg2D'},fields))&& ...
+            ~any(ismember({'atlasUnderlay','atlasUnderlayRGB','brainImage','atlasUnderlayMeta','stepMotorUnderlayMeta'},fields));
+        if isTransform,warpFunctionalToAtlasCB([],[],selected);else,loadNewUnderlayCB([],[],selected);end
+        return;
+    end
+    folder=char(selected);
     % The folder button also accepts the dated 3D Histology/Regions bundle.
     for filename={'Histology.mat','Vascular.mat','Regions.mat'}
         file=fullfile(folder,filename{1});
         if isfile(file)
             contents=whos('-file',file);
             if ismember('atlasUnderlayMeta',{contents.name}),loadNewUnderlayCB([],[],file);return;end
+        end
+    end
+    sourceCount=1;if ndims(origPSC)==4,sourceCount=size(origPSC,3);end
+    if sourceCount==1
+        % Ordinary 2D atlas folders are not step-motor sessions. Load their
+        % saved plane (or their single transform) without a source001 index.
+        patterns={'Histology.mat','AtlasUnderlay_histology*.mat','Vascular.mat', ...
+            'AtlasUnderlay_vascular*.mat','Regions*.mat','AtlasUnderlay_regions*.mat'};
+        for k=1:numel(patterns)
+            files=dir(fullfile(folder,patterns{k}));files=files(~[files.isdir]);
+            if isempty(files),continue;end
+            [~,recent]=max([files.datenum]);loadNewUnderlayCB([],[],fullfile(files(recent).folder,files(recent).name));return;
+        end
+        for name={'CoronalRegistration2D.mat','Transformation.mat'}
+            file=fullfile(folder,name{1});
+            if isfile(file),warpFunctionalToAtlasCB([],[],file);return;end
+        end
+    end
+    % Accept the parent registration folder of a dated 3D bundle as well.
+    if isempty(fusiReadStepMotorUnderlays2D(folder))
+        hints=struct('underlayStartPath',folder,'loadedPath',folder,'exportPath',folder);
+        options=fusiUnderlayPickerOptions(hints,folder,'','');
+        if ~strcmp(options.startPath,folder)
+            for filename={'Histology.mat','Vascular.mat','Regions.mat'}
+                file=fullfile(options.startPath,filename{1});
+                if isfile(file),loadNewUnderlayCB([],[],file);return;end
+            end
         end
     end
     loadNewUnderlayCB([],[],folder);
@@ -2911,8 +2961,9 @@ end
 function resetWarpToNativeCB(~,~)
     try
         PSC = origPSC;
-        bg = origBG;
-        applyUnderlayMeta(defaultUnderlayMeta(),bg);
+        [bg,nativeReset]=resetNativeUnderlay();origBG=bg;
+        applyUnderlayMeta(nativeReset.meta,bg);
+        uState=nativeReset.appearance;syncUnderlayAppearanceControls();
         passedMask = origPassedMask;
         passedMaskIsInclude = origPassedMaskIsInclude;
        state.isAtlasWarped = false;
@@ -2921,6 +2972,14 @@ state.isStepMotorAtlasWarped = false;
 state.atlasTransformFile = '';
 state.lastAtlasTransformFile = '';
 state.atlasUnderlayKey=[];state.atlasSliceSampling=[];
+state.currentROIMapping=[];state.atlasDisplay3D=[];state.pendingAtlasUnderlay3D=[];
+state.atlasInPlaneSpacingUm=[NaN NaN NaN];state.atlasUnderlays=struct();
+state.atlasUnderlayChoice='normal';state.lastAtlasUnderlayBuildMessage='';
+state.stepMotorUnderlayBundle=[];state.atlasRegionSearch=[];state.retainedUnderlay=[];
+setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',{});setappdata(popAtlasChoice,'AtlasRegionContext2D',[]);
+setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});setappdata(popAtlasChoice,'AtlasUnderlayGroupings',{});
+set(popAtlasChoice,'String',{'Load a saved atlas underlay first'},'Value',1,'Enable','off');
+if isappdata(fig,'FUSIAtlasAppliedTransformFile'),rmappdata(fig,'FUSIAtlasAppliedTransformFile');end
 
 state.stepMotorAtlasFolder = '';
 state.stepMotorAtlasTransformFiles = {};
@@ -2929,11 +2988,33 @@ state.stepMotorAtlasAtlasIdx = [];
         try, set(btnWarpAtlas, 'String', 'WARP FUNCTIONAL TO ATLAS'); catch, end
         set(txtTitle, 'String', fileLabel);
         resetRoisAndRefreshAfterDataChange(true);
+        roi.viewMapping=[];
         retained=getappdata(fig,'SCMROIDefinitions');
-        set(info1, 'String', sprintf('Returned to native functional space. Retained %d ROIs; mapped masks remain one ROI across slices.',numel(retained)), 'TooltipString', '');
+        set(info1, 'String', sprintf('Restored initially loaded underlay in native space. Retained %d ROIs.',numel(retained)), 'TooltipString', '');
     catch ME
         errordlg(ME.message, 'Reset to native failed');
     end
+end
+
+function [U,snapshot]=resetNativeUnderlay()
+    snapshot=getappdata(fig,'SCMInitialNativeUnderlay');
+    if isempty(snapshot)
+        % Compatibility for a window created before the snapshot existed.
+        % Recover native power contrast rather than resizing atlas histology.
+        U=origBG;
+        if state.isAtlasWarped&&~isempty(baselineRaw)
+            U=mean(single(baselineRaw),ndims(baselineRaw));scale=max(U(:));
+            if isfinite(scale)&&scale>0,U=20*log10(U./scale);else,U=zeros(size(U),'single');end
+        elseif ~doesUnderlayMatchOriginalDisplay(U),U=makeNativeFallbackUnderlayFromPSC(origPSC);end
+        snapshot=struct('image',U,'appearance',uState,'meta',defaultUnderlayMeta(),'source',[]);
+        setappdata(fig,'SCMInitialNativeUnderlay',snapshot);
+    end
+    U=snapshot.image;
+    if isempty(state.scanSequence)||isempty(snapshot.source),return;end
+    target=state.scanSequence.scans{state.scanSequence.active};
+    if strcmp(target.key,snapshot.source.key),return;end
+    anchor=struct('source',snapshot.source,'nativeBG',U);
+    U=procOrRetainedBG(anchor,target,true);
 end
 
 function setTitleAtlas(T)
@@ -3102,14 +3183,17 @@ end
         if isempty(tfFile) || exist(tfFile,'file') ~= 2
             startupAtlasNote = ['Startup underlay size did not match PSC, but no atlas transform was found. Using fallback native underlay.'];
             bg = makeNativeFallbackUnderlayFromPSC(origPSC);
+            origBG=bg;
             return;
         end
         S = load(tfFile); T = extractAtlasWarpStruct(S);
         if ~doesUnderlayMatchTransformOutput(U, T)
             startupAtlasNote = ['Startup underlay did not match PSC size or transform output. Using fallback native underlay.'];
             bg = makeNativeFallbackUnderlayFromPSC(origPSC);
+            origBG=bg;
             return;
         end
+        origBG=makeNativeFallbackUnderlayFromPSC(origPSC);
         PSC = warpFunctionalSeriesToAtlas(origPSC, T);
         state.isAtlasWarped = true;
         state.atlasTransformFile = tfFile;
@@ -3120,7 +3204,7 @@ end
         startupAtlasNote = ['Startup atlas underlay detected. Functional data auto-warped using: ' tfFile];
     catch ME
         startupAtlasNote = ['Startup atlas guard failed: ' ME.message];
-        try, bg = makeNativeFallbackUnderlayFromPSC(origPSC); catch, end
+        try, bg = makeNativeFallbackUnderlayFromPSC(origPSC);origBG=bg; catch, end
     end
 end
 
@@ -4943,6 +5027,21 @@ function applyRecommendedUnderlayDisplayForModeLocal(modeName)
     end
 end
 
+function rememberNativeUnderlayAppearance()
+    if state.isAtlasWarped,return;end
+    if doesUnderlayMatchOriginalDisplay(bg),origBG=bg;end
+    origPassedMask=passedMask;origPassedMaskIsInclude=passedMaskIsInclude;
+end
+function syncUnderlayAppearanceControls()
+    set(popUnder,'Value',uState.mode);set(slBri,'Value',uState.brightness);
+    set(slCon,'Value',uState.contrast);set(slGam,'Value',uState.gamma);
+    set(txtBri,'String',sprintf('%.2f',uState.brightness));set(txtCon,'String',sprintf('%.2f',uState.contrast));
+    set(txtGam,'String',sprintf('%.2f',uState.gamma));
+    set(slVsz,'Value',uState.conectSize);set(slVlv,'Value',uState.conectLev);
+    set(txtVsz,'String',sprintf('%d',uState.conectSize));set(txtVlv,'String',sprintf('%d',uState.conectLev));
+    updateUnderlayControlsEnable();
+end
+
 function ensureAtlasUnderlayLibraryForExportLocal()
     try
         hasLib = isfield(state,'atlasUnderlays') && isstruct(state.atlasUnderlays) && ...
@@ -5435,6 +5534,7 @@ function applyScmGroupBundleLocal(G, fullf)
     end
 
     origBG = bg;
+    setappdata(fig,'SCMInitialNativeUnderlay',struct('image',bg,'appearance',uState,'meta',defaultUnderlayMeta(),'source',[]));
 
     % ---------------------------------------------------------
     % 4) Restore underlay metadata if present
@@ -5788,6 +5888,8 @@ function restoreAtlasDisplayContext()
     [bg,meta,Tgrid,grid]=fusiCachedAtlasUnderlayView3D(bundle.underlay,bundle.meta,'atlas');
     assert(isequal(size(PSC,[1 2 3]),grid.outputSizeYXZ),'deConfUSIon:AtlasGeometryMismatch','Transferred atlas display and PSC grids differ.');
     origPSC=ctx.nativePSC;origBG=ctx.nativeBG;origPassedMask=ctx.nativeMask;origPassedMaskIsInclude=ctx.nativeMaskIsInclude;
+    snapshot=getappdata(fig,'SCMInitialNativeUnderlay');snapshot.image=ctx.nativeBG;snapshot.meta=defaultUnderlayMeta();
+    setappdata(fig,'SCMInitialNativeUnderlay',snapshot);
     if isfield(ctx,'nativePower')&&~isempty(ctx.nativePower),baselineRaw=ctx.nativePower;par.baselineRawIsPSC=false;end
     state.isAtlasWarped=true;state.atlasUnderlayKey=bundle.meta.registrationKey;
     state.pendingAtlasUnderlay3D=bundle;state.atlasSliceSampling=grid;
@@ -6956,6 +7058,7 @@ end
 end
 
 function apply3DAtlasWarp(bundle)
+    rememberNativeUnderlayAppearance();
     meta=bundle.meta;[newBG,viewMeta,Tgrid,gridInfo]=fusiCachedAtlasUnderlayView3D(bundle.underlay,meta,'atlas');
     reuse=state.isAtlasWarped && isfield(state,'atlasUnderlayKey') && isequal(state.atlasUnderlayKey,meta.registrationKey);
     if ~reuse,PSC=fusiWarpAtlasForDisplay(origPSC,Tgrid,true);end
@@ -7096,6 +7199,16 @@ function [U, meta] = extractUnderlayFromMatStruct(S)
         if ~isempty(meta.regionLabels),U=fusiRegionLabelRGB(meta.regionLabels,meta.regionInfo);end
         return;
     end
+    % Coronal exports store both a grayscale atlas plane and an RGB preview.
+    % An RGB preview must not turn Histology/Vascular into a region label map.
+    if any(strcmpi(meta.atlasMode,{'histology','vascular'}))
+        modeFields={[lower(meta.atlasMode) 'Image'],'atlasUnderlay','brainImage','atlasUnderlayRGB',lower(meta.atlasMode)};
+        for k=1:numel(modeFields)
+            if isfield(S,modeFields{k})&&~isempty(S.(modeFields{k}))&&isnumeric(S.(modeFields{k}))
+                U=double(S.(modeFields{k}));meta.isColor=ndims(U)==3&&size(U,3)==3;return;
+            end
+        end
+    end
  pref = { ...
     'sliceUnderlayRaw', ...
     'sliceUnderlayProcessed', ...
@@ -7169,7 +7282,7 @@ function signalUnderlayCB(~,~)
     U = squeeze(U);
     bg = validateAndPrepareUnderlay(U, 'signal projection');
     applyUnderlayMeta(struct(), bg);
-    origBG = bg;
+    if ~state.isAtlasWarped,origBG = bg;end
     try, updateSCMUnderlayDisplay(state.z); catch, end
     try, set(info1, 'String', ['Underlay from signal: ' choices{selIx}]); catch, end
 end
@@ -7184,6 +7297,10 @@ function applyUnderlayMeta(meta, U)
     if isfield(state,'underlayRevision'),state.underlayRevision=state.underlayRevision+1;end
     state.renderedAtlasCache={};
     ensureUnderlayStateFields();
+    state.atlasUnderlayChoice='normal';
+    if isstruct(meta)&&isfield(meta,'atlasMode')&&any(strcmpi(meta.atlasMode,{'histology','vascular','regions'}))
+        state.atlasUnderlayChoice=lower(char(meta.atlasMode));
+    end
     state.atlasDisplay3D=[];
     if isstruct(meta) && isfield(meta,'displayProvider'),state.atlasDisplay3D=meta.displayProvider;end
     if ~(isstruct(meta)&&isfield(meta,'registrationBundle3D')&&meta.registrationBundle3D)
@@ -7618,6 +7735,7 @@ end
 end
 
 function Y = warpFunctionalSeriesToAtlas(X, T)
+    rememberNativeUnderlayAppearance();
     A = double(T.warpA);
     if ndims(X) == 4 && isequal(size(A), [4 4])
         if isempty(T.outSize) || numel(T.outSize) < 3, error('3D atlas warp requires output size.'); end
@@ -7699,6 +7817,7 @@ end
 end
 
 function [Y, report] = warpFunctionalSeriesToAtlasStepMotor(X, regList)
+    rememberNativeUnderlayAppearance();
 
     Y = [];
 
@@ -8723,7 +8842,7 @@ function tfFile = getBestTransformForUnderlay(underlayFile, Ucandidate)
         keys = cell(size(c));
         for qq = 1:numel(c)
             try, keys{qq} = char(java.io.File(c{qq}).getCanonicalPath()); catch, keys{qq} = char(c{qq}); end
-            keys{qq} = strrep(keys{qq}, '/', filesep); keys{qq} = strrep(keys{qq}, '\\', filesep);
+            keys{qq} = strrep(keys{qq}, '/', filesep); keys{qq} = strrep(keys{qq}, '\', filesep);
             if ispc, keys{qq} = lower(keys{qq}); end
         end
         [~,ia] = unique(keys,'stable'); u = c(ia);

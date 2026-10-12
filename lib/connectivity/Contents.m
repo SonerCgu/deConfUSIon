@@ -10,3 +10,15 @@
 %   deConfUSIon_FC_stepmotor_read_folder
 %   deConfUSIon_find_stepmotor_seg_fc_files
 %   fusiFCCorrelationMatrix
+%   fusiFCCompareScans
+%   fusiFCFullRegionNames
+%   fusiFCLoadScan
+%   fusiFCReadMask
+%   fusiFCRegionCatalog
+%   fusiFCMergeNameTable
+%   fusiFCNetworkPlot
+%   fusiFCExportPaperFigure
+%   fusiFCScanComparisonDialog
+%   fusiFCRegionSliceDialog
+%   fusiFCRegionSliceResult
+%   fusiFCSmoothCorrelation

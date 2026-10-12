@@ -84,6 +84,17 @@ filters={'*.mat','MATLAB / atlas underlays (*.mat)'; ...
  '*.*','All files (*.*)'};
 options=struct('filter', {filters},'title','Select underlay: Histology, Vascular, Regions or another image', ...
  'startPath','','defaultFile','');
+% Raw-file callers may supply only the animal RawData folder. Resolve this
+% scan's existing AnalysedData directory before searching for its atlas.
+for sourceField={'loadedFile','sourceFile'}
+ if ~isfield(par,sourceField{1})||isempty(par.(sourceField{1})),continue;end
+ source=char(par.(sourceField{1}));
+ if isfile(source)&&~isempty(regexpi(strrep(source,'\','/'),'(^|/)RawData/','once'))
+  paths=fusiResolveAnalysisFolder(source);
+  if isfolder(paths.datasetFolder),root=paths.datasetFolder;end
+  break;
+ end
+end
 % Motor sessions have one combined AtlasUnderlays folder beside the index.
 for selected={lastFile,transformFile}
  path=selected{1};if isempty(path),continue;end
@@ -98,7 +109,7 @@ for selected={lastFile,transformFile}
   end
  end
 end
-if ~isempty(lastFile) && isfile(lastFile),finish(fileparts(lastFile));return;end
+if ~isempty(lastFile)&&isfile(lastFile)&&hasAtlasFiles(fileparts(lastFile)),finish(fileparts(lastFile));return;end
 if ~isempty(transformFile) && isfile(transformFile)
  folder=fileparts(transformFile);
  if isBundle(folder),finish(folder);return;end
@@ -174,6 +185,15 @@ candidates={configured};
 if ~isempty(transformFile),candidates{end+1}=fileparts(transformFile);end
 candidates=[candidates {fullfile(root,'Registration2D'),fullfile(root,'Registration'), ...
  fullfile(root,'Registration3D'),fullfile(root,'Visualization'),root,pwd}];
+% Prefer this recording's real atlas files over an empty preset, a generic
+% MAT folder, or a previously opened Mask Editor/preprocessing directory.
+for k=1:numel(roots)
+ candidates=[candidates {fullfile(roots{k},'Registration2D'),fullfile(roots{k},'Registration'),fullfile(roots{k},'Registration3D'),roots{k}}]; %#ok<AGROW>
+end
+candidates=unique(candidates,'stable');
+for k=1:numel(candidates)
+ if ~isempty(candidates{k})&&isfolder(candidates{k})&&hasAtlasFiles(candidates{k}),finish(candidates{k});return;end
+end
 % Empty preset directories must not hide a saved 2D registration elsewhere
 % in this recording. Still retain that preset if there are no saved files.
 for k=1:numel(candidates)
@@ -190,6 +210,12 @@ end
 function yes=isBundle(folder)
 yes=~isempty(folder) && isfolder(folder) && ...
  (isfile(fullfile(folder,'Histology.mat')) || isfile(fullfile(folder,'Vascular.mat')) || isfile(fullfile(folder,'Regions.mat')));
+end
+function yes=hasAtlasFiles(folder)
+yes=false;if isempty(folder)||~isfolder(folder),return;end
+patterns={'Histology.mat','Vascular.mat','Regions*.mat','AtlasUnderlay_*.mat','CoronalRegistration2D*.mat', ...
+ 'Transformation*.mat','StepMotor_Reg2D_Session.mat'};
+for k=1:numel(patterns),files=dir(fullfile(folder,patterns{k}));if any(~[files.isdir]&[files.bytes]>0),yes=true;return;end,end
 end
 function root=datasetRoot(root)
 % A dated bundle, registration folder or visualization folder is a child.

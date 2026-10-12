@@ -4,6 +4,11 @@
 %   deConfUSIon_safe_preproc_save_path
 %   fusiAnalysisOutputPath
 %   fusiExportSavedDialog
+%   fusiOpenFolder
+%   fusiDesktopFolderCommand
+%   fusiRememberDataRoot
+%   fusiLoadMatVariables
+%   fusiFindMovedDataPath
 %   fusiModelAnalysisFolder
 %   fusiModelExportPath
 %   fusiMovieStage

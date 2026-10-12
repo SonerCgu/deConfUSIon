@@ -976,6 +976,7 @@ end
 % =========================================================
 function datasetDropdownCallback(src,~)
     if isequal(getappdata(fig,'StudioActionBusy'),true), return; end
+    if isequal(getappdata(fig,'DatasetReadInProgress'),true)||isequal(getappdata(fig,'LoadInProgress'),true),return;end
 
     studio = guidata(fig);
 
@@ -1097,8 +1098,11 @@ function data = getActiveData()
             loadLabel = selected;
         end
         addLog(['Loading dataset from disk: ' loadLabel]);
+        readProgress=deConfUSIon_ui('progress','Loading saved dataset');
+        readGuard=onCleanup(@()finishDatasetRead(readProgress)); %#ok<NASGU>
+        setappdata(fig,'DatasetReadInProgress',true);set(fig,'Pointer','watch');
         setProgramStatus(false);
-        drawnow;
+        deConfUSIon_ui('progressupdate',readProgress,0,'Opening saved preprocessing dataset...');
 
         try
             oldLazy = data;
@@ -1106,11 +1110,14 @@ function data = getActiveData()
             % the entire raw MAT and then loaded it again through the loader.
             variables=whos('-file',oldLazy.lazyFile);
             if any(strcmp({variables.name},'newData'))
-                saved=load(oldLazy.lazyFile,'newData'); data=saved.newData;
+                saved=fusiLoadMatVariables(oldLazy.lazyFile,{'newData'}, ...
+                    @(fraction,message)deConfUSIon_ui('progressupdate',readProgress,.85*fraction,message));data=saved.newData;
             elseif any(strcmp({variables.name},'data') & strcmp({variables.class},'struct'))
-                saved=load(oldLazy.lazyFile,'data'); data=saved.data;
+                saved=fusiLoadMatVariables(oldLazy.lazyFile,{'data'}, ...
+                    @(fraction,message)deConfUSIon_ui('progressupdate',readProgress,.85*fraction,message));data=saved.data;
             else
-                [data,~]=loadFUSIData(oldLazy.lazyFile,[]);
+                [data,~]=loadFUSIData(oldLazy.lazyFile,[], ...
+                    @(fraction,message)deConfUSIon_ui('progressupdate',readProgress,.85*fraction,message));
             end
             if ~isstruct(data) || ~isfield(data,'I') || isempty(data.I)
                 error('deConfUSIon:EmptyDataset','Selected file contains no usable image time series.');
@@ -1131,6 +1138,7 @@ function data = getActiveData()
                 data.savedFile = oldLazy.lazyFile;
             end
 
+            deConfUSIon_ui('progressupdate',readProgress,1,'Saved dataset loaded successfully');
             studio.datasets.(selected) = data;
             guidata(fig, studio);
 
@@ -1142,7 +1150,11 @@ function data = getActiveData()
             addLog(['Dataset loaded: ' loadedLabel]);
 
         catch ME
-            addLog(['Lazy load ERROR: ' ME.message]);
+            if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled')
+                addLog('Saved dataset loading cancelled; the dataset is unchanged.');
+            else
+                addLog(['Lazy load ERROR: ' ME.message]);
+            end
             setProgramStatus(true);
             rethrow(ME);
         end
@@ -1153,6 +1165,14 @@ function data = getActiveData()
         [data,timingNotice]=deConfUSIon_signal('timing',data,studio.datasets.raw);
         studio.datasets.(selected)=data; guidata(fig,studio);
         if ~isempty(timingNotice), addLog(timingNotice); end
+    end
+end
+
+function finishDatasetRead(progress)
+    deConfUSIon_ui('progressclose',progress);
+    if isgraphics(fig)
+        setappdata(fig,'DatasetReadInProgress',false);set(fig,'Pointer','arrow');
+        current=guidata(fig);setProgramStatus(current.isLoaded);
     end
 end
 
@@ -1534,6 +1554,7 @@ function setProgramStatus(isReady)
 
     if ~isgraphics(fig,'figure'), return; end
     if isequal(getappdata(fig,'SegmentationRunning'),true),isReady=false;end
+    if isequal(getappdata(fig,'LoadInProgress'),true)||isequal(getappdata(fig,'DatasetReadInProgress'),true),isReady=false;end
     statusState = guidata(fig);
     if ~isstruct(statusState) || ~isfield(statusState,'statusPanel'), return; end
     statusPanel = statusState.statusPanel;

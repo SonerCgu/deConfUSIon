@@ -1,6 +1,7 @@
-function result=fusiScanSequenceDialog(q,b,startPath)
+function result=fusiScanSequenceDialog(q,b,startPath,purpose)
 % Add up to ten raw scans; pick a saved power dataset without loading movies.
 result=[];q=fusiScanSequence('reference',q,b);entries=[];raw='';C=deConfUSIon_ui('palette');maxScans=fusiScanSequence('maxScans');
+if nargin<4,purpose='psc';end
 if ~isfield(q,'normMode'),q.normMode='shared';end
 if ~isfield(q,'localWindowSec')||any(~isfinite(q.localWindowSec))
     local=b;if isfield(b,'localBaseline'),local=b.localBaseline;end;q.localWindowSec=[local.start local.end];
@@ -8,7 +9,7 @@ end
 f=figure('Name','Scan sequence','NumberTitle','off','MenuBar','none','ToolBar','none', ...
     'Color',C.background,'Units','pixels','Position',[180 80 900 740],'Resize','off','WindowStyle','modal','CloseRequestFcn',@cancel);
 guard=onCleanup(@()deleteDialogFigure(f)); %#ok<NASGU>
-ctrl('text',sprintf('Compare up to %d scans. Full movies load as needed; other time courses read only the ROI.',maxScans),[20 697 860 28],[]);
+heading=ctrl('text',sprintf('Compare up to %d scans. Full movies load as needed; other time courses read only the ROI.',maxScans),[20 697 860 28],[]);
 list=ctrl('listbox',{''},[20 485 680 202],@selectRow);list.Tag='SequenceScanList';
 include=ctrl('checkbox','Include selected scan in curves / 3D sequence',[20 443 400 32],@toggleInclude);include.Tag='SequenceIncludeScan';
 all=ctrl('pushbutton','Select all',[450 443 115 32],@selectAll);all.Tag='SequenceSelectAll';
@@ -21,7 +22,7 @@ sort.TooltipString='Uses recorded acquisition time when available, otherwise the
 orderText=ctrl('text','',[20 415 860 25],[]);
 normalization=ctrl('popupmenu',{'Shared baseline: retain differences between scans','Normalize each scan to its own baseline window'},[20 367 860 30],@normalizationChanged);
 normalization.Tag='SequenceNormalization';normalization.Value=1+strcmp(q.normMode,'local');
-ctrl('text','Per-scan baseline start / end (s)',[20 321 290 30],[]);
+baselineLabel=ctrl('text','Per-scan baseline start / end (s)',[20 321 290 30],[]);
 baseStart=ctrl('edit',sprintf('%.9g',q.localWindowSec(1)),[320 325 110 30],[]);baseStart.Tag='SequenceBaselineStart';
 baseEnd=ctrl('edit',sprintf('%.9g',q.localWindowSec(2)),[450 325 110 30],[]);baseEnd.Tag='SequenceBaselineEnd';
 normalization.TooltipString='Per-scan normalization can remove baseline offsets and can also hide a real sustained difference. It changes PSC curves and the selected signal overlay.';
@@ -31,6 +32,13 @@ dataset=ctrl('popupmenu',{'Select a raw scan first'},[20 200 860 30],[]);dataset
 ctrl('text','Acquisition TR (s), before averaging',[20 157 295 30],[]);
 tr=ctrl('edit',sprintf('%.9g',q.scans{q.active}.rawTR),[320 160 110 30],[]);tr.Tag='SequenceTR';
 add=ctrl('pushbutton','2. Add selected scan',[450 153 430 38],@addRow);add.BackgroundColor=C.success;add.Tag='SequenceAdd';
+if strcmp(purpose,'fc')
+    set([normalization baseStart baseEnd],'Enable','off');
+    normalization.String={'FC calculates each scan separately; choose PSC reference using PSC baseline in FC'};normalization.Value=1;
+    include.String='Include selected scan in FC calculations / comparisons';
+    baselineLabel.String='PSC baseline inherited from loaded data (s)';
+    heading.String=sprintf('Choose up to %d scans. FC uses each scan\x27s own TR and local time window.',maxScans);
+end
 if ~isfield(q,'underlayMode'),q.underlayMode='keep';end
 underlay=ctrl('popupmenu',{'Overlay change: keep current anatomy and contrast','Overlay change: choose selected scan Mask Editor bundle','Overlay change: selected scan default Doppler underlay'},[20 116 860 30],[]);
 underlay.Tag='SequenceUnderlayMode';modes={'keep','mask','default'};underlay.Value=find(strcmp(modes,q.underlayMode),1);
@@ -107,6 +115,7 @@ deleteDialogFigure(f);
     function normalizationChanged(~,~)
         enabled='off';q.normMode='shared';if normalization.Value==2,enabled='on';q.normMode='local';end
         set([baseStart baseEnd],'Enable',enabled);
+        if strcmp(purpose,'fc'),normalization.Enable='off';end
     end
     function accept(~,~)
         q.underlayMode=modes{underlay.Value};
@@ -119,6 +128,11 @@ deleteDialogFigure(f);
     end
     function atlasSharingChanged(varargin)
         underlay.Enable='on';
+        if strcmp(purpose,'fc')
+            underlay.Value=1;underlay.Enable='off';
+            status.String='Keep the loaded anatomy. FC periods apply within each scan; scans are never concatenated for correlation.';
+            return;
+        end
         if shareAtlas.Value&&isfield(q,'atlasRegistered')&&q.atlasRegistered
             underlay.Enable='off';status.String='One atlas alignment is shared across every loaded scan; no separate registration files are required.';
         end
