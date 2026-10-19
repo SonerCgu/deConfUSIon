@@ -2,11 +2,6 @@
 
 **A MATLAB graphical toolbox for functional ultrasound imaging analysis.**
 
-Load reconstructed Doppler movies, inspect quality, apply justified processing,
-review atlas alignment and extract regional time courses, functional
-connectivity and group summaries. Supported workflows include single 2D
-planes, sequential 2D probe recordings with a step motor and volumetric 3D
-probe data.
 
 ## Manuals
 
