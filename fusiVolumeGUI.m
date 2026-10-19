@@ -111,6 +111,7 @@ timeMovie.Visible='off';
 movieKind=uidropdown(exports,'Items',{'PSC time series','Camera rotation','PSC time series + rotation'},'Tag','VolumeMovieKind', ...
     'Tooltip','Choose acquired PSC, camera rotation, or both simultaneously.','ValueChangedFcn',@stopPlayback);
 place(movieKind,4,[1 2]);mp4.Text='Export movie (MP4)';mp4.ButtonPushedFcn=@exportSelectedMovie;
+if ~ispc&&~ismac,mp4.Text='Export movie (AVI)';end
 % Keep the inherited PSC controls near the top; geometry stays accessible in
 % the scroll area and through the permanently visible Spacing / help button.
 rows=[1 2 5 6 7 8 23 25 26 27 28 29 30 24 22 21 9 17 11 12 13 14 15 10 16 3 20 4 18 31 32];

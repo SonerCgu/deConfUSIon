@@ -1191,9 +1191,16 @@ cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
 
 maxLines = 120;
 expectXYLine = false;
+header=fusiSCMEnsembleHeader(fid,false);
+if header.matched,headerLines=regexp(header.prefix,'\r\n|\n|\r','split');end
 
 for k = 1:maxLines
-    ln = fgetl(fid);
+    if header.matched
+        if k>numel(headerLines),break;end
+        ln=headerLines{k};
+    else
+        ln = fgetl(fid);
+    end
     if ~ischar(ln), break; end
 
     lnRaw = strtrim(ln);
@@ -1683,10 +1690,11 @@ fid = fopen(fname,'r');
 if fid < 0, return; end
 cleanupObj = onCleanup(@()fclose(fid)); %#ok<NASGU>
 
-inData = false;
+header=fusiSCMEnsembleHeader(fid);
+inData = header.tableFound;
 isThreeColumn = false;
-isRebased = false;
-baselineSec = [NaN NaN];
+isRebased = header.isRebased;
+baselineSec = header.baselineSec;
 
 while true
     ln = fgetl(fid);

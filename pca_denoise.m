@@ -19,6 +19,9 @@ if ~isfield(opts,'logFcn'),           opts.logFcn = []; end
 if ~isfield(opts,'autoSelect'),       opts.autoSelect = []; end
 if ~isfield(opts,'autoApply'),        opts.autoApply = false; end
 if ~isfield(opts,'basisMethod'),      opts.basisMethod = 'auto'; end
+if ~isfield(opts,'onProgress'),       opts.onProgress = []; end
+if ~isfield(opts,'showProgress'),     opts.showProgress = ~opts.autoApply; end
+applyProgress=[];
 
 isStruct = isstruct(dataIn);
 if isStruct
@@ -91,8 +94,14 @@ stats.applied = true;
 stats.method = 'PCA denoise (V12 slice-aware)';
 stats.sliceScope = st.scopeInfo;
 
+if isempty(opts.onProgress) && opts.showProgress
+    applyProgress=deConfUSIon_ui('progress','Applying PCA');
+end
+applyProgressGuard=onCleanup(@()deConfUSIon_ui('progressclose',applyProgress)); %#ok<NASGU>
+reportApplyProgress(0,'Preparing PCA component removal...');
 if isempty(selected)
     newData.I = I;
+    reportApplyProgress(1,'PCA complete: no components selected.');
     return;
 end
 
@@ -106,8 +115,10 @@ for t0 = 1:chunkT:st.T
     Ut = double(st.U(t0:t1, selected));
     recon = Wsel * (Ssel * Ut');
     Xclean(:,t0:t1) = Xclean(:,t0:t1) - single(recon);
+    reportApplyProgress(.9*t1/st.T,sprintf('Removing selected PCs: %d / %d frames',t1,st.T));
 end
 
+reportApplyProgress(.94,'Restoring voxel means...');
 switch lower(opts.centerMode)
     case 'global'
         Xout = Xclean + single(st.mu);
@@ -115,6 +126,7 @@ switch lower(opts.centerMode)
         Xout = bsxfun(@plus, Xclean, st.muVec);
 end
 
+reportApplyProgress(.97,'Preparing the processed PCA dataset...');
 IworkOut4 = reshape(Xout, [st.Y st.X st.Z st.T]);
 if st.scopeInfo.sliceSpecific && Z0 > 1
     Iout4 = I4orig;
@@ -135,6 +147,15 @@ newData.pcaicaSliceScope = st.scopeInfo;
 stats.qcFile = '';
 stats.qcGlobalMeanFile = '';
 stats.qcMeanImageFile = '';
+reportApplyProgress(1,'PCA component removal complete.');
+
+    function reportApplyProgress(fraction,message)
+        if ~isempty(opts.onProgress)
+            opts.onProgress(fraction,message);
+        elseif ~isempty(applyProgress)
+            deConfUSIon_ui('progressupdate',applyProgress,fraction,message);
+        end
+    end
 
     function st = computePCA(scopeInfo)
         if scopeInfo.sliceSpecific && Z0 > 1
@@ -195,7 +216,7 @@ stats.qcMeanImageFile = '';
         scopeSlider=uicontrol('Parent',rightPanel,'Style','slider','Units','normalized','Position',[0.06 0.755 0.88 0.045],'Min',1,'Max',max(2,Z0),'Value',1,'SliderStep',[stepSmall min(1,stepSmall*2)],'Enable','off','Callback',@scopeChanged);
         if Z0 <= 1, set(scopePopup,'Enable','off'); set(scopeSlider,'Enable','off'); set(scopeText,'String','2D / single-slice data'); end
         basisPopup=uicontrol(rightPanel,'Style','popupmenu','Units','normalized','Position',[.06 .705 .88 .04], ...
-            'String',{'Automatic: fast approximation for long recordings','Exact PCA (slower; recomputes)'}, ...
+            'String',{'Automatic: fast approximation for large recordings','Exact PCA (slower; recomputes)'}, ...
             'Value',1+strcmp(opts.basisMethod,'exact'),'FontSize',10,'BackgroundColor',[.16 .16 .18],'ForegroundColor',fg,'Callback',@basisChanged);
         axPrev=axes('Parent',rightPanel,'Units','normalized','Position',[0.10 0.535 0.84 0.165],'Color',bgAx,'XColor',fg,'YColor',fg); title(axPrev,'PC timecourse preview','Color',fg);
         txtInfo=uicontrol('Parent',rightPanel,'Style','text','Units','normalized','Position',[0.08 0.470 0.84 0.045],'String','Selected: 0 PCs', 'BackgroundColor',get(rightPanel,'BackgroundColor'),'ForegroundColor',[0.85 0.95 1.00],'FontWeight','bold','FontSize',13);

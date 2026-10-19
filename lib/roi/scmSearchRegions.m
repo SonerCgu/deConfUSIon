@@ -19,8 +19,14 @@ if isfield(opt,'atlasLabels') && ~isempty(opt.atlasLabels)
 end
 base=logical(include)&X>=b(1)&X<=b(2)&Y>=b(3)&Y<=b(4);
 [tissue,selected,atlasRegion]=scmAtlasSearchMask(opt,z,[ny nx]);base=base&tissue;
-if isfield(opt,'paintMasks') && numel(opt.paintMasks)>=z && ~isempty(opt.paintMasks{z})
-    painted=opt.paintMasks{z};
+painted=[];
+if isfield(opt,'paintMask')
+    % Current drawing dialogs own one shared mask, independent of slice.
+    painted=opt.paintMask;
+elseif isfield(opt,'paintMasks') && numel(opt.paintMasks)>=z
+    painted=opt.paintMasks{z}; % Preserve older slice-specific protocols.
+end
+if ~isempty(painted)
     assert(isequal(size(painted),[ny nx]),'deConfUSIon:PaintMask','Painted mask must match the image size.');
     base=base&logical(painted);
 end

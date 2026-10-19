@@ -2,6 +2,14 @@ function [matched,labels,meta]=fusiAtlasRegionInput(S,targetSize,space)
 % Sample a saved 3D region bundle on its actual recording grid, never stretch
 % the complete atlas through the acquired AP range by resizing its indices.
 if nargin<3,space='auto';end
+if isfield(S,'lightSuiteNativeMeta')
+ [matched,labels,meta]=fusiLightSuiteRegionInput(S,targetSize);
+ if matched
+  assert(any(strcmp(space,{'auto','native'})),'deConfUSIon:LightSuiteNativeGrid', ...
+   'LightSuite native labels can only be used on the original recording grid.');
+  return;
+ end
+end
 [matched,U,meta]=fusiReadAtlasUnderlay3D(S);labels=[];if ~matched,return;end
 assert(meta.isColor&&strcmpi(meta.atlasMode,'regions'),'deConfUSIon:AtlasRegionInput', ...
  'Select Regions_All.mat or Regions_Merged.mat for integer ROI labels.');

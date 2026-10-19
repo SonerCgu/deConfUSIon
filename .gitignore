@@ -1,6 +1,9 @@
 # HUMoR generated analysis outputs
 QC/
 Preprocessing/
+# MATLAB source module (Windows also matched it with the output rule above).
+!/lib/preprocessing/
+!/lib/preprocessing/*.m
 PSC/
 Visualization/
 Masks/
@@ -28,6 +31,11 @@ sensory_runs/
 # MATLAB temporary / autosave files
 *.asv
 *.m~
+
+# Microsoft Office lock and temporary files (can be locked while Word is open)
+~$*
+/docs/mso*.tmp
+/docs/*.tmp
 
 # Local cleanup backups
 tmp/

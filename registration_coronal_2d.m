@@ -824,7 +824,16 @@ end
         set(hAtlas,'CData',atlasRGB);
         set(hFuseUnder,'CData',atlasRGB);
 
-        srcDisp = applyDisplay(src2D, S.winMin, S.winMax, S.invert);
+        displayImage=src2D;
+        if ~isfield(sourceInfo,'displayIsProcessed') || ~sourceInfo.displayIsProcessed
+            % Robust contrast is display-only. Keep src2D unchanged for the
+            % registration objective and its saved/automatic transforms.
+            rawDisplay=double(sourceStack3D(:,:,currentSourceSlice));
+            limits=fusiFiniteDisplayLimits(rawDisplay);
+            displayImage=min(1,max(0,(rawDisplay-limits(1))/diff(limits)));
+            displayImage(~isfinite(displayImage))=0;
+        end
+        srcDisp = applyDisplay(displayImage, S.winMin, S.winMax, S.invert);
         tform = affine2d(buildAffine2D(S, [srcH srcW]));
         ref2d = imref2d([targetH targetW]);
 

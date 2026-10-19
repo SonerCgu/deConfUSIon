@@ -46,28 +46,18 @@ stageChanged=~isequal(getappdata(h,'ProgressStage'),stage);
 if ~unmetered,fraction=min(1,max(0,fraction));end
 if ~stageChanged&&fraction<1&&toc(getappdata(h,'ProgressUpdated'))<.15,return;end
 elapsed=toc(getappdata(h,'ProgressStarted'));
-estimate='Estimating remaining time...';
-if unmetered
-    estimate=sprintf('Reading from disk | elapsed %s',durationText(elapsed));
-elseif fraction>=.02 && elapsed>=1
-    remaining=elapsed*(1-fraction)/max(eps,fraction);
-    estimate=sprintf('Elapsed %s | about %s remaining',durationText(elapsed),durationText(remaining));
-end
-if unmetered,status=stage;
-else,waitbar(fraction,h,'');status=sprintf('%s  (%d%%)',stage,round(100*fraction));end
-set(findall(h,'Tag','ProcessingStatus'),'String',status);
-set(findall(h,'Tag','ProcessingETA'),'String',estimate);
+[display,phase]=fusiProgressDisplay(fraction,stage,elapsed,getappdata(h,'ProgressPhase'));
+maximum=getappdata(h,'ProgressMaxFraction');
+if ~isempty(maximum)&&isfinite(display.fraction),display.fraction=display.fraction*maximum;end
+setappdata(h,'ProgressPhase',phase);
+setappdata(h,'ProgressDisplayedFraction',display.fraction);
+if ~isnan(display.fraction),waitbar(display.fraction,h,'');end
+set(findall(h,'Tag','ProcessingStatus'),'String',display.status);
+set(findall(h,'Tag','ProcessingETA'),'String',display.estimate);
 setappdata(h,'ProgressUpdated',tic);setappdata(h,'ProgressStage',stage);drawnow;
 if ~isgraphics(h) || isequal(getappdata(h,'CancelProcessing'),true)
     error('deConfUSIon:ProcessingCancelled','Processing cancelled; the input dataset is unchanged.');
 end
-end
-
-function s=durationText(seconds)
-seconds=max(0,round(seconds));
-if seconds<60, s=sprintf('%d s',seconds);
-elseif seconds<3600, s=sprintf('%d min %02d s',floor(seconds/60),mod(seconds,60));
-else, s=sprintf('%d h %02d min',floor(seconds/3600),floor(mod(seconds,3600)/60)); end
 end
 
 function closeProgress(h)
@@ -102,9 +92,13 @@ if isstruct(D)
 end
 if isempty(path), path=fallbackFile; end
 if isempty(stamp) && ~isempty(path) && exist(path,'file')==2
-    try
-        d=System.IO.File.GetCreationTime(path); stamp=char(d.ToString('dd/MM/yy'));
-    catch
+    if ispc
+        try
+            d=System.IO.File.GetCreationTime(path); stamp=char(d.ToString('dd/MM/yy'));
+        catch
+            d=dir(path); stamp=datestr(d.datenum,'dd/mm/yy');
+        end
+    else
         d=dir(path); stamp=datestr(d.datenum,'dd/mm/yy');
     end
 end
@@ -253,7 +247,7 @@ end
 function showHelp(topic)
 if nargin<1, topic='Overview'; end
 C=palette(); root=fileparts(mfilename('fullpath'));
-helpFile=fullfile(root,'docs','help_topics.json');
+helpFile=fullfile(root,'lib','metadata','help_topics.json');
 titleText=char(topic);
 topicKey='overview';
 paragraphs={'Select a dataset, confirm its geometry and timing, and inspect QC before processing.', ...
@@ -357,11 +351,11 @@ switch lower(topicKey)
         definition='PCA finds orthogonal components ordered by explained variance; ICA finds statistically independent source components.';
         math='For centered voxel-by-time X, PCA gives X≈W diag(s) U^T. Explained variance is s_k²/||X||F² using all centered samples. ICA whitens sqrt(T) U^T before symmetric FastICA and reconstructs X≈AS. Removing selected components subtracts their reconstruction and restores the original mean.';
         workflow='1) Open PCA or ICA on raw or processed data. 2) Wait for cancellable decomposition progress. 3) Inspect component traces (and ICA spatial maps). Long recordings use a deterministic randomized PCA basis with two subspace iterations; every frame and voxel participates. The header identifies this approximation and its singular-pair residual. 4) Choose Exact PCA/basis to recompute when needed. 5) Select components and Apply & Close; the named result becomes available in the dataset dropdown.';
-        checks='Fast mode starts automatically above 4096 frames; shorter recordings retain exact PCA. The residual measures basis approximation, not anatomical or physiological validity. Weak components can differ from exact PCA. Method, seed and iterations are recorded with applied results. Component sign/order do not establish a source as artifact; inspect the time course and spatial pattern.';
+        checks='Fast mode starts automatically above 4096 frames, or for large voxel-by-time matrices whose covariance would be expensive. Smaller recordings retain exact PCA; Exact PCA remains selectable. The residual measures basis approximation, not anatomical or physiological validity. Weak components can differ from exact PCA. Method, seed and iterations are recorded with applied results. Component sign/order do not establish a source as artifact; inspect the time course and spatial pattern.';
     case 'fc'
         definition='Functional connectivity compares time courses between voxels or regions after the selected preprocessing.';
         math='Pearson r = covariance(x,y)/(SD(x) SD(y)). Region traces are voxel means; merging Left + Right uses voxel-count weights. Group export includes Fisher z = atanh(r). Colour range and network edge threshold change display only; network edges are not significance tests.';
-        workflow='1) Load comparable processed data and verify Analysed TR. 2) Load registered Histology and region labels; inspect alignment and tissue inclusion. 3) Add recordings with Scans / order; unchanged positioning permits sharing one reviewed atlas alignment. PSC baseline references amplitudes; FC calculates each scan separately. 4) Set Pre / During / Post and local times. In Regions choose Volume regions, Displayed slice, or Regions + slices (e.g. CPu at Z7 and dentate gyrus at Z20), then ROI current or all periods. 5) Choose heatmap/network regions, inspect Graph explanation, Export paper figure and Export to Group. Image / labels offers optional display-only Gaussian smoothing in pixels. See docs/functional-connectivity-paper-workflow.md.';
+        workflow='1) Load comparable processed data and verify Analysed TR. 2) Load registered Histology and region labels; inspect alignment and tissue inclusion. 3) Add recordings with Scans / order; unchanged positioning permits sharing one reviewed atlas alignment. PSC baseline references amplitudes; FC calculates each scan separately. 4) Set Pre / During / Post and local times. In Regions choose Volume regions, Displayed slice, or Regions + slices (e.g. CPu at Z7 and dentate gyrus at Z20), then ROI current or all periods. 5) Choose heatmap/network regions, inspect Graph explanation, Export paper figure and Export to Group. Image / labels offers optional display-only Gaussian smoothing in pixels. See the Functional Connectivity chapter in docs/deConfUSIon_User_Handbook.pdf.';
         checks='Check motion, true acquired sample count, timing, preprocessing and atlas coverage. Shared stimulus timing can produce correlations without altered neural interactions. Stimulation responses in SCM do not guarantee FC effects. The current FC GUI does not remove an event-averaged stimulus response. Use independent animals for group inference; scans and slices from the same animal are repeated measurements.';
     case {'registration','registration_3d'}
         definition='Registration estimates a transform that places the functional volume and atlas/underlay in the same coordinate system.';
@@ -401,9 +395,12 @@ sections={struct('title','Introduction','body',intro), ...
 end
 
 function openManual(root)
-manual=fullfile(root,'docs','deConfUSIon_User_Manual_2026-09-06.html');
+manual=fullfile(root,'docs','deConfUSIon_User_Handbook.pdf');
 if exist(manual,'file')~=2
-    manual=fullfile(root,'docs','deConfUSIon_User_Manual_2026-09-06.pdf');
+    manual=fullfile(root,'docs','deConfUSIon_User_Manual.pdf');
+end
+if exist(manual,'file')~=2
+    errordlg('Download the handbook or practical manual into the toolbox docs folder.','User manual');return;
 end
 web(manual,'-browser');
 end

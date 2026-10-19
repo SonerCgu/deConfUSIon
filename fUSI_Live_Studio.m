@@ -18,18 +18,8 @@ sz   = size(I);
 % -------------------------------------------------------------------------
 % Global intensity reference
 % -------------------------------------------------------------------------
-if ndims(I) == 4
-    refLo_raw = prctile(I(:),1);
-    refHi_raw = prctile(I(:),99);
-else
-    refLo_raw = min(I(:));
-    refHi_raw = max(I(:));
-end
-
-if refHi_raw <= refLo_raw
-    refLo_raw = min(I(:));
-    refHi_raw = max(I(:));
-end
+displayLimits=fusiMovieDisplayLimits(I);
+refLo_raw=displayLimits(:,1);refHi_raw=displayLimits(:,2);
 
 refLo = refLo_raw;
 refHi = refHi_raw;
@@ -257,7 +247,7 @@ Y = Y - dRow;
 
 contrast = uicontrol(sidebar,'Style','slider', ...
     'Units','normalized','Position',[0.05 Y 0.90 sliderH], ...
-    'Min',0.1,'Max',5,'Value',2, ...
+    'Min',0.1,'Max',5,'Value',1,'Tag','LiveContrast', ...
     'BackgroundColor',C.ctrl);
 Y = Y - dBlock;
 
@@ -270,7 +260,7 @@ Y = Y - dRow;
 
 gammaSlider = uicontrol(sidebar,'Style','slider', ...
     'Units','normalized','Position',[0.05 Y 0.90 sliderH], ...
-    'Min',0.1,'Max',5,'Value',0.3, ...
+    'Min',0.1,'Max',5,'Value',1,'Tag','LiveGamma', ...
     'BackgroundColor',C.ctrl);
 Y = Y - dBlock;
 
@@ -505,6 +495,9 @@ uicontrol(sidebar,'Style','pushbutton','String','Export MP4', ...
     'FontSize',11,'FontWeight','bold', ...
     'BackgroundColor',C.greenDark,'ForegroundColor',C.text, ...
     'Callback',@exportVideoCB);
+if ~ispc&&~ismac
+    set(findall(sidebar,'Style','pushbutton','String','Export MP4'),'String','Export AVI');
+end
 
 uicontrol(sidebar,'Style','pushbutton','String','Close Viewer', ...
     'Units','normalized','Position',[0.68 0.01 0.27 0.042], ...
@@ -605,6 +598,10 @@ mousePos   = [NaN NaN];
 
 roiLive = rectangle(ax1,'Position',[1 1 1 1], ...
     'EdgeColor',[1 0 0],'LineWidth',2,'Visible','off');
+setappdata(fig,'FUSILiveDisplay',@()struct('limits',[refLo refHi],'frame',frameH.CData, ...
+    'contrast',contrast.Value,'gamma',gammaSlider.Value));
+setappdata(fig,'FUSISetFrame',@setDisplayFrame);
+setappdata(fig,'FUSISelectDisplayROI',@selectDisplayROI);
 
 set(fig,'WindowButtonMotionFcn',@(~,~) updateMousePos);
 
@@ -855,6 +852,23 @@ set(fig,'CloseRequestFcn',@cleanup);
         end
     end
 
+    function setDisplayFrame(index)
+        frameSlider.Value=max(1,min(T,round(index)));updateFrame();
+    end
+
+    function selectDisplayROI(x,y,width)
+        % Programmatic counterpart of hover + click, in displayed XY pixels.
+        % Reuse the interactive extraction (including its displayed Y flip).
+        validateattributes(x,{'numeric'},{'scalar','finite','>=',1,'<=',Nx});
+        validateattributes(y,{'numeric'},{'scalar','finite','>=',1,'<=',Ny});
+        if nargin>=3
+            validateattributes(width,{'numeric'},{'scalar','finite','>=',2,'<=',150});
+            roiSlider.Value=round(width);
+        end
+        mousePos=round([x y]);liveROIbtn.Value=1;toggleLiveROI(liveROIbtn,[]);
+        updateFrame();mouseClick([],[]);
+    end
+
     function updateFrame(varargin)
         if ~ishghandle(fig)
             return;
@@ -875,20 +889,12 @@ set(fig,'CloseRequestFcn',@cleanup);
         mode = get(displayDropdown,'Value');
         switch mode
             case 1
-                if dims == 4
-                    F = (double(Fraw) - refLo) / (refHi - refLo);
-                    F = max(0, min(1, F));
-                else
-                    F = normalizeVol(Fraw);
-                end
+                F = (double(Fraw) - refLo(currentZ)) / (refHi(currentZ) - refLo(currentZ));
+                F = max(0, min(1, F));
 
             case 2
-                if dims == 4
-                    F = (double(Fraw) - refLo) / (refHi - refLo);
-                    F = max(0, min(1, F));
-                else
-                    F = normalizeVol(Fraw);
-                end
+                limits=fusiFiniteDisplayLimits(Fraw);
+                F=max(0,min(1,(double(Fraw)-limits(1))/diff(limits)));
 
             case 3
                 F = normalizeVol(Fpsc);
@@ -1190,13 +1196,7 @@ set(fig,'CloseRequestFcn',@cleanup);
                 T  = nr;
             end
 
-            if ndims(I) == 4
-                refLo = prctile(I(:),1);
-                refHi = prctile(I(:),99);
-            else
-                refLo = min(I(:));
-                refHi = max(I(:));
-            end
+            limits=fusiMovieDisplayLimits(I);refLo=limits(:,1);refHi=limits(:,2);
 
             gabriel_active = true;
             set(gabrielToggle,'Value',1);
@@ -1427,6 +1427,9 @@ set(fig,'CloseRequestFcn',@cleanup);
         dcuRoot = getpref('deConfUSIon','analysedRoot','Z:\fUS\Project_PACAP_AVATAR_SC\AnalysedData');
         if ispc && ~isempty(dcuRoot) && exist(dcuRoot,'dir') == 7
             startPath = dcuRoot;
+        elseif ~ispc && ~isempty(dcuRoot)
+            mountedRoot=fusiFindMovedDataPath(dcuRoot);
+            if isfolder(mountedRoot),startPath=mountedRoot;end
         end
 
         selectedDir = uigetdir(startPath, ...
@@ -1633,6 +1636,7 @@ end
 
 
  function exportVideoCB(~,~)
+    formatLabel='MP4';if ~ispc&&~ismac,formatLabel='AVI';end
     txtExp = [];
     vid = [];
     wasPlaying = false;
@@ -1702,7 +1706,7 @@ end
                 'Export FPS:', ...
                 'Repeat each frame (slow down movie):', ...
                 'Export all slices? (1=yes, 0=current slice):'}, ...
-                'Export MP4', 1, ...
+                ['Export ' formatLabel], 1, ...
                 {num2str(defaultFPS), '1', defAllSlices});
 
             if isempty(a)
@@ -1805,6 +1809,8 @@ end
 
             % HUMOR_LIVE_MP4_SAFE_PATH_PATCH_V1
             outFile = liveViewerSafeMp4File(videosDir, dataTag, modeTag, zz, timeTag);
+            movieProfile='MPEG-4';
+            if ~ispc&&~ismac,[outFile,movieProfile]=fusiMovieOutput(outFile);end
 
 % Make absolutely sure the parent folder exists
 outParent = fileparts(outFile);
@@ -1830,7 +1836,7 @@ end
 fclose(fid);
 delete(outFile);
 
-vid = VideoWriter(outFile,'MPEG-4');
+vid = VideoWriter(outFile,movieProfile);
 vid.FrameRate = exportFPS;
 vid.Quality = 95;
 open(vid);
@@ -1872,10 +1878,10 @@ open(vid);
             end
 
             restoreAfterExport();
-                     fprintf('[Live Viewer] MP4 export finished: %s\n', videosDir);
+                     fprintf('[Live Viewer] %s export finished: %s\n', formatLabel,videosDir);
 
 try
-    msgbox(sprintf('MP4 export finished.\n\nSaved in:\n%s', videosDir), ...
+    msgbox(sprintf('%s export finished.\n\nSaved in:\n%s',formatLabel,videosDir), ...
         'Export complete', 'help');
 catch
 end

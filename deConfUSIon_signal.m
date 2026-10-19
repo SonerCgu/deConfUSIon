@@ -115,13 +115,28 @@ if numel(good)<2
     error('deConfUSIon:TooFewFrames','Interpolation requires at least two unrejected frames.');
 end
 sz = size(I); V = reshape(I,[],T); O = V;
-% Endpoint gaps use the nearest observed frame, never unbounded extrapolation.
-tq = min(max(bad,good(1)),good(end));
-chunk = max(1,floor(32*1024^2/(8*T)));
-for a=1:chunk:size(V,1)
-    b=min(size(V,1),a+chunk-1);
-    O(a:b,bad) = cast(interp1(good,double(V(a:b,good))',tq,'linear')','like',I);
-    if ~isempty(progressFcn), progressFcn(b/size(V,1)); end
+% Only rejected frames need interpolation. Reading every accepted frame for
+% each voxel slab makes sparse rejection unnecessarily expensive on 3D data.
+% Work in contiguous spatial blocks and use the same clamped linear weights
+% as interp1, in double precision, before casting back to the input class.
+right=1; chunk=1024*1024;
+for k=1:numel(bad)
+    t=bad(k);
+    while right<numel(good) && good(right)<t, right=right+1; end
+    hi=good(right); lo=good(max(1,right-1));
+    if t<=good(1), lo=good(1); hi=lo; end
+    if t>=good(end), lo=good(end); hi=lo; end
+    if lo==hi
+        O(:,t)=V(:,lo);
+    else
+        weight=(t-lo)/(hi-lo);
+        for a=1:chunk:size(V,1)
+            b=min(size(V,1),a+chunk-1);
+            left=double(V(a:b,lo));
+            O(a:b,t)=cast(left+weight*(double(V(a:b,hi))-left),'like',I);
+        end
+    end
+    if ~isempty(progressFcn), progressFcn(k/numel(bad)); end
 end
 O=reshape(O,sz);
 end
@@ -196,7 +211,11 @@ lastProgress=tic;
 [V,T]=size(X); K=min([round(K),V,T-1]);
 method='auto'; if isfield(options,'method'), method=lower(options.method); end
 if ~ismember(method,{'auto','fast','exact'}), error('deConfUSIon:BasisMethod','Unknown decomposition method: %s',method); end
-fast=(strcmp(method,'fast') || strcmp(method,'auto') && T>4096) && min(V,T)>K+30;
+% A matrix scan can have hundreds of thousands of voxels but fewer than
+% 4096 frames. Its V*T*T covariance is still much costlier than a compact
+% basis. Account for both dimensions, retaining exact mode on request.
+largeMatrix=double(V)*T>5e7 && T>max(512,8*(K+30));
+fast=(strcmp(method,'fast') || strcmp(method,'auto') && (T>4096 || largeMatrix)) && min(V,T)>K+30;
 multiplicationPass=0;
 info=struct('algorithm','exact','approximate',false,'powerIterations',0,'seed',0,'relativeResidual',NaN);
 if K<1, error('deConfUSIon:ShortSeries','At least two time points and one voxel are required.'); end

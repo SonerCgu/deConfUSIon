@@ -1382,9 +1382,6 @@ end
 
 function [portion, info] = commonMode_blockCorr(Iin, ndIn, maskVol, Nblock, THCM, maxFrames, ny,nx,nz,Tin)
     Nblock = max(2, round(Nblock));
-    xe = round(linspace(1, nx+1, Nblock+1));
-    ye = round(linspace(1, ny+1, Nblock+1));
-    ze = round(linspace(1, nz+1, Nblock+1));
 
     if Tin > maxFrames
         step = ceil(Tin/maxFrames);
@@ -1394,35 +1391,7 @@ function [portion, info] = commonMode_blockCorr(Iin, ndIn, maskVol, Nblock, THCM
     end
     nT = numel(tidx);
 
-    tc = [];
-    bcount = 0;
-
-    for bz=1:Nblock
-        z1 = ze(bz);
-        z2 = ze(bz+1)-1;
-        if z2<z1, continue; end
-        for by=1:Nblock
-            y1 = ye(by);
-            y2 = ye(by+1)-1;
-            if y2<y1, continue; end
-            for bx=1:Nblock
-                x1 = xe(bx);
-                x2 = xe(bx+1)-1;
-                if x2<x1, continue; end
-                m = maskVol(y1:y2, x1:x2, z1:z2);
-                if nnz(m) < 30, continue; end
-
-                bcount = bcount + 1;
-                tc(bcount,1:nT) = 0; %#ok<AGROW>
-                for k=1:nT
-                    fr = getFrame(Iin, ndIn, tidx(k));
-                    sub = fr(y1:y2, x1:x2, z1:z2);
-                    v = sub(m);
-                    tc(bcount,k) = mean(double(v));
-                end
-            end
-        end
-    end
+    tc = fusiCommonModeTimecourses(Iin,maskVol,Nblock,maxFrames);
 
     if isempty(tc) || size(tc,1) < 5
         portion = 0;

@@ -5,11 +5,15 @@ function varargout=DataIO(action,varargin)
 deConfUSIon_setup();
 if strcmp(action,'write')
     destination=varargin{1}; payload=varargin{2}; temporary=varargin{3};
+    progress=[];if numel(varargin)>=4,progress=varargin{4};end
     if exist(destination,'file'), error('deConfUSIon:SaveExists','Output already exists: %s',destination); end
     folder=fileparts(destination); if isempty(folder), folder=pwd; end
     if ~exist(folder,'dir'), mkdir(folder); end
-    save(temporary,'-struct','payload','-v7.3','-nocompression');
+    writeClock=tic;
+    fusiWriteAnalysisMAT(temporary,payload,progress);
+    writeSeconds=toc(writeClock);verifyClock=tic;
     info=whos('-file',temporary);
+    if ~isempty(progress),progress(.94,'Verifying saved image dimensions and metadata...');end
     if ~all(ismember(fieldnames(payload),{info.name})), error('deConfUSIon:SaveVerify','Incomplete staged MAT file: %s',temporary); end
     if isfield(payload,'newData') && isfield(payload.newData,'I')
         imageInfo=h5info(temporary,'/newData/I');
@@ -25,6 +29,9 @@ if strcmp(action,'write')
         'imageSize',size(payload.newData.I),'imageClass',class(payload.newData.I));
     writeRecoveryRecord(temporary,record);
     publishCompleteStage(temporary,destination);
+    if ~isempty(progress),progress(1,'Result MAT saved and verified.');end
+    fprintf('[Save timing] MAT write %.1f s (%.1f MiB/s); verify/publish %.1f s.\n', ...
+        writeSeconds,stage.bytes/1024^2/max(writeSeconds,eps),toc(verifyClock));
     return;
 end
 persistent jobs poller polling
@@ -34,6 +41,7 @@ switch action
         % Old assembled GUI callbacks still call 'enqueue'. They must obey
         % the same durable contract, even before that GUI is relaunched.
         destination=char(varargin{1}); payload=preparePayload(varargin{2},destination);
+        progress=[];if numel(varargin)>=3,progress=varargin{3};end
         if exist(destination,'file') || any(strcmp({jobs.path},destination))
             error('deConfUSIon:SaveExists','Choose a new output path: %s',destination);
         end
@@ -48,7 +56,7 @@ switch action
         updateSaveStatus(jobs);
         fprintf('[Save] Writing result: %s\n',destination);
         try
-            DataIO('write',destination,payload,temporary);
+            DataIO('write',destination,payload,temporary,progress);
             jobs(k).state='saved'; jobs(k).payload=[];
             fprintf('[Save] Saved and verified: %s\n',destination);
         catch ME

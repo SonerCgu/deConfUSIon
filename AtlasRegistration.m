@@ -14,6 +14,7 @@ switch lower(action)
     case 'prepare', varargout{1}=prepareAnatomy(varargin{:});
     case 'planematrix', varargout{1}=planeMatrix(varargin{:});
     case 'previewcuts', [varargout{1:nargout}]=previewCuts(varargin{:});
+    case 'lightsuite', [varargout{1:nargout}]=deConfUSIon_LightSuite('gui',varargin{:});
     otherwise, error('deConfUSIon:AtlasAction','Unknown atlas action: %s',action);
 end
 end
@@ -677,6 +678,7 @@ function runProcess(executable,args,logFile,cfg)
 list=java.util.ArrayList(); list.add(java.lang.String(executable));
 for k=1:numel(args), list.add(java.lang.String(args{k})); end
 builder=java.lang.ProcessBuilder(list); builder.redirectErrorStream(true);
+if ~ispc,fusiNativeProcessEnvironment(builder,fileparts(executable));end
 builder.redirectOutput(java.io.File(logFile)); process=builder.start();
 c=onCleanup(@()process.destroy()); %#ok<NASGU>
 while true

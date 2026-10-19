@@ -4,13 +4,27 @@ function [group,condition,reason]=gaInferAssignment(file)
 group='Unassigned'; condition='Unassigned'; reason='No unambiguous ROI or treatment label';
 file=char(file); labels={};
 [~,~,ext]=fileparts(file);
-if strcmpi(ext,'.txt') && isfile(file)
-    fid=fopen(file,'rt');
+if strcmpi(ext,'.txt')
+    % fopen already detects a missing/unreadable file; an isfile probe adds
+    % a redundant round trip for every ROI on a network drive.
+    try,fid=fopen(file,'r');catch,fid=-1;end
     if fid>=0
         cleanup=onCleanup(@()fclose(fid)); %#ok<NASGU>
-        for i=1:512
-            line=fgetl(fid); if ~ischar(line), break; end
-            if ~isempty(regexpi(line,'^#\s*columns\s*:','once')), break; end
+        header=fusiSCMEnsembleHeader(fid,false);
+        if header.matched
+            % This export schema declares the observation's role before its
+            % audit-only member JSON. Old audits can exceed 50 MB per file.
+            labels=header.labels;
+        else
+        done=false;
+        for batch=1:16
+            % Read a small block natively instead of calling fgetl once for
+            % every header line, especially costly on network filesystems.
+            block=textscan(fid,'%s',32,'Delimiter','\n','Whitespace','');
+            lines=block{1};if isempty(lines),break;end
+            for i=1:numel(lines)
+            line=lines{i};
+            if ~isempty(regexpi(line,'^#\s*columns\s*:','once')),done=true;break;end
             token=regexpi(line,'^#\s*ROI_LABEL\s*:\s*(.*)$','tokens','once');
             if ~isempty(token), labels{end+1}=token{1}; end %#ok<AGROW>
             token=regexpi(line,'^#\s*AutomaticROISelection\s*:\s*(.*)$','tokens','once');
@@ -22,6 +36,9 @@ if strcmpi(ext,'.txt') && isfile(file)
                     % Older/manual exports may have no valid automatic metadata.
                 end
             end
+            end
+            if done||feof(fid),break;end
+        end
         end
     end
 end

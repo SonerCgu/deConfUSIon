@@ -18,7 +18,8 @@ fid = fopen(fname,'r');
 if fid < 0, return; end
 cln = onCleanup(@() fclose(fid)); %#ok<NASGU>
 
-inTable = false;
+header=fusiSCMEnsembleHeader(fid);
+inTable = header.tableFound;
 
 while true
     ln = fgetl(fid);

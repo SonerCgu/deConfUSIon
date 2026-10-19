@@ -1,5 +1,5 @@
 % ATLAS - deConfUSIon implementation module.
-% Initialize with deConfUSIon_setup; see docs/code_map.md for callers.
+% See docs/deConfUSIon_User_Handbook.pdf for the user and source reference.
 %   deConfUSIon_apply_rgb2acr
 %   deConfUSIon_auto_register_3d
 %   deConfUSIon_prepare_atlas
@@ -11,6 +11,7 @@
 %   fusiAtlasRegionCatalog
 %   fusiAtlasRegionGrouping
 %   fusiAtlasRegionInput
+%   fusiAtlasRegionInput2D
 %   fusiAtlasRegroupUnderlay3D
 %   fusiAtlasSearchContext
 %   fusiAtlasSizeMatrix
@@ -22,14 +23,18 @@
 %   fusiBregmaAnchors
 %   fusiCachedAtlasUnderlay3D
 %   fusiCachedAtlasUnderlayView3D
+%   fusiChooseAtlasSource
 %   fusiChooseAtlasTransformFile
 %   fusiChooseUnderlayFile
 %   fusiCoronalSliceGuide
 %   fusiFindAtlasUnderlay3D
+%   fusiFindRegistrationExecutable
 %   fusiFitCoronalAnchors
 %   fusiImportSnapAdjustment
 %   fusiOpenSnapWorkspace
 %   fusiReadAtlasUnderlay3D
+%   fusiReadStepMotorUnderlays2D
+%   fusiRegionSearchMatch
 %   fusiRegistrationConfigureSlices
 %   fusiRegistrationDisplayVolume
 %   fusiRegistrationFeatures
@@ -37,6 +42,7 @@
 %   fusiRegistrationOverlayAppearance
 %   fusiRegistrationSliceSupport
 %   fusiSaveAtlasUnderlays3D
+%   fusiSaveStepMotorUnderlays2D
 %   fusiSnapOverlayWorkspace
 %   fusiSnapVesselContrast
 %   fusiUnderlayPickerOptions

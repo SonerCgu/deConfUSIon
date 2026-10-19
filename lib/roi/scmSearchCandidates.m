@@ -27,10 +27,14 @@ for pass=1:passes
                     c.excludedAtlasIDs=opt.excludedAtlasIDs;
                     if isfield(opt,'atlasProvenance'),c.atlasProvenance=opt.atlasProvenance;end
                 end
-                if isfield(opt,'paintMasks')&&numel(opt.paintMasks)>=cfg.slice&&~isempty(opt.paintMasks{cfg.slice})
-                    c.paintedSearchMaskSize=size(opt.paintMasks{cfg.slice});
-                    c.paintedSearchMaskIndices=find(opt.paintMasks{cfg.slice})';
+                painted=[];
+                if isfield(opt,'paintMask'),painted=opt.paintMask;
+                elseif isfield(opt,'paintMasks')&&numel(opt.paintMasks)>=cfg.slice,painted=opt.paintMasks{cfg.slice};end
+                if ~isempty(painted)
+                    c.paintedSearchMaskSize=size(painted);
+                    c.paintedSearchMaskIndices=find(painted)';
                     c.paintedSearchMaskIndexConvention='MATLAB 1-based column-major; before eligible tissue, rectangle and side intersection';
+                    if isfield(opt,'paintMaskScope'),c.paintedSearchMaskScope=opt.paintMaskScope;end
                 end
                 c.coordinateConvention='Image-left/right; X columns, Y rows; not anatomical laterality';
                 c.searchedSlices=slices;

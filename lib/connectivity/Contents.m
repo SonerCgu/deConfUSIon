@@ -1,5 +1,5 @@
 % CONNECTIVITY - deConfUSIon implementation module.
-% Initialize with deConfUSIon_setup; see docs/code_map.md for callers.
+% See docs/deConfUSIon_User_Handbook.pdf for the user and source reference.
 %   deConfUSIon_FC_find_stepmotor_txt_names
 %   deConfUSIon_FC_force_layout
 %   deConfUSIon_fc_jm_order
@@ -9,16 +9,26 @@
 %   deConfUSIon_FC_remember_layout
 %   deConfUSIon_FC_stepmotor_read_folder
 %   deConfUSIon_find_stepmotor_seg_fc_files
-%   fusiFCCorrelationMatrix
+%   fusiElectricalBlockAnalysis
 %   fusiFCCompareScans
+%   fusiFCCorrelationMatrix
+%   fusiFCExcludeNonTissue
+%   fusiFCExportPaperFigure
 %   fusiFCFullRegionNames
+%   fusiFCGroupMatrix
+%   fusiFCGroupSelectPeriod
+%   fusiFCImageGeometry
 %   fusiFCLoadScan
-%   fusiFCReadMask
-%   fusiFCRegionCatalog
 %   fusiFCMergeNameTable
 %   fusiFCNetworkPlot
-%   fusiFCExportPaperFigure
-%   fusiFCScanComparisonDialog
+%   fusiFCReadMask
+%   fusiFCReferenceImages
+%   fusiFCRegionBrowser
+%   fusiFCRegionCatalog
 %   fusiFCRegionSliceDialog
 %   fusiFCRegionSliceResult
+%   fusiFCScanComparisonDialog
 %   fusiFCSmoothCorrelation
+%   fusiFCStartDir
+%   fusiFCValidateAtlasGroup
+%   fusiFCWindowBounds

@@ -1,11 +1,20 @@
 % ROI - deConfUSIon implementation module.
-% Initialize with deConfUSIon_setup; see docs/code_map.md for callers.
+% See docs/deConfUSIon_User_Handbook.pdf for the user and source reference.
+%   fusiBaselineRoiTrace
+%   fusiReferenceTraceWindow
+%   fusiRoiCurveCache
+%   fusiSmoothTimecourse
+%   scmAtlasRegionSelectionDialog
 %   scmAtlasSearchMask
 %   scmAutomaticDisplay
+%   scmAutomaticROISelections
 %   scmAutoSearchDialog
 %   scmAwakeSearchWindow
 %   scmCandidateOrder
+%   scmCandidateRegionKey
 %   scmCandidateTableColors
+%   scmCompactROIAudit
+%   scmExportNote
 %   scmExportROIBundles
 %   scmExportSearchParameters
 %   scmExportSliceRange
@@ -13,15 +22,20 @@
 %   scmProbeSpacing
 %   scmPublishPpt
 %   scmReadMaskEditorBundle
+%   scmRebaseROIMapping
 %   scmROI
 %   scmROIWindowTag
 %   scmSearchCandidates
 %   scmSearchParameterSummary
 %   scmSearchRegions
+%   scmSearchScanSequence
+%   scmSelectScanCandidates
+%   scmCandidateExportTrace
 %   scmSearchSlices
 %   scmSearchWindows
 %   scmSharedDisplay
 %   scmSpatialCalibration
 %   scmStaticROI
 %   scmTopCandidates
+%   scmWarpMappedSeries
 %   scmWriteAtlasSelectionHeader
