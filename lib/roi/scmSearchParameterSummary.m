@@ -9,7 +9,7 @@ if isfield(c,'searchScanLabel')
  lines{end+1}=sprintf('ROI search source: %s | source TR %.9g s',c.searchScanLabel,c.searchTR);
  lines{end+1}=['Searched scans: ' strjoin(c.searchParameters.searchedScanLabels,'; ')];
  lines{end+1}='Time windows: minutes within each individual scan, starting at zero; stitched plot offsets are not used.';
- lines{end+1}='Scores describe the search source; exported ROI traces describe the displayed overlay recording.';
+ lines{end+1}='Scores and exported ROI traces use each candidate''s search source scan, independently of the displayed overlay. Times in ROI TXT files start at zero in that source scan.';
 end
 shape=sprintf('%d x %d pixels (X x Y)',xy);
 if isfield(c,'roiMode')&&strcmp(c.roiMode,'region'),shape=sprintf('Whole selected region per slice (%d voxels in this candidate)',c.pixelCount);end

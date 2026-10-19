@@ -185,11 +185,9 @@ function liveViewerCallback(~,~)
 
     data = getActiveData();
 
-    if isfield(data,'PSC') && ~isempty(data.PSC)
-        I = data.PSC;
-    else
-        I = data.I;
-    end
+    % I is the active scientific dataset. PSC is a viewer cache and can
+    % survive opening SCM before preprocessing; it is not the raw movie.
+    I = data.I;
 
     try
         s = whos('I');
@@ -1554,6 +1552,8 @@ function setProgramStatus(isReady)
 
     if ~isgraphics(fig,'figure'), return; end
     if isequal(getappdata(fig,'SegmentationRunning'),true),isReady=false;end
+    lightWindows=getappdata(fig,'LightSuiteWorkspaces');
+    if any(isgraphics(lightWindows)),isReady=false;end
     if isequal(getappdata(fig,'LoadInProgress'),true)||isequal(getappdata(fig,'DatasetReadInProgress'),true),isReady=false;end
     statusState = guidata(fig);
     if ~isstruct(statusState) || ~isfield(statusState,'statusPanel'), return; end

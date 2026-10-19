@@ -2892,20 +2892,8 @@ drawnow;setappdata(fig,'FUSIFCStartupReady',true);set(fig,'Visible',initialVisib
     function onAtlasGranularity(src,~)
         s=guidata(fig);subj=s.subjects(s.currentSubject);mode='Detailed';if src.Value==2,mode='Parent';end
         try
-            assert(~isempty(subj.registeredRegionPayload),'Load a registered Regions_All or Regions_Merged bundle first.');
-            P=subj.registeredRegionPayload;current='Detailed';
-            if isfield(P.atlasUnderlayMeta,'regionGrouping'),current=P.atlasUnderlayMeta.regionGrouping;end
-            if ~strcmpi(current,mode)
-                if strcmp(mode,'Detailed')
-                    file=fullfile(fileparts(subj.registeredRegionFile),'Regions_All.mat');
-                    assert(isfile(file),'Detailed labels require Regions_All.mat from the same registration.');P=load(file);
-                else
-                    atlas=struct('Regions',P.atlasRegionLabels3D,'infoRegions',P.atlasInfoRegions);
-                    [P.atlasRegionLabels3D,P.atlasInfoRegions]=fusiAtlasRegionGrouping(atlas,'Parent');
-                    P.atlasUnderlayMeta.regionGrouping='Parent';P.Transf.regionGrouping='Parent';
-                end
-            end
-            s.subjects(s.currentSubject)=fc_apply_registered_regions(subj,P,subj.registeredRegionFile);
+            assert(~isempty(subj.registeredRegionPayload),'Load a saved registered Regions underlay or coronal Reg2D file first.');
+            s.subjects(s.currentSubject)=fc_apply_registered_regions(subj,subj.registeredRegionPayload,subj.registeredRegionFile,mode);
             s.opts.roiNameTable=s.subjects(s.currentSubject).roiNameTable;s.roiResults(s.currentSubject,:)={[]};s.seedResults(s.currentSubject,:)={[]};clearScanComparison();
             s.fcSelectedRegionIdx=[];s.fcSelectedRegionY=[];s.fcSelectedRegionX=[];s.fcHeatmapSeedLabel=[];
             guidata(fig,s);refreshAll();setStatus('Atlas granularity changed. Press ROI current to calculate.',C.good);
@@ -4075,9 +4063,17 @@ function onMapClick(~,~)
             return;
         end
         if strcmpi(extNow,'.mat')
-            regionPayload=load(fullFile,'atlasUnderlayMeta');
-            if isfield(regionPayload,'atlasUnderlayMeta')&&isfield(regionPayload.atlasUnderlayMeta,'kind')&& ...
-                    strcmp(regionPayload.atlasUnderlayMeta.kind,'deConfUSIon_3D_registration_underlay')
+            vars=whos('-file',fullFile);headerFields=intersect({vars.name},{'atlasUnderlayMeta','Reg2D','atlasMode','lightSuiteNativeMeta'});
+            regionPayload=struct();if ~isempty(headerFields),regionPayload=load(fullFile,headerFields{:});end
+            is3D=isfield(regionPayload,'atlasUnderlayMeta')&&isfield(regionPayload.atlasUnderlayMeta,'kind')&& ...
+                    strcmp(regionPayload.atlasUnderlayMeta.kind,'deConfUSIon_3D_registration_underlay');
+            is2D=isfield(regionPayload,'Reg2D')&&isfield(regionPayload.Reg2D,'type')&& ...
+                    strcmpi(regionPayload.Reg2D.type,'simple_coronal_2d')&& ...
+                    (~isfield(regionPayload,'atlasMode')||strcmpi(regionPayload.atlasMode,'regions'));
+            isLightSuite=isfield(regionPayload,'lightSuiteNativeMeta')&& ...
+                isfield(regionPayload.lightSuiteNativeMeta,'kind')&& ...
+                strcmp(regionPayload.lightSuiteNativeMeta.kind,'deConfUSIon_LightSuite_native_regions');
+            if is3D||is2D||isLightSuite
                 regionPayload=load(fullFile);
                 choice='Current';if nargin<3&&s.nSub>1,choice=questdlg('Apply registered regions to current subject or all subjects?','ROI labels','Current','All','Current');end
                 if isempty(choice),return;end
@@ -5592,16 +5588,36 @@ end
 ok = true;
 end
 
-function s=fc_apply_registered_regions(s,payload,file)
+function s=fc_apply_registered_regions(s,payload,file,grouping)
+if nargin<4,grouping='Parent';end
 shape=size(s.I4,[1 2 3]);if isempty(s.I4),shape=size(s.referenceMean,[1 2 3]);end
 [matched,A,meta]=fusiAtlasRegionInput(payload,shape);
-assert(matched,'deConfUSIon:AtlasRegionInput','Select a saved 3D Regions_All / Regions_Merged bundle.');
+if ~matched,[matched,A,meta]=fusiAtlasRegionInput2D(payload,shape);end
+assert(matched,'deConfUSIon:AtlasRegionInput','Select a saved Regions bundle or coronal Reg2D file.');
+if strcmpi(grouping,'Detailed')&&strcmpi(meta.regionGrouping,'Parent')
+    detailedFile=fullfile(fileparts(file),'Regions_All.mat');
+    assert(isfile(detailedFile),'deConfUSIon:AtlasRegionDetail','Detailed labels require the original detailed registration; merged labels cannot recover subdivisions.');
+    payload=load(detailedFile);file=detailedFile;
+    [matched,A,meta]=fusiAtlasRegionInput(payload,shape);
+    assert(matched,'deConfUSIon:AtlasRegionDetail','Detailed registration is unavailable.');
+elseif strcmpi(grouping,'Parent')&&~strcmpi(meta.regionGrouping,'Parent')
+    [A,info]=fusiAtlasRegionGrouping(struct('Regions',uint16(abs(A)),'infoRegions',meta.atlasInfoRegions),'Parent');
+    meta.regionGrouping='Parent';meta.atlasInfoRegions=info;
+    [~,meta.excludedRegionIDs]=fusiAtlasRegionCatalog(A,info);
+    meta.nameTable=struct('labels',(1:numel(info.name))','names',{cellstr(string(info.acr(:)))},'fullNames',{cellstr(string(info.name(:)))});
+end
 A=int32(A);excluded=ismember(abs(A),meta.excludedRegionIDs);A(excluded)=0;
 s.atlasExcludedMask=excluded;
 A(meta.leftHemisphereMask)=-abs(A(meta.leftHemisphereMask));
 s.roiAtlas=A;s.atlasSourceFile=file;
 s.registeredRegionPayload=payload;s.registeredRegionFile=file;
-if strcmp(meta.space,'native'),s.spacingUm=meta.transform.scanGeometry.originalSpacingUm;else,s.spacingUm=meta.voxelSizeUm;end
+if isfield(meta,'nonlinearNativeGrid') && meta.nonlinearNativeGrid
+    s.spacingUm=meta.voxelSizeUm;
+elseif strcmp(meta.space,'native')
+    s.spacingUm=meta.transform.scanGeometry.originalSpacingUm;
+else
+    s.spacingUm=meta.voxelSizeUm;
+end
 s.atlasRegionInfo=struct('space',meta.space,'grouping',meta.regionGrouping, ...
  'transformFile',meta.transformFile,'excludedRegionIDs',meta.excludedRegionIDs);
 ids=meta.nameTable.labels;names=meta.nameTable.names;fullNames=meta.nameTable.fullNames;

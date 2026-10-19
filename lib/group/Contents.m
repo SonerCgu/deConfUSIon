@@ -1,5 +1,5 @@
 % GROUP - deConfUSIon implementation module.
-% Initialize with deConfUSIon_setup; see docs/code_map.md for callers.
+% See docs/deConfUSIon_User_Handbook.pdf for the user and source reference.
 %   gaDrawROISignificance
 %   gaFormatPValue
 %   gaInferAssignment

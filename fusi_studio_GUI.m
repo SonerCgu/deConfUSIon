@@ -969,7 +969,7 @@ end
 %% =========================================================
 %  LOAD DATA CALLBACK
 % =========================================================
-function loadDataCallback(~,~)
+function loadDataCallback(~,~,selectedFile,loadOptions)
 
     if isappdata(fig,'LoadInProgress')
         busy = false;
@@ -989,9 +989,15 @@ function loadDataCallback(~,~)
 
     startPath = studio_default_load_start_path(studio);
 
-    [file,path] = uigetfile( ...
-        {'*.mat;*.nii;*.nii.gz','fUSI / fMRI data (*.mat, *.nii, *.nii.gz)'}, ...
-        'Select fUSI / fMRI time-series dataset', startPath);
+    % An explicit file supports scripted imports through this same GUI
+    % transaction, including the normal timing/output confirmation dialog.
+    if nargin>=3 && ~isempty(selectedFile)
+        [path,stem,ext]=fileparts(char(selectedFile));path=[path filesep];file=[stem ext];
+    else
+        [file,path] = uigetfile( ...
+            {'*.mat;*.nii;*.nii.gz','fUSI / fMRI data (*.mat, *.nii, *.nii.gz)'}, ...
+            'Select fUSI / fMRI time-series dataset', startPath);
+    end
 
     if isequal(file,0)
         addLog('Load cancelled.');
@@ -1084,7 +1090,7 @@ studio.pipeline = struct( ...
 
     try
     fullInputFile = fullfile(path,file);
-    [data, meta] = loadFUSIData(fullInputFile, [], ...
+    [data, meta, loadTiming] = loadFUSIData(fullInputFile, [], ...
         @(fraction,message)deConfUSIon_ui('progressupdate',loadProgress,.03+.72*fraction,message));
     deConfUSIon_ui('progressupdate',loadProgress,.78,'Preparing scan timing and output folders...');
 
@@ -1134,7 +1140,16 @@ studio.pipeline = struct( ...
             TR = studio_get_last_tr_default();
         end
         set(loadProgress,'Visible','off');set(fig,'Pointer','arrow');
-        [chosenTR, datasetFolder, outputWasCancelled, probeType, defaultTR] = studio_load_options_dark_dialog(chosenTR, datasetFolder, analysedRoot, datasetName, probeType, defaultTR, data, meta, fullInputFile);
+        if nargin>=4 && ~isempty(loadOptions)
+            % Scripted imports provide the same two explicit choices as the
+            % dialog. Normal button imports still require its confirmation.
+            validateattributes(loadOptions.TR,{'numeric'},{'scalar','finite','positive'});
+            validateattributes(loadOptions.datasetFolder,{'char','string'},{'nonempty'});
+            chosenTR=double(loadOptions.TR);datasetFolder=char(loadOptions.datasetFolder);
+            outputWasCancelled=false;
+        else
+            [chosenTR, datasetFolder, outputWasCancelled, probeType, defaultTR] = studio_load_options_dark_dialog(chosenTR, datasetFolder, analysedRoot, datasetName, probeType, defaultTR, data, meta, fullInputFile);
+        end
         if outputWasCancelled
             addLog('Load cancelled in setup. Previous dataset preserved.');
             return;
@@ -1261,6 +1276,10 @@ addLog('DATASET LOADED SUCCESSFULLY');
 addLog(['Input file: ' fullInputFile]);
 addLog(['Loaded name: ' datasetName]);
 addLog(['Dataset folder: ' datasetFolder]);
+if isfield(loadTiming,'readSeconds')
+    addLog(sprintf('Load timing: source staging %.1f s; file read %.1f s; total %.1f s. Cache: %s.', ...
+        loadTiming.sourceStagingSeconds,loadTiming.readSeconds,loadTiming.totalSeconds,loadTiming.cacheState));
+end
 
 if ndims(data.I) == 3
     addLog(sprintf('Dimensions: %d x %d | Volumes: %d', ...
@@ -1750,6 +1769,8 @@ function imregdemonsCallback(~,~)
     % True 3D awake preset registers volumes rather than independent motor slices.
     if isstruct(stdStep) && isfield(stdStep,'imregMode') && strcmp(stdStep.imregMode,'standard')
         cfg.stepMotorMode='standard';
+    elseif isstruct(stdStep) && isfield(stdStep,'imregMode') && strcmp(stdStep.imregMode,'auto')
+        cfg.stepMotorMode='auto';
     end
     blockMethod = lower(strtrim(cfg.blockMethod));
     nsub = round(cfg.nsub);
@@ -2462,6 +2483,16 @@ function frameRateCallback(~,~)
         qcOpts=struct();
         if isstruct(frameCfg) && isfield(frameCfg,'frameSigma'), qcOpts.sigmaThreshold=frameCfg.frameSigma; end
         if isstruct(frameCfg) && isfield(frameCfg,'frameDirection'), qcOpts.direction=frameCfg.frameDirection; end
+        frameStep=[];
+        if isappdata(fig,'deconf_std_workflow_step'),frameStep=getappdata(fig,'deconf_std_workflow_step');end
+        if isstruct(frameStep)&&isfield(frameStep,'name')&&strcmpi(frameStep.name,'Frame Rejection')
+            if isfield(frameStep,'frameSigma')&&isscalar(frameStep.frameSigma)&&isfinite(frameStep.frameSigma)
+                qcOpts.sigmaThreshold=frameStep.frameSigma;qcOpts.direction='both';
+            end
+            if isfield(frameStep,'frameShowQC')&&isscalar(frameStep.frameShowQC)&&isfinite(frameStep.frameShowQC)
+                qcOpts.showFigure=logical(frameStep.frameShowQC);
+            end
+        end
         QC_before = frameRateQC(data.I, data.TR, 'ORIGINAL', false, qcOpts);
         addLog(sprintf('Original rejected: %.2f %%', QC_before.rejPct));
 
@@ -4058,6 +4089,8 @@ function pcaCallback(~,~)
         switch upper(strtrim(methodChoice))
             case 'PCA'
                 addLog('Running PCA denoising... (select PCs to remove)');
+                finishPcaApplyProgress();
+                pcaProgressGuard=onCleanup(@finishPcaApplyProgress); %#ok<NASGU>
                 opts = struct();
                 opts.nCompMax = 50;
 % DECONF_STD_PCA_NCOMP_V71
@@ -4088,6 +4121,7 @@ catch
 end
                 opts.onApply = @(sel) decomp_onApply('PCA', sel);
                 opts.onCancel = @() decomp_onCancel('PCA');
+                opts.onProgress = @(fraction,message)pcaApplyProgress(fraction,message,false);
                 [newData, stats] = pca_denoise(data, studio.exportPath, ['pca_' ts], opts);
                 if ~isfield(stats,'applied') || ~stats.applied
                     setProgramStatus(true);
@@ -4128,16 +4162,18 @@ end
                 displayNameFull = fullName;
                 preprocDisplayName = fullName;
                 try, datasetSortTime = newData.datasetSortTime; catch, datasetSortTime = now; end
+                pcaApplyProgress(NaN,'Saving and verifying the PCA result...',true);
                 studio.datasets.(keyName) = newData;
                 studio.activeDataset = keyName;
                 studio.pipeline.preprocDone = true;
-                studio=studioSaveDataset(fig,studio,keyName);
+                studio=studioSaveDataset(fig,studio,keyName,@(fraction,message)pcaApplyProgress(.8+.19*fraction,message,true));
                 addLog(['Saved and verified -> ' savePath]);
                 guidata(fig, studio);
                 refreshDatasetDropdown();
                 if isfield(stats,'percentExplainedRemoved'), addLog(sprintf('PCA removed %.2f%% variance proxy.', stats.percentExplainedRemoved)); end
                 if isfield(stats,'selectedComponents') && ~isempty(stats.selectedComponents), addLog(['Dropped PCs: ' sprintf('%d ', stats.selectedComponents)]); end
                 addLog(['PCA complete -> ' fullName]);
+                pcaApplyProgress(1,'PCA result saved and ready.',true);
 
             case 'ICA'
                 addLog('Running ICA denoising... (compute ICs, then select ICs to remove)');
@@ -4218,13 +4254,23 @@ end
                 return;
         end
     catch ME
+        if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled')
+            addLog('PCA application cancelled. The previous dataset is retained.');
+            finishPcaApplyProgress();
+            setProgramStatus(true);return;
+        end
+        finishPcaApplyProgress();
         refreshDatasetDropdown();
         addLog(['PCA / ICA ERROR: ' ME.message]);
         errordlg(ME.message,'PCA / ICA Failure');
     end
+    finishPcaApplyProgress();
     setProgramStatus(true);
 
     function decomp_onApply(methodName, sel)
+        if strcmpi(methodName,'PCA')
+            pcaApplyProgress(0,'Preparing PCA component removal...',false);
+        end
         if isempty(sel)
             addLog([methodName ' applied: no components selected. Please wait...']);
         else
@@ -4239,6 +4285,36 @@ end
         addLog([methodName ' cancelled.']);
         setProgramStatus(true);
         drawnow;
+    end
+end
+
+function pcaApplyProgress(fraction,message,saving)
+    h=getappdata(fig,'PCAApplyProgress');
+    if isempty(h)
+        h=deConfUSIon_ui('progress','Applying PCA');
+        setappdata(fig,'PCAApplyProgress',h);
+    end
+    if saving
+        setappdata(h,'ProgressMaxFraction',1);
+        if isnan(fraction),fraction=.8;end
+    else
+        % Component removal is followed by mean restoration and a durable save.
+        setappdata(h,'ProgressMaxFraction',.8);
+    end
+    deConfUSIon_ui('progressupdate',h,fraction,message);
+    if saving && isgraphics(h)
+        % A durable MAT write cannot be interrupted safely. Check any prior
+        % cancellation before publishing the result, then keep the status
+        % visible until saving and verification return.
+        set(findall(h,'Style','pushbutton'),'Enable','off');
+        set(h,'CloseRequestFcn',@(~,~)[]);
+    end
+end
+
+function finishPcaApplyProgress()
+    if isgraphics(fig) && isappdata(fig,'PCAApplyProgress')
+        h=getappdata(fig,'PCAApplyProgress');
+        deConfUSIon_ui('progressclose',h);rmappdata(fig,'PCAApplyProgress');
     end
 end
 
@@ -4532,10 +4608,53 @@ end
 %% =========================================================
 %  ATLAS REGISTRATION
 % =========================================================
+function lightSuiteWorkspaceClosed(window)
+    if ~isgraphics(fig,'figure'),return;end
+    windows=getappdata(fig,'LightSuiteWorkspaces');
+    windows=windows(isgraphics(windows)&windows~=window);
+    setappdata(fig,'LightSuiteWorkspaces',windows);
+    state=guidata(fig);setProgramStatus(isstruct(state)&&isfield(state,'isLoaded')&&state.isLoaded);
+end
+
 function coregCallback(~,~)
     studio = guidata(fig);
     if ~isfield(studio,'isLoaded') || ~studio.isLoaded
         errordlg('Load data first.','Atlas Registration');
+        return;
+    end
+
+    route=fusiLightSuiteChoice('Atlas registration workflow', ...
+        'Choose a workflow. LightSuite uses matched landmarks followed by automatic affine and nonlinear optimization.', ...
+        {'Existing registration','LightSuite (beta)','Cancel'}, ...
+        {'Established deConfUSIon registration tools.', ...
+         '3D vascular atlas registration; serial histology and implant tools in a separate workspace.', ...
+         'Return to Studio.'});
+    if isempty(route) || strcmp(route,'Cancel'), return; end
+    if strcmp(route,'LightSuite (beta)')
+        try
+            seed = studio.datasets.(studio.activeDataset);
+            cfg = struct('outputFolder',fullfile(fusiModelAnalysisFolder(studio),'Registration','LightSuite'), ...
+                'name',studio.activeDataset);
+            if isfield(seed,'isLazy') && seed.isLazy
+                % Extract only a bounded anatomical sample from a saved file.
+                % Opening this optional workspace must not load another full movie.
+                cfg.sourceFile = seed.lazyFile;
+                seed = [];
+            end
+            lightWindow=AtlasRegistration('lightsuite',seed,studio.meta,cfg);
+            if isgraphics(lightWindow,'figure')
+                windows=getappdata(fig,'LightSuiteWorkspaces');
+                windows=windows(isgraphics(windows));windows=[windows(:);lightWindow];
+                setappdata(fig,'LightSuiteWorkspaces',windows);
+                listener=addlistener(lightWindow,'ObjectBeingDestroyed',@(~,~)lightSuiteWorkspaceClosed(lightWindow));
+                setappdata(lightWindow,'LightSuiteStudioStatusListener',listener);
+                setProgramStatus(false);
+            end
+            addLog('Opened experimental LightSuite workspace. Review orientation, landmarks and overlays before using its outputs.');
+        catch ME
+            addLog(['LIGHTSUITE ERROR: ' ME.message]);
+            if isgraphics(fig,'figure'), errordlg(ME.message,'LightSuite registration'); end
+        end
         return;
     end
 

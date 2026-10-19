@@ -3,6 +3,7 @@ function path=fusiFindMovedDataPath(path,roots)
 if ~(ischar(path)||(isstring(path)&&isscalar(path)))||isempty(path),return;end
 path=char(path);if isfile(path)||isfolder(path),return;end
 normalized=strrep(path,'\','/');
+if ~ispc,normalized=regexprep(normalized,'/{2,}','/');end
 native=strrep(normalized,'/',filesep);
 if isfile(native)||isfolder(native),path=native;return;end
 if nargin<2,roots=getpref('deConfUSIon','dataRoots',{});end

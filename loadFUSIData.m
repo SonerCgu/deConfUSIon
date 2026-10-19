@@ -1,4 +1,4 @@
-function [data, meta] = loadFUSIData(dataFile, fallbackTR, progress)
+function [data, meta, timing] = loadFUSIData(dataFile, fallbackTR, progress)
 % loadFUSIData
 % ------------------------------------------------------------
 % Robust fUSI data loader with TR / time inference
@@ -29,6 +29,7 @@ function [data, meta] = loadFUSIData(dataFile, fallbackTR, progress)
 % ------------------------------------------------------------
 
 deConfUSIon_setup();
+loadClock=tic;timing=struct();
 if nargin<3||isempty(progress),progress=[];end
 reportProgress(progress,0,'Inspecting dataset...');
 dataFile=fusiFindMovedDataPath(dataFile);
@@ -54,7 +55,7 @@ TRDetectionSource = '';
 switch extKey
 
     case '.mat'
-        S = localLoadSelected(dataFile,progress);
+        [S,timing] = localLoadSelected(dataFile,progress);
         reportProgress(progress,.82,'Checking image dimensions and metadata...');
         meta.inputIsPSC=isfield(S,'inputIsPSC')&&isequal(S.inputIsPSC,true);
         if isfield(S,'newData')&&isstruct(S.newData)&&isfield(S.newData,'inputIsPSC')
@@ -441,6 +442,7 @@ try
 catch ME_load_motor
     warning('HUMoR:LoadMotorMetadata','Could not preserve motor metadata: %s', ME_load_motor.message);
 end
+timing.totalSeconds=toc(loadClock);
 reportProgress(progress,1,'Dataset read successfully');
 end
 
@@ -933,7 +935,7 @@ end
 out = searchByNames(val, names, depth+1, mode, false);
 
 end
-function S=localLoadSelected(file,progress)
+function [S,timing]=localLoadSelected(file,progress)
 % Avoid loading every large alternative movie/processed array in a MAT file.
 info=whos('-file',file); names={info.name}; chosen='';
 preferred={'I','IQR','img','image','volume','newData','data','D'};
@@ -959,8 +961,8 @@ if isempty(chosen)
 end
 selected=names(keep);
 if isempty(selected), error('deConfUSIon:NoImage','No supported imaging variable found.'); end
-if isempty(progress),S=load(file,selected{:});
-else,S=fusiLoadMatVariables(file,selected,@(f,message)progress(.03+.75*f,message));end
+if isempty(progress),[S,timing]=fusiLoadMatVariables(file,selected,[]);
+else,[S,timing]=fusiLoadMatVariables(file,selected,@(f,message)progress(.03+.75*f,message));end
 end
 
 function reportProgress(progress,fraction,message)

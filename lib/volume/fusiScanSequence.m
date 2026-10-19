@@ -158,16 +158,17 @@ if isempty(I)
     info=fusiBaselineFileInfo(fusiFindMovedDataPath(d.file));
     assert(isequal(info.spatialSize,d.spatialSize)&&info.nFrames==d.nFrames, ...
         'deConfUSIon:ScanSequenceChanged','The selected source dataset changed. Remove it and add it again.');
+    readFile=fusiLocalMatReadSource(info.file,@(f,message)progress(.2*f,message));
     if info.partialReadable
         I=zeros(info.size,'single');chunk=max(1,floor(32*1024^2/(4*prod(info.spatialSize))));
         for first=1:chunk:info.nFrames
             last=min(info.nFrames,first+chunk-1);start=ones(size(info.size));count=info.size;
             start(end)=first;count(end)=last-first+1;sub=repmat({':'},1,numel(info.size));sub{end}=first:last;
-            progress(.7*(first-1)/info.nFrames,sprintf('Reading %s: frames %d-%d of %d',scanLabel(d.rawFile,d.label),first,last,info.nFrames));
-            I(sub{:})=single(h5read(info.file,info.path,start,count));
+            progress(.2+.5*(first-1)/info.nFrames,sprintf('Reading %s: frames %d-%d of %d',scanLabel(d.rawFile,d.label),first,last,info.nFrames));
+            I(sub{:})=single(h5read(readFile,info.path,start,count));
         end
     elseif ~isempty(info.data),I=info.data;
-    else,key=info.path(2:end);s=load(info.file,key);I=s.(key);
+    else,key=info.path(2:end);s=load(readFile,key);I=s.(key);
     end
 end
 if strcmp(q.normMode,'local')

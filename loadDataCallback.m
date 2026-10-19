@@ -19,13 +19,10 @@ catch ME
 end
 localLog(fig,'Loading dataset...');
 localStatus(fig,false);
-progress=deConfUSIon_ui('progress','Loading dataset');
-guard=onCleanup(@()localFinishLoad(fig,progress)); %#ok<NASGU>
-set(fig,'Pointer','watch');deConfUSIon_ui('progressupdate',progress,0,'Opening dataset...');
+drawnow;
 try
     fullInputFile = fullfile(path,file);
-    [data,meta] = loadFUSIData(fullInputFile,[], ...
-        @(fraction,message)deConfUSIon_ui('progressupdate',progress,.8*fraction,message));
+    [data,meta,loadTiming] = loadFUSIData(fullInputFile,[]);
     if ~isstruct(data) || ~isfield(data,'I') || isempty(data.I)
         error('Loaded data does not contain data.I.');
     end
@@ -48,16 +45,13 @@ try
     localMkdir(analysedRoot);
 
     if exist('studio_load_options_dark_dialog','file') == 2
-        set(progress,'Visible','off');set(fig,'Pointer','arrow');
         [chosenTR,datasetFolder,cancelled,probeType,defaultTR] = studio_load_options_dark_dialog(chosenTR,datasetFolder,analysedRoot,datasetName,probeType,defaultTR,data,meta,fullInputFile);
         if cancelled
             localLog(fig,'Load cancelled during TR/output-folder selection.');
             localStatus(fig,true);
             return;
         end
-        set(progress,'Visible','on');set(fig,'Pointer','watch');
     end
-    deConfUSIon_ui('progressupdate',progress,.85,'Preparing scan folders and settings...');
 
     data.TR = chosenTR;
     data.nVols = size(data.I,ndims(data.I));
@@ -108,9 +102,7 @@ try
     studio.meta.visualizationPath = visFolder;
     studio.meta.preprocessingPath = preFolder;
     studio.meta.pscPath = pscFolder;
-    deConfUSIon_ui('progressupdate',progress,.90,'Finding saved preprocessing datasets...');
     studio=deConfUSIon_add_preproc_lazy_datasets(studio);
-    deConfUSIon_ui('progressupdate',progress,1,'Dataset loaded successfully');
     guidata(fig,studio);
     localUnlock(fig);
     localRefreshDropdown(fig);
@@ -121,6 +113,10 @@ try
     localLog(fig,['Input file: ' fullInputFile]);
     localLog(fig,['Loaded name: ' datasetName]);
     localLog(fig,['Dataset folder: ' datasetFolder]);
+    if isfield(loadTiming,'readSeconds')
+        localLog(fig,sprintf('Load timing: source staging %.1f s; file read %.1f s; total %.1f s. Cache: %s.', ...
+            loadTiming.sourceStagingSeconds,loadTiming.readSeconds,loadTiming.totalSeconds,loadTiming.cacheState));
+    end
     if ndims(data.I) == 3
         localLog(fig,sprintf('Dimensions: %d x %d | Volumes: %d',dims(1),dims(2),dims(3)));
     elseif ndims(data.I) >= 4
@@ -134,17 +130,9 @@ try
     localLog(fig,'---------------------------------------');
     localStatus(fig,true);
 catch ME
-    if strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'),localLog(fig,'Load cancelled. Previous dataset preserved.');return;end
     localLog(fig,['LOAD ERROR: ' ME.message]);
     localStatus(fig,true);
     errordlg(ME.message,'Load Failure');
-end
-end
-
-function localFinishLoad(fig,progress)
-deConfUSIon_ui('progressclose',progress);
-if isgraphics(fig)
-    set(fig,'Pointer','arrow');state=guidata(fig);localStatus(fig,isfield(state,'isLoaded')&&state.isLoaded);
 end
 end
 
@@ -253,6 +241,9 @@ end
 if ispc
     p = getpref('deConfUSIon','rawRoot','Z:\fUS\Project_PACAP_AVATAR_SC\RawData');
     if exist(p,'dir'), startPath = p; end
+else
+    p=fusiFindMovedDataPath(getpref('deConfUSIon','rawRoot',''));
+    if isfolder(p),startPath=p;end
 end
 end
 

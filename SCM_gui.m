@@ -651,12 +651,15 @@ lblSignMode = mkLblImp(pOverlay, 'Signal sign display');
 popSignMode = mkPopup(pOverlay, {'Positive only','Negative only','Positive + Negative'}, state.signMode, @updateView);
 lblAlphaMod = mkLblImp(pOverlay, 'Alpha modulation');
 cbAlphaMod = mkChk(pOverlay, 'Scale by |SCM|', double(state.alphaModOn), @alphaModToggled);
+set(cbAlphaMod,'Tag','SCM_AlphaModEnable');
 set(cbAlphaMod,'TooltipString','Scale overlay opacity by the absolute SCM percentage.');
 lblModMin = mkLblImp(pOverlay, 'Mod Min (abs %)');
 ebModMin = mkEdit(pOverlay, sprintf('%g', state.modMin), @updateView);
+set(ebModMin,'Tag','SCM_AlphaModMin');
 set(ebModMin, 'ForegroundColor', [1.00 0.35 0.35]);
 lblModMax = mkLblImp(pOverlay, 'Mod Max (abs %)');
 ebModMax = mkEdit(pOverlay, sprintf('%g', state.modMax), @updateView);
+set(ebModMax,'Tag','SCM_AlphaModMax');
 set(ebModMax, 'ForegroundColor', [1.00 0.35 0.35]);
 lblMap = mkLbl(pOverlay, 'Colormap');
 popMap = mkPopup(pOverlay, cmapNames, 1, @updateView);
@@ -810,7 +813,8 @@ btnCompute = uicontrol(fig, 'Style', 'pushbutton', 'String', 'Compute SCM', ...
 btnAutomatic = uicontrol(fig,'Style','pushbutton','String','Automatic analysis', ...
     'Units','pixels','Callback',@automaticAnalysisCB,'BackgroundColor',[.23 .42 .30], ...
     'ForegroundColor','w','FontSize',12,'FontWeight','bold', ...
-    'TooltipString','Run a saved fixed-ROI protocol (JSON); coordinates must match the current anatomy.');
+    'TooltipString','Find and review exploratory ROIs, or run a saved fixed-ROI protocol on matching anatomy.');
+setappdata(fig,'FUSIAutomaticSearch',@automaticPeakROI);
 btnMaskQuick = uicontrol(fig, 'Style', 'pushbutton', 'String', 'LOAD MASK', ...
     'Units', 'pixels', 'Callback', @loadMaskCB, 'BackgroundColor', colBtnNeutral, ...
     'ForegroundColor', 'w', 'FontSize', 15, 'FontWeight', 'bold');
@@ -1348,9 +1352,11 @@ function baselineSourceChanged(~,~)
         state.baseKey=[];state.signalKey=[];state.timeWindowKey=[];roi.hoverStats=[];
         state.referenceTraceCache={};state.referenceTraceError='';
         state.tcFixX=false;set(cbTcFixX,'Value',0);set(ebTcXLim,'Enable','off');
+        closeCandidateReviews();
         audit=scmAutomaticROISelections(fig);
         for ai=1:numel(audit)
             c=candidateForBaseline(audit{ai});tc=scmROI('trace',PSC,c);
+            if isfield(c,'searchScanKey'),c.searchTraceValid=false;end
             c.meanPSC=mean(tc(c.signalFrames));
             c.method='Fixed ROI and signal window retained after baseline change';
             c.selection='Reference changed; score recomputed. Rerun Automatic analysis to select new peaks.';
@@ -2337,6 +2343,8 @@ function loadAtlasUnderlayFolderCB(~,~,selected)
         return;
     end
     folder=char(selected);
+    nativeRegions=fullfile(folder,'LightSuite_Native_Regions.mat');
+    if isfile(nativeRegions),loadNewUnderlayCB([],[],nativeRegions);return;end
     % The folder button also accepts the dated 3D Histology/Regions bundle.
     for filename={'Histology.mat','Vascular.mat','Regions.mat'}
         file=fullfile(folder,filename{1});
@@ -3288,8 +3296,10 @@ function automaticAnalysisCB(~,~)
     end
 end
 
-function automaticPeakROI(useAwakePreset)
+function automaticPeakROI(useAwakePreset,searchOverride,searchCache)
     if nargin<1, useAwakePreset=false; end
+    if nargin<2,searchOverride=[];end
+    if nargin<3,searchCache=[];end
     if isappdata(fig,'AutomaticROILastError'),rmappdata(fig,'AutomaticROILastError');end
     [s0,s1]=parseRangeSafe(getStr(ebSig),360,540);
     if isVolMode, s0=(s0-1)*TR; s1=(s1-1)*TR; end
@@ -3303,6 +3313,15 @@ function automaticPeakROI(useAwakePreset)
     if ~isempty(state.scanSequence)
         ctx.scanLabels=fusiScanSequence('labels',state.scanSequence);ctx.scanTiming=state.scanSequence.scans;
         ctx.originalScanIndex=find(cellfun(@(d)strcmp(d.key,state.originalScanKey),state.scanSequence.scans),1);
+        if numel(ctx.scanLabels)>1,ctx.scanScope='all';end
+        if isappdata(fig,'AutomaticSCMSearchScanScope')
+            savedScanScope=getappdata(fig,'AutomaticSCMSearchScanScope');
+            if strcmp(savedScanScope.scope,'all'),ctx.scanScope='all';
+            else
+                savedIndex=find(cellfun(@(d)strcmp(d.key,savedScanScope.key),state.scanSequence.scans),1);
+                if ~isempty(savedIndex),ctx.scanScope='single';ctx.scanIndex=savedIndex;end
+            end
+        end
     end
     if ~isempty(state.atlasRegionSearch)
         ctx.atlasLabels=state.atlasRegionSearch.labels;ctx.atlasRegionInfo=state.atlasRegionSearch.info;
@@ -3310,7 +3329,9 @@ function automaticPeakROI(useAwakePreset)
     elseif ~isempty(state.regionLabelUnderlay)&&isfield(state.regionInfo,'name')
         ctx.atlasLabels=state.regionLabelUnderlay;ctx.atlasRegionInfo=state.regionInfo;
     end
-    if useAwakePreset
+    if ~isempty(searchOverride)
+        opt=searchOverride;
+    elseif useAwakePreset
         [window,canSearch,note]=scmAwakeSearchWindow(TR,nT);
         setappdata(fig,'AwakeSearchStatus',note);
         if ~canSearch
@@ -3329,7 +3350,25 @@ function automaticPeakROI(useAwakePreset)
         ctx.display=struct('caxis',sscanf(strrep(getStr(ebCax),',',' '),'%f')', ...
             'modMin',str2double(getStr(ebModMin)),'modMax',str2double(getStr(ebModMax)), ...
             'alphaPercent',get(slAlpha,'Value'),'signMode',get(popSignMode,'Value'));
+        % Reopening Automatic analysis on another slice keeps the accepted
+        % drawing, but never reuses it after a coordinate-grid change.
+        paintKey=struct('sizeYXZ',[nY nX nZ],'viewKey',roi.viewKey,'mapping',roi.viewMapping);
+        if isappdata(fig,'AutomaticSCMSearchPaint')
+            savedPaint=getappdata(fig,'AutomaticSCMSearchPaint');
+            if isstruct(savedPaint)&&isfield(savedPaint,'key')&&isfield(savedPaint,'mask')&&isequaln(savedPaint.key,paintKey)
+                ctx.initialPaintMask=savedPaint.mask;
+            end
+        end
         opt=scmAutoSearchDialog(ctx); if isempty(opt), return; end
+        if isfield(opt,'paintMask')
+            setappdata(fig,'AutomaticSCMSearchPaint',struct('key',paintKey,'mask',opt.paintMask));
+        end
+    end
+    if ~isempty(state.scanSequence)
+        if ~isfield(opt,'scanScope'),opt.scanScope='all';opt.scanIndex=[];end
+        searchKey=state.originalScanKey;
+        if strcmp(opt.scanScope,'single'),searchKey=state.scanSequence.scans{opt.scanIndex}.key;end
+        setappdata(fig,'AutomaticSCMSearchScanScope',struct('scope',opt.scanScope,'key',searchKey));
     end
     n=opt.size; interval=opt.signalSec/60; cleanDisplay=opt.cleanDisplay;
     set(btnAutomatic,'Enable','off'); guard=onCleanup(@()set(btnAutomatic,'Enable','on')); %#ok<NASGU>
@@ -3351,8 +3390,27 @@ function automaticPeakROI(useAwakePreset)
                 @(fraction,message)deConfUSIon_ui('progressupdate',progress,fraction,message));
         else
             searchContext=struct('power',baselineRaw,'par',par,'mapping',state.currentROIMapping,'displayShape',[nY nX nZ]);
-            [candidates,skipped]=scmSearchScanSequence(PSC,TR,state.scanSequence,baseline,cfg,opt,slices,@getMaskForSlice,searchContext, ...
-                @(fraction,message)deConfUSIon_ui('progressupdate',progress,fraction,message));
+            q=state.scanSequence;indices=1:numel(q.scans);
+            if strcmp(opt.scanScope,'single'),indices=opt.scanIndex;
+            elseif strcmp(opt.scanScope,'original'),indices=ctx.originalScanIndex;end
+            keys=cellfun(@(d)d.key,q.scans(indices),'UniformOutput',false);
+            reusable=~isempty(searchCache)&&~opt.sharedWindow&& ...
+                isequaln(searchCache.baseline,baseline)&&isequaln(searchCache.mapping,state.currentROIMapping)&& ...
+                strcmp(searchCache.activeKey,q.scans{q.active}.key)&&all(ismember(keys,searchCache.scanKeys));
+            if reusable
+                pool=searchCache.candidates;skipped=searchCache.skipped;
+                key='';if numel(indices)==1,key=keys{1};end
+                candidates=scmSelectScanCandidates(pool,key);
+                for ci=1:numel(candidates)
+                    candidates{ci}.searchParameters.scanScope=opt.scanScope;
+                    candidates{ci}.searchParameters.searchedScanLabels=cellfun(@(d)d.label,q.scans(indices),'UniformOutput',false);
+                end
+            else
+                [candidates,skipped,pool]=scmSearchScanSequence(PSC,TR,q,baseline,cfg,opt,slices,@getMaskForSlice,searchContext, ...
+                    @(fraction,message)deConfUSIon_ui('progressupdate',progress,fraction,message));
+                searchCache=struct('candidates',{pool},'scanKeys',{keys},'skipped',{skipped}, ...
+                    'baseline',baseline,'mapping',state.currentROIMapping,'activeKey',q.scans{q.active}.key);
+            end
         end
         clear pg;
         if isempty(candidates)
@@ -3407,18 +3465,21 @@ function automaticPeakROI(useAwakePreset)
         [~,order]=sort(cellfun(@(c)c.meanPSC,candidates),'descend'); candidates=candidates(order);
         candidate=candidates{1}; id=candidate.roiId;
         showAutomaticWindow(candidate);
-        if nZ>1, set(slZ,'Value',nZ-candidate.slice+1); sliceChanged([],[]); end
         setHoverActive(false);
-        computeSCM([],[]); redrawROIsForCurrentSlice();
+        if nZ>1&&state.z~=candidate.slice
+            set(slZ,'Value',nZ-candidate.slice+1); sliceChanged([],[]);
+        else
+            computeSCM([],[]); redrawROIsForCurrentSlice();
+        end
         set(hRoiCoordTxt,'Visible','on','String',sprintf('Peak ROI %d | %d voxels | mean %.3g%% | %d baseline / %d signal frames | review before export',id,candidate.pixelCount,candidate.meanPSC,numel(candidate.baselineFrames),numel(candidate.signalFrames)));
-        showCandidateReview(candidates,skipped);
+        showCandidateReview(candidates,skipped,opt,searchCache);
     catch ME
         setappdata(fig,'AutomaticROILastError',ME);
         if ~strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'), errordlg(ME.message,'ROI search'); end
     end
 end
 
-function showCandidateReview(candidates,skipped)
+function showCandidateReview(candidates,skipped,searchOptions,searchCache)
     closeCandidateReviews();
     review=figure('Name',['Automatic ROI candidates | ' fileLabel],'Tag','AutomaticROICandidateReview', ...
         'NumberTitle','off','MenuBar','none','ToolBar','none','Color','k','Position',[160 100 1280 760]);
@@ -3427,39 +3488,66 @@ function showCandidateReview(candidates,skipped)
     if any(cellfun(@(c)isfield(c,'requestedTopN')&&c.requestedTopN>0,candidates))
         exportIds=cellfun(@(c)c.roiId,candidates);
     end
-    description=sprintf('%d candidates. Green = marked for export; red text = slice with mean PSC >200%%. Click a row to view its window.\nExploratory maxima. Shared mode uses the globally strongest candidate window for all slices.',numel(candidates));
+    description=sprintf('%d candidates. Green = marked for export; red text = slice with mean PSC >200%%.\nThe scan selector controls search, ranking and export independently of the overlay. Source scan is shown in the table.',numel(candidates));
     if ~isempty(skipped), description=sprintf('%s\nNo valid ROI: %s',description,strjoin(skipped,', ')); end
     summary=scmSearchParameterSummary(candidates,skipped,fileLabel);
-    brief=strsplit(summary,newline);brief=brief(1:min(7,numel(brief)));
-    hParameters=ctl('text',[.025 .755 .95 .23],strjoin(brief,newline),[]);
+    brief=strsplit(summary,newline);brief=brief(1:min(5,numel(brief)));
+    hParameters=ctl('text',[.025 .84 .95 .145],strjoin(brief,newline),[]);
     set(hParameters,'Tag','CandidateSearchParameters','HorizontalAlignment','left','FontSize',12, ...
         'BackgroundColor','k','TooltipString',summary);
     setappdata(review,'SearchParameterSummary',summary);
+    scanSelector=[];
+    if ~isempty(state.scanSequence)
+        labels=fusiScanSequence('labels',state.scanSequence);choices={'All attached scans - maximum'};
+        for si=1:numel(labels),choices{end+1}=sprintf('Scan %c - %s',char('A'+si-1),labels{si});end %#ok<AGROW>
+        selectedScope=1;
+        if strcmp(searchOptions.scanScope,'single'),selectedScope=searchOptions.scanIndex+1;
+        elseif strcmp(searchOptions.scanScope,'original')
+            selectedScope=find(cellfun(@(d)strcmp(d.key,state.originalScanKey),state.scanSequence.scans),1)+1;
+        end
+        scanSelector=ctl('popupmenu',[.025 .775 .95 .045],choices,@changeSearchScan);
+        set(scanSelector,'Tag','CandidateSearchScanScope','Value',selectedScope,'FontSize',12, ...
+            'TooltipString','Recompute the table maximum and export ROIs from Scan A, B, C or all attached scans. Independent-window searches reuse cached candidates when available; the overlay selection is separate.');
+    end
     description=description(1:min(numel(description),300));
-    role=ctl('popupmenu',[.025 .72 .18 .05],{'All','Target','Control','Search'},@refresh);
+    role=ctl('popupmenu',[.025 .71 .18 .045],{'All','Target','Control','Search'},@refresh);
     set(role,'Tag','CandidateRoleFilter');
-    sortBy=ctl('popupmenu',[.225 .72 .25 .05],{'Maximum PSC first','Minimum PSC first','Slice ascending','Slice descending'},@refresh);
+    sortBy=ctl('popupmenu',[.225 .71 .25 .045],{'Maximum PSC first','Minimum PSC first','Slice ascending','Slice descending'},@refresh);
     set(sortBy,'Tag','CandidateSort');
-    units=ctl('popupmenu',[.50 .72 .17 .05],{'Time: minutes','Time: seconds'},@refresh);
+    units=ctl('popupmenu',[.50 .71 .17 .045],{'Time: minutes','Time: seconds'},@refresh);
     set(units,'Tag','CandidateTimeUnits');
-    sliceRange=ctl('edit',[.69 .72 .13 .05],sprintf('1 %d',nZ),@refresh); set(sliceRange,'Tag','CandidateSliceFilter','TooltipString','Slice range: start end (inclusive)');
-    ctl('pushbutton',[.84 .72 .135 .05],'Show maximum',@showMaximum);
-    tbl=uitable(review,'Units','normalized','Position',[.025 .23 .95 .46],'Data',cell(0,10), ...
-        'ColumnName',{'Slice','ROI','Role','Region','Mean PSC (%)','Center X','Center Y','Start (min)','End (min)','Export'}, ...
-        'ColumnEditable',[false(1,9) true],'ColumnFormat',[repmat({'char'},1,9) {'logical'}], ...
-        'ColumnWidth',{55 55 85 200 115 80 80 110 110 75},'CellEditCallback',@markForExport, ...
+    sliceRange=ctl('edit',[.69 .71 .13 .045],sprintf('1 %d',nZ),@refresh); set(sliceRange,'Tag','CandidateSliceFilter','TooltipString','Slice range: start end (inclusive)');
+    ctl('pushbutton',[.84 .71 .135 .045],'Show maximum',@showMaximum);
+    tbl=uitable(review,'Units','normalized','Position',[.025 .23 .95 .445],'Data',cell(0,11), ...
+        'ColumnName',{'Slice','ROI','Role','Region','Mean PSC (%)','Center X','Center Y','Start (min)','End (min)','Export','Source scan'}, ...
+        'ColumnEditable',[false(1,9) true false],'ColumnFormat',[repmat({'char'},1,9) {'logical','char'}], ...
+        'ColumnWidth',{55 55 85 170 100 65 65 90 90 70 180},'CellEditCallback',@markForExport, ...
         'FontSize',12,'ForegroundColor','w','CellSelectionCallback',@reviewSlice,'Tag','CandidateTable');
-    msg=ctl('text',[.025 .155 .95 .06],'',[]); set(msg,'Tag','CandidateStatus');
+    msg=ctl('text',[.025 .155 .76 .06],'',[]); set(msg,'Tag','CandidateStatus');
+    ctl('pushbutton',[.80 .155 .175 .05],'Edit export note...',@editExportNote);
     ctl('pushbutton',[.025 .065 .25 .07],'Export SELECTED ROIs (TXT)',@exportSelected);
     ctl('pushbutton',[.29 .065 .25 .07],'Choose Target + Control to export',@exportPair);
     ctl('pushbutton',[.555 .065 .24 .07],'Clear ALL marked ROIs',@clearAllMarkedROIs);
     ctl('pushbutton',[.82 .065 .155 .07],'Close','delete(gcbf)');
-    bundleButton=ctl('pushbutton',[.025 .005 .95 .05],'Export checked ROIs: per-role bundle + averaged TXT (one observation per role)',@exportBundles);
+    bundleButton=ctl('pushbutton',[.025 .005 .95 .05],'Export checked ROIs: bundle + averaged TXT per source scan and role',@exportBundles);
     set(bundleButton,'Tag','SCM_ExportROIBundles');
     refresh();
     function h=ctl(style,pos,str,cb)
         h=uicontrol(review,'Style',style,'Units','normalized','Position',pos,'String',str, ...
             'BackgroundColor',[.10 .10 .10],'ForegroundColor','w','FontSize',11,'Callback',cb);
+    end
+    function changeSearchScan(~,~)
+        value=get(scanSelector,'Value');nextOptions=searchOptions;
+        if value==1,nextOptions.scanScope='all';nextOptions.scanIndex=[];
+        else,nextOptions.scanScope='single';nextOptions.scanIndex=value-1;end
+        set(scanSelector,'Enable','off');
+        restore=onCleanup(@()restoreScanSelector(scanSelector,selectedScope)); %#ok<NASGU>
+        automaticPeakROI(false,nextOptions,searchCache);
+    end
+    function restoreScanSelector(control,previous)
+        if isgraphics(control)
+            set(control,'Value',previous,'Enable','on');
+        end
     end
     function refresh(varargin)
         range=sscanf(get(sliceRange,'String'),'%f')';
@@ -3473,11 +3561,10 @@ function showCandidateReview(candidates,skipped)
         if get(units,'Value')==2, divisor=1; unit='s'; end
         headers=get(tbl,'ColumnName'); headers{8}=['Start (' unit ')']; headers{9}=['End (' unit ')'];
         set(tbl,'ColumnName',headers);
-        rows=cell(numel(order),10);
+        rows=cell(numel(order),11);
         for row=1:numel(order)
             c=candidates{order(row)};
             regionText=c.region;
-            if isfield(c,'searchScanLabel'),regionText=[regionText ' | ' c.searchScanLabel];end
             if strcmp(c.roiMode,'region'),regionText=sprintf('%s | %d voxels',regionText,c.pixelCount);
             elseif all(isfinite(c.sizeXYUm)),regionText=sprintf('%s | %.6g x %.6g um',regionText,c.sizeXYUm);end
             values={c.slice c.roiId c.role regionText c.meanPSC mean(c.boundsXY(1:2)) mean(c.boundsXY(3:4)) c.signalSampleSec(1)/divisor c.signalSampleSec(end)/divisor};
@@ -3487,6 +3574,8 @@ function showCandidateReview(candidates,skipped)
                 rows{row,col}=v;
             end
             rows{row,10}=ismember(c.roiId,exportIds);
+            rows{row,11}=fileLabel;
+            if isfield(c,'searchScanLabel'),rows{row,11}=sprintf('Scan %s | %s',c.searchScanCode,c.searchScanLabel);end
         end
         set(tbl,'Data',rows); setappdata(tbl,'CandidateIndices',order);
         selected=[]; updateExportAppearance(false);
@@ -3521,21 +3610,38 @@ function showCandidateReview(candidates,skipped)
         end
         exportROIsCB([],[],[],exportIds);
     end
+    function editExportNote(~,~)
+        note='';if isappdata(fig,'SCMExportNote'),note=getappdata(fig,'SCMExportNote');end
+        answer=inputdlg('Observations saved beside the ROI files (note.txt):','ROI export note',[8 90],{note});
+        if ~isempty(answer),setappdata(fig,'SCMExportNote',answer{1});end
+    end
     function exportBundles(~,~)
         if isempty(exportIds),set(msg,'String','Tick Export for the ROIs to average, or choose top-N in automatic analysis.');return;end
         if roi.exportBusy,return;end
         roi.exportBusy=true;lock=onCleanup(@releaseRoiExportLock); %#ok<NASGU>
         try
             chosen=candidates(ismember(cellfun(@(c)c.roiId,candidates),exportIds));
-            P=getSimpleExportPaths();[files,folder]=scmExportROIBundles(PSC,TR,chosen,P.roiDir,fileLabel);
+            note='';if isappdata(fig,'SCMExportNote'),note=getappdata(fig,'SCMExportNote');end
+            P=getSimpleExportPaths();[files,folder]=scmExportROIBundles(PSC,TR,chosen,P.roiDir,fileLabel,note);
             roi.exportedIds=unique([roi.exportedIds exportIds]);
             setappdata(review,'LastBundleFiles',files);setappdata(review,'LastSearchParameterFile',fullfile(folder,'Analysis_Parameters.txt'));
-            set(msg,'String',sprintf('Saved %d files to %s. In Group Analysis load mean OR allROIs, not both.',numel(files),folder));
-        catch ME,set(msg,'String',['Bundle export failed: ' ME.message]);end
+            set(msg,'String',sprintf('Saved %d files to %s, separated by source scan and role. Load mean OR allROIs in Group Analysis.',numel(files),folder));
+        catch ME
+            report=getReport(ME,'extended','hyperlinks','off');
+            setappdata(review,'LastBundleExportError',report);
+            set(msg,'String',['Bundle export failed: ' ME.message],'TooltipString',report);
+            warning('deConfUSIon:ROIBundleExport','ROI bundle export failed: %s',report);
+        end
     end
     function reviewSlice(~,event)
         if isempty(event.Indices)||~isgraphics(fig), return; end
-        selected=order(event.Indices(1,1)); displayCandidate(candidates{selected});
+        % Editing Export must not reread curves or switch the displayed slice.
+        cells=event.Indices(event.Indices(:,2)~=10,:);
+        if isempty(cells)||cells(1,1)>numel(order),return;end
+        next=order(cells(1,1));c=candidates{next};shown=c.signalSec;
+        if isVolMode,shown=shown/TR+1;end
+        if isequal(selected,next)&&state.z==c.slice&&strcmp(getStr(ebSig),sprintf('%.9g-%.9g',shown)),return;end
+        selected=next; displayCandidate(candidates{selected});
     end
     function showMaximum(~,~)
         if isempty(order), return; end
@@ -3545,10 +3651,19 @@ end
 
 function displayCandidate(c)
     showAutomaticWindow(c);
-    if nZ>1, set(slZ,'Value',nZ-c.slice+1); sliceChanged([],[]); end
-    setHoverActive(false); computeSCM([],[]); redrawROIsForCurrentSlice();
+    setHoverActive(false);
+    if nZ>1&&state.z~=c.slice
+        set(slZ,'Value',nZ-c.slice+1); sliceChanged([],[]);
+    else
+        computeSCM([],[]); redrawROIsForCurrentSlice();
+    end
     set(hRoiCoordTxt,'Visible','on','String',sprintf('ROI %d | %s | slice %d | mean %.3g%% | %.3g-%.3g min', ...
         c.roiId,c.role,c.slice,c.meanPSC,c.signalSampleSec(1)/60,c.signalSampleSec(end)/60));
+    if isfield(c,'searchScanLabel')
+        set(hRoiCoordTxt,'String',sprintf('ROI %d | %s | Scan %s | slice %d | source mean %.3g%% | %.3g-%.3g min', ...
+            c.roiId,c.role,c.searchScanCode,c.slice,c.meanPSC,c.signalSampleSec(1)/60,c.signalSampleSec(end)/60));
+        set(info1,'String',sprintf('ROI search/export source: %s | Displayed overlay: %s',c.searchScanLabel,fileLabel));
+    end
 end
 
 function replaceUnsavedAutomaticROIs()
@@ -3671,13 +3786,13 @@ function exportROIsCB(~,~,pairIds,selectedIds)
             assert(numel(unique(keys))==2,'Target and Control must not be the same spatial ROI.');
         end
         A = [[flat.z].' [flat.id].']; [~, ord] = sortrows(A, [1 2]); flat = flat(ord);
+        audit=scmAutomaticROISelections(fig);auditContext=[];
         for i = 1:numel(flat)
             r = flat(i); exportLabel=labelTag;
             if ~isempty(pairIds)
                 exportLabel='Ctrl'; if r.id==pairIds(1), exportLabel='Target'; end
             end
             if ~isempty(selectedIds)
-                audit=scmAutomaticROISelections(fig);
                 for ai=1:numel(audit)
                     if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
                         exportLabel=audit{ai}.role;
@@ -3689,11 +3804,18 @@ function exportROIsCB(~,~,pairIds,selectedIds)
             [win0,win1]=parseRangeSafe(getStr(ebSig),840,900);
             exportSignalSec=[win0 win1];
             if isVolMode, exportSignalSec=(exportSignalSec-1)*TR; end
-            selection=[]; audit=scmAutomaticROISelections(fig);
+            selection=[];
             for ai=1:numel(audit)
                 if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
                     selection=audit{ai}; exportSignalSec=selection.signalSec; break;
                 end
+            end
+            exportTR=TR;exportTime=tsec(:);exportFileLabel=fileLabel;
+            if ~isempty(selection)&&isfield(selection,'searchScanKey')
+                [tc,exportTime,exportTR,exportFileLabel]=scmCandidateExportTrace(PSC,TR,selection);
+            else
+                tc=computeRoiPSC_atSlice(r.z,r.x1,r.x2,r.y1,r.y2,r.id);
+                if isempty(tc)||numel(tc)~=nT,tc=nan(1,nT);end
             end
             windowTag=scmROIWindowTag(exportSignalSec,selection);
             outFile = fullfile(roiDir, sprintf('ROI%d_%s_%s_d%d.txt', setId, exportLabel, windowTag, dIdx));
@@ -3706,9 +3828,10 @@ function exportROIsCB(~,~,pairIds,selectedIds)
             fileGuard=onCleanup(@()fclose(fid));
             fprintf(fid, '# ROI export from SCM_gui\n');
             fprintf(fid, '# Date: %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
-            fprintf(fid, '# FileLabel: %s\n', fileLabel);
-            fprintf(fid, '# TR_sec: %.6g\n', TR);
-            fprintf(fid, '# nY nX nZ nT: %d %d %d %d\n', nY,nX,nZ,nT);
+            fprintf(fid, '# FileLabel: %s\n', exportFileLabel);
+            fprintf(fid, '# TR_sec: %.12g\n', exportTR);
+            fprintf(fid, '# nY nX nZ nT: %d %d %d %d\n', nY,nX,nZ,numel(exportTime));
+            fprintf(fid, '# TraceSourceScan: %s\n# TraceTimeConvention: Seconds within the source recording, starting at zero.\n',exportFileLabel);
             fprintf(fid, '# ROI_SET_ID: %d\n', setId);
             fprintf(fid, '# ROI_LABEL: %s\n', exportLabel);
             fprintf(fid, '# ROI_D_INDEX: %d\n', dIdx);
@@ -3720,10 +3843,10 @@ function exportROIsCB(~,~,pairIds,selectedIds)
                 fprintf(fid, '# PlateauDuration_sec: %.9g\n',selection.plateauSec);
             end
             roiSignalWindow=getStr(ebSig);
-            audit=scmAutomaticROISelections(fig);
             for ai=1:numel(audit)
                 if audit{ai}.roiId==r.id && audit{ai}.slice==r.z
-                    fprintf(fid,'# AutomaticROISelection: %s\n',jsonencode(audit{ai}));
+                    [exportAudit,auditContext]=scmCompactROIAudit(audit{ai},P.roiDir,auditContext);
+                    fprintf(fid,'# AutomaticROISelection: %s\n',jsonencode(exportAudit));
                     scmWriteAtlasSelectionHeader(fid,audit{ai});
                     scmROI('writeSize',fid,audit{ai});
                     shown=audit{ai}.signalSec; if isVolMode, shown=shown/TR+1; end
@@ -3731,7 +3854,9 @@ function exportROIsCB(~,~,pairIds,selectedIds)
                 end
             end
             fprintf(fid, '# SLICE: %d\n', r.z);
-            fprintf(fid, '# BaselineWindow: %s\n', getStr(ebBase));
+            if ~isempty(selection)&&isfield(selection,'searchScanKey')
+                fprintf(fid,'# BaselineWindow: %.12g %.12g sec\n',selection.baselineSampleSec([1 end]));
+            else,fprintf(fid, '# BaselineWindow: %s\n', getStr(ebBase));end
             fprintf(fid, '# PSC_REBASED: 1\n');
             if fusiBaselineReference('isExternal',baseline)
                 fprintf(fid,'# PSC_REBASE_METHOD: absolute_power_vs_external_mean_per_voxel\n');
@@ -3747,10 +3872,8 @@ function exportROIsCB(~,~,pairIds,selectedIds)
             if isempty(selection)&&numel(roi.sizingById)>=r.id&&~isempty(roi.sizingById{r.id}),scmROI('writeSize',fid,roi.sizingById{r.id});end
             fprintf(fid, '# x1 x2 y1 y2\n%d %d %d %d\n', r.x1,r.x2,r.y1,r.y2);
             fprintf(fid, '# color_rgb\n%.6f %.6f %.6f\n', r.color(1),r.color(2),r.color(3));
-            tc = computeRoiPSC_atSlice(r.z, r.x1, r.x2, r.y1, r.y2,r.id);
-            if isempty(tc) || numel(tc) ~= nT, tc = nan(1,nT); end
             fprintf(fid, '# columns: time_sec\ttime_min\tPSC\n');
-            for ii = 1:nT, fprintf(fid, '%.6f\t%.6f\t%.6f\n', tsec(ii), tmin(ii), tc(ii)); end
+            fusiWriteTimecourseTable(fid,exportTime,exportTime/60,tc);
             clear fileGuard;
             roi.exportedIds=unique([roi.exportedIds r.id]);
             dIdx = dIdx + 1;
@@ -3763,6 +3886,9 @@ function exportROIsCB(~,~,pairIds,selectedIds)
             parameterFile=scmExportSearchParameters(roiDir,chosen,fileLabel,skipped,sprintf('Analysis_Parameters_ROIset%d.txt',setId));
             setappdata(fig,'LastSearchParameterFile',parameterFile);
         end
+        note='';if isappdata(fig,'SCMExportNote'),note=getappdata(fig,'SCMExportNote');end
+        scmExportNote(roiDir,fileLabel,note,sprintf('note_ROIset%d.txt',setId));
+        scmExportNote(roiDir,fileLabel,note);
         msgbox(sprintf('Exported %d ROI(s) to:\n%s\n(ROI set %d, %s)', numel(flat), roiDir, setId, labelTag), 'Export ROIs');
     catch ME
         errordlg(ME.message, 'ROI export failed');
@@ -7173,6 +7299,12 @@ function meta = defaultUnderlayMeta()
 end
 
 function [U, meta] = extractUnderlayFromMatStruct(S)
+    if isfield(S,'lightSuiteNativeMeta')
+        assert(~state.isAtlasWarped && ~state.isStepMotorAtlasWarped, ...
+            'deConfUSIon:LightSuiteNativeGrid','Open the native recording view before loading LightSuite native region labels.');
+        [matched,L,meta]=fusiLightSuiteRegionInput(S,[nY nX nZ]);
+        if matched,U=fusiRegionLabelRGB(L,meta.regionInfo);return;end
+    end
     [matched,U,meta]=fusiReadAtlasUnderlay3D(S);if matched,return;end
     meta = defaultUnderlayMeta();
     B = scmReadMaskEditorBundle(S);

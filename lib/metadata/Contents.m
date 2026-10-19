@@ -1,5 +1,5 @@
 % METADATA - deConfUSIon implementation module.
-% Initialize with deConfUSIon_setup; see docs/code_map.md for callers.
+% See docs/deConfUSIon_User_Handbook.pdf for the user and source reference.
 %   deConfUSIon_add_preproc_lazy_datasets
 %   deConfUSIon_best_visible_dataset_name
 %   deConfUSIon_commit_full_display_name

@@ -11,7 +11,9 @@ folder=tempname(scratch);mkdir(folder);work=cell(size(files));preserve=false;
 for k=1:numel(files)
     destination=fileparts(files{k});
     if ~isfolder(destination),[ok,message]=mkdir(destination);if ~ok,error('deConfUSIon:MovieFolder','Cannot create %s: %s',destination,message);end,end
-    work{k}=fullfile(folder,sprintf('movie_%02d.mp4',k));
+    extension='.mp4';
+    if ~ispc&&~ismac,[~,~,extension]=fileparts(files{k});end
+    work{k}=fullfile(folder,sprintf('movie_%02d%s',k,extension));
 end
 stage=struct('files',{work},'commit',@commit,'cleanup',@cleanup);
     function commit()

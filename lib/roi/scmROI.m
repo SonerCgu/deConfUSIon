@@ -33,23 +33,33 @@ s=struct('sizeMode',mode,'sizeXY',pixels,'requestedSizeUm',requested,'sizeXYUm',
 end
 function tc=trace(A,c)
 T=size(A,ndims(A));b=c.boundsXY;
+shape=[size(A,1) size(A,2) 1];if ndims(A)==4,shape(3)=size(A,3);end
 if isfield(c,'roiMaskVolumeIndices')
- shape=[size(A,1) size(A,2) 1];if ndims(A)==4,shape(3)=size(A,3);end
  assert(isequal(double(c.roiMaskSizeYXZ),double(shape)),'deConfUSIon:ROIMask','ROI volume mask does not match the functional grid.');
- V=reshape(A,[],T);V=double(V(c.roiMaskVolumeIndices,:));
-elseif ndims(A)==3,V=A(b(3):b(4),b(1):b(2),:);
-else,V=A(b(3):b(4),b(1):b(2),c.slice,:);end
-V=double(reshape(V,[],T));
-if isfield(c,'roiMaskIndices')&&~isempty(c.roiMaskIndices)
- shape=c.roiMaskSizeYX;assert(isequal(shape,size(A,[1 2])),'deConfUSIon:ROIMask','ROI mask does not match the functional grid.');
- mask=false(shape);mask(c.roiMaskIndices)=true;mask=mask(b(3):b(4),b(1):b(2));V=V(mask(:),:);
+ indices=c.roiMaskVolumeIndices;
+else
+ [yy,xx]=ndgrid(b(3):b(4),b(1):b(2));
+ z=1;if ndims(A)==4,z=c.slice;end
+ indices=sub2ind(shape,yy(:),xx(:),repmat(z,numel(yy),1));
+ if isfield(c,'roiMaskIndices')&&~isempty(c.roiMaskIndices)
+  maskShape=c.roiMaskSizeYX;assert(isequal(maskShape,shape(1:2)),'deConfUSIon:ROIMask','ROI mask does not match the functional grid.');
+  mask=false(maskShape);mask(c.roiMaskIndices)=true;mask=mask(b(3):b(4),b(1):b(2));indices=indices(mask(:));
+ end
 end
-assert(~isempty(V),'deConfUSIon:ROIMask','ROI contains no voxels.');
-if isfield(c,'baselineMode')&&strcmp(c.baselineMode,'external'),B=zeros(size(V,1),1);
-else,B=mean(V(:,c.baselineFrames),2);end
-if isfield(c,'coordinateProjection')&&any(~isfinite(B)|100+B<=sqrt(eps('single'))),tc=nan(1,T);return;end
-assert(all(isfinite(B)&100+B>sqrt(eps('single'))),'deConfUSIon:ROIBundle','Invalid baseline in ROI.');
-V=100*bsxfun(@rdivide,bsxfun(@minus,V,B),100+B);tc=mean(V,1);
+assert(~isempty(indices),'deConfUSIon:ROIMask','ROI contains no voxels.');
+% Bound double temporaries for whole-region / oblique volume ROIs. Keep the
+% same per-voxel rebase and fixed membership (including NaN propagation).
+source=reshape(A,[],T);tc=zeros(1,T);count=numel(indices);
+chunk=max(1,floor(16*1024^2/(8*T)));
+for first=1:chunk:count
+ take=indices(first:min(count,first+chunk-1));V=double(source(take,:));
+ if isfield(c,'baselineMode')&&strcmp(c.baselineMode,'external'),B=zeros(size(V,1),1);
+ else,B=mean(V(:,c.baselineFrames),2);end
+ if isfield(c,'coordinateProjection')&&any(~isfinite(B)|100+B<=sqrt(eps('single'))),tc=nan(1,T);return;end
+ assert(all(isfinite(B)&100+B>sqrt(eps('single'))),'deConfUSIon:ROIBundle','Invalid baseline in ROI.');
+ V=100*bsxfun(@rdivide,bsxfun(@minus,V,B),100+B);tc=tc+sum(V,1);
+end
+tc=tc/count;
 end
 function writeSize(fid,c)
 mode='rectangle';if isfield(c,'roiMode'),mode=c.roiMode;end

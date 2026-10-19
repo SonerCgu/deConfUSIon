@@ -1,19 +1,34 @@
 % IO - deConfUSIon implementation module.
-% Initialize with deConfUSIon_setup; see docs/code_map.md for callers.
+% See docs/deConfUSIon_User_Handbook.pdf for the user and source reference.
 %   deConfUSIon_finish_saves
 %   deConfUSIon_safe_preproc_save_path
 %   fusiAnalysisOutputPath
-%   fusiExportSavedDialog
-%   fusiOpenFolder
+%   fusiBaselineDatasets
+%   fusiBaselineFileInfo
+%   fusiBaselineRawStart
+%   fusiBaselineReadWindow
 %   fusiDesktopFolderCommand
-%   fusiRememberDataRoot
-%   fusiLoadMatVariables
+%   fusiExportSavedDialog
 %   fusiFindMovedDataPath
+%   fusiLoadMatVariables
+%   fusiLocalMatReadSource
 %   fusiModelAnalysisFolder
 %   fusiModelExportPath
-%   fusiMovieStage
+%   fusiMovieExportFolder
+%   fusiMovieExportIdentity
 %   fusiMovieExportSlices
+%   fusiMovieStage
+%   fusiOpenFolder
 %   fusiPaperMoviePath
+%   fusiPowerSlabCache
+%   fusiRebaseMovedStudioFiles
+%   fusiRememberDataRoot
+%   fusiResolveAnalysisFolder
+%   fusiSCMEnsembleHeader
 %   fusiUniqueOutputFolder
+%   fusiWriteAnalysisMAT
+%   fusiWriteTimecourseTable
 %   studioRequireTimeSeriesFile
 %   studioSaveDataset
+%   fusiMovieOutput - Native MP4 on Windows/macOS; Motion JPEG AVI on Linux.
+%   fusiNativeProcessEnvironment - Isolate native Unix tools from MATLAB libraries.

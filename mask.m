@@ -2785,6 +2785,11 @@ end
 if ~isstruct(Sx)
     error('Loaded MAT content is not a struct.');
 end
+if isfield(Sx,'lightSuiteMaskMeta')
+    assert(isequal(double(Sx.lightSuiteMaskMeta.nativeSize),double([nY nX nZ]))&& ...
+        isequal(size(Sx.brainImage,[1 2 3]),[nY nX nZ]), ...
+        'deConfUSIon:LightSuiteNativeGrid','Load the original recording grid used for this LightSuite mask. Cropped or resampled data require a new registration.');
+end
 U = pickNumericFromMat(Sx);
             U = double(U);
             U = squeezeTo2Dor3D(U);

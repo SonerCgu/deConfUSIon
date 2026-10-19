@@ -1,8 +1,8 @@
 function out = standardizedAnalysis(studioFig)
-% Programmatic preset query: steps = standardizedAnalysis('A') through ('G').
+% Programmatic preset query: steps = standardizedAnalysis('A') through ('H').
 deConfUSIon_setup();
 out=[];
-if nargin>0 && ischar(studioFig) && numel(studioFig)==1 && any(upper(studioFig)=='ABCDEFG')
+if nargin>0 && ischar(studioFig) && numel(studioFig)==1 && any(upper(studioFig)=='ABCDEFGH')
     out=presetSteps(upper(studioFig)); return;
 end
 % standardizedAnalysis.m - deConfUSIon standardized workflow manager
@@ -123,7 +123,8 @@ btnW = 0.118; btnH = 0.045; gap = 0.014;
 S.presetPopup=uicontrol(fig,'Style','popupmenu', ...
     'Units','normalized','Position',[0.735 0.900 0.250 0.043], ...
     'String',{'A | Standard A fast','B | Standard B slow','C | 2D awake', ...
-    'D | 2D anesthesized','E | 3D awake','F | 3D anesthesized','G | Motor anesthesized'}, ...
+    'D | 2D anesthesized','E | 3D awake','F | 3D anesthesized','G | Motor anesthesized', ...
+    'H | Awake fast injections'}, ...
     'Value',1,'Tag','deConfUSIonWorkflowPreset','Callback',@onPresetChanged);
 uicontrol(fig,'Style','pushbutton','String','Help', ...
     'Units','normalized','Position',[0.867 0.845 0.118 0.040], ...
@@ -411,6 +412,12 @@ if isempty(fig) || ~ishghandle(fig), return; end
 S = guidata(fig);
 [ok,message]=validatePresetData(S);
 if ~ok, errordlg(message,'Workflow data mismatch'); return; end
+if ~isempty(message)
+    % Informational only: a mean can use one acquired/reduced frame.
+    % Print the resolved frame counts so coarse sampling remains apparent.
+    fprintf('[Standardized Analysis] %s\n',message);
+    setappdata(fig,'SCMWindowPreflight',message);
+end
 idx = find([S.steps.run]);
 if isempty(idx)
     setStatus(fig,'No workflow steps are ticked.',[1.00 0.55 0.45]);
@@ -470,7 +477,7 @@ for ii = 1:numel(idx)
         end
     end
 
-    waitForInteractiveStep(stepName,figsBefore);
+    waitForInteractiveStep(stepName,figsBefore,S.steps(r));
     if isempty(fig) || ~ishghandle(fig), return; end
     setStatus(fig,['Finished step: ' stepName],[0.80 0.95 0.85]);
     drawnow;
@@ -502,7 +509,7 @@ catch ME_run
 end
 
 if ok
-    waitForInteractiveStep(stepName,figsBefore);
+    waitForInteractiveStep(stepName,figsBefore,S.steps(r));
     if ~isempty(fig) && ishghandle(fig)
         setStatus(fig,['Finished selected step: ' stepName],[0.80 0.95 0.85]);
     end
@@ -553,7 +560,9 @@ if strcmp(choice,'Save')
 elseif strcmp(choice,'Load')
     if exist(presetFile,'file')
         X = load(presetFile);
-        if isfield(X,'presetKey'), S.presetKey=X.presetKey; end
+        if isfield(X,'presetKey')&&ischar(X.presetKey)&&isscalar(X.presetKey)&&any(X.presetKey=='ABCDEFGH')
+            S.presetKey=X.presetKey;set(S.presetPopup,'Value',find('ABCDEFGH'==S.presetKey,1));
+        end
         if isfield(X,'steps')
             S.steps = normalizeLoadedSteps(X.steps);
             S = renumberSteps(S);
@@ -642,7 +651,8 @@ st = struct('run',false,'order',0,'name','','desc','', ...
     'filterMethod',NaN,'filterRippleDb',NaN,'filterAttenuationDb',NaN,'filterPreserveMean',NaN, ...
     'tempMode',NaN,'tempWinSec',NaN,'tempNsub',NaN,'tempMethod',NaN, ...
     'pcaicaMethod',NaN,'pcaNcomp',NaN,'icaNcomp',NaN, ...
-    'sig1',NaN,'sig2',NaN,'pcaDropPC',NaN,'pcaAutoApply',NaN); % DECONF_OPTA_V1
+    'sig1',NaN,'sig2',NaN,'pcaDropPC',NaN,'pcaAutoApply',NaN, ...
+    'frameSigma',NaN,'frameShowQC',NaN); % DECONF_OPTA_V1
 end
 
 function st = makeStep(runFlag,orderVal,name,desc,slices,nsub,base1,base2,cmin,cmax,amin,amax)
@@ -683,6 +693,8 @@ end
 function fields = relevantFields(st)
 fields = {};
 switch lower(strtrim(st.name))
+    case 'frame rejection'
+        fields = {'frameSigma','frameShowQC'};
     case 'motor'
         fields = {'slices'};
     case 'imregdemons'
@@ -705,6 +717,8 @@ end
 function labels = fieldLabels()
 labels = struct();
 labels.slices = 'Slices';
+labels.frameSigma = 'Frame rejection threshold (sigma)';
+labels.frameShowQC = 'Show frame QC: 1=yes 0=save only';
 labels.nsub = 'Imreg n / nsub';
 labels.base1 = 'Baseline start (s)';
 labels.base2 = 'Baseline end (s)';
@@ -735,6 +749,10 @@ end
 
 function v = sanitizeValue(fieldName,v)
 switch fieldName
+    case 'frameSigma'
+        v=max(.1,v);
+    case 'frameShowQC'
+        v=round(max(0,min(1,v)));
     case 'slices'
         v = round(max(1,min(12,v)));
     case 'nsub'
@@ -791,12 +809,12 @@ if ~isstruct(steps)
     steps = defaultSteps;
     return;
 end
-needFields = fieldnames(emptyStep());
-for ii = 1:numel(steps)
-    for ff = 1:numel(needFields)
-        if ~isfield(steps,needFields{ff})
-            steps(ii).(needFields{ff}) = defaultSteps(min(ii,numel(defaultSteps))).(needFields{ff});
-        end
+needFields = setdiff(fieldnames(emptyStep()),fieldnames(steps));
+for ff = 1:numel(needFields)
+    % Adding a struct field creates empty values on the other elements.
+    % Fill every step when upgrading an older saved preset.
+    for ii = 1:numel(steps)
+        steps(ii).(needFields{ff}) = defaultSteps(min(ii,numel(defaultSteps))).(needFields{ff});
     end
 end
 end
@@ -1008,9 +1026,12 @@ catch
 end
 end
 
-function waitForInteractiveStep(stepName,figsBefore)
+function waitForInteractiveStep(stepName,figsBefore,step)
 try
     nm = lower(strtrim(stepName));
+    % Automatic PC removal finishes synchronously. Do not wait for another
+    % unrelated PCA window that happened to be open before this workflow.
+    if nargin>2&&strcmp(nm,'pca / ica')&&isfield(step,'pcaAutoApply')&&isequal(step.pcaAutoApply,1),return;end
     mustWait = any(strcmp(nm,{'video gui','scm gui','registration to atlas','time-course viewer','mask editor','segmentation','functional connectivity','pca / ica'}));
     if ~mustWait, return; end
     pause(0.5); drawnow;
@@ -1079,7 +1100,7 @@ if ~isempty(scmIdx)
 end
 end
 function onPresetChanged(src,~)
-fig=ancestor(src,'figure'); S=guidata(fig); keys='ABCDEFG';
+fig=ancestor(src,'figure'); S=guidata(fig); keys='ABCDEFGH';
 S.presetKey=keys(get(src,'Value')); S.steps=presetSteps(S.presetKey); S.selectedRow=1;
 guidata(fig,S); refreshRows(fig); refreshSelectedPanel(fig);
 setStatus(fig,['Preset ' S.presetKey ': review the checked steps and acquisition-specific timing.'],[.55 .86 .82]);
@@ -1103,6 +1124,7 @@ switch key
     case 'E', names={'PCA / ICA','Imregdemons','Mask Editor','Time-Course Viewer','SCM GUI'};
     case 'F', names={'Full QC','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
     case 'G', names={'Motor','Full QC','Imregdemons','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
+    case 'H', names={'Frame Rejection','PCA / ICA','Imregdemons','SCM GUI'};
 end
 for k=1:numel(steps), steps(k).run=any(strcmp(steps(k).name,names)); end
 % Fast triage uses only the first QC and first SCM instance.
@@ -1135,6 +1157,23 @@ if key=='E'
     for k=1:numel(steps), steps(k).order=k; end
 end
 
+if key=='H'
+    chosen=zeros(1,numel(names));
+    for k=1:numel(names),chosen(k)=find(strcmp({steps.name},names{k}),1,'first');end
+    for k=1:numel(steps),steps(k).run=ismember(k,chosen);end
+    p=chosen(1);steps(p).frameSigma=3;steps(p).frameShowQC=0;
+    steps(p).desc='Reject global-signal outlier frames at 3 sigma (both directions), interpolate on the original time grid; save QC without opening plots.';
+    p=chosen(2);steps(p).pcaicaMethod=1;steps(p).pcaNcomp=1;steps(p).pcaDropPC=1;steps(p).pcaAutoApply=1;
+    steps(p).desc='Automatically remove PC1 across all slices; compute only the required component and restore voxel means.';
+    p=chosen(3);steps(p).nsub=50;steps(p).imregMode='auto';
+    steps(p).desc='Median blocks of 50 frames, then Imregdemons; auto-select 2D, motor or true 3D registration. Output TR = input TR x 50.';
+    p=chosen(4);steps(p).base1=30;steps(p).base2=60;steps(p).sig1=700;steps(p).sig2=900;
+    steps(p).cmin=0;steps(p).cmax=50;steps(p).amin=5;steps(p).amax=10;
+    steps(p).desc='Open SCM: positive only, 0-50%, alpha modulation 5-10%; baseline 30-60 s and signal 700-900 s. No automatic ROI search.';
+    steps=steps([chosen setdiff(1:numel(steps),chosen,'stable')]);
+    for k=1:numel(steps),steps(k).order=k;end
+end
+
 end
 
 function [ok,message]=validatePresetData(S)
@@ -1144,8 +1183,50 @@ try
     studio=guidata(S.studioFig);
     if ~isfield(studio,'activeDataset') || isempty(studio.activeDataset), return; end
     D=studio.datasets.(studio.activeDataset);
-    if ~isfield(D,'I') || isempty(D.I), return; end
     key=S.presetKey;
+    hasArray=isfield(D,'I')&&~isempty(D.I);
+    if ~hasArray&&key~='H',return;end
+    if key=='H'
+        assert(isfield(D,'TR')&&isscalar(D.TR)&&isfinite(D.TR)&&D.TR>0, ...
+            'The active dataset needs a positive TR in seconds.');
+        projectedTR=D.TR;
+        if hasArray,projectedFrames=size(D.I,ndims(D.I));
+        else
+            assert(isfield(D,'nVols')&&isscalar(D.nVols)&&isfinite(D.nVols)&&D.nVols>=2, ...
+                'Load the selected dataset metadata before checking the injection preset timing.');
+            projectedFrames=D.nVols;
+        end
+        for step=S.steps([S.steps.run])
+            if strcmp(step.name,'Imregdemons')
+                block=max(2,round(step.nsub));projectedFrames=floor(projectedFrames/block);projectedTR=projectedTR*block;
+                assert(projectedFrames>=2,'Not enough frames for the selected Imregdemons block size.');
+            elseif strcmp(step.name,'SCM GUI')
+                last=(projectedFrames-1)*projectedTR;windows=[step.base1 step.base2;step.sig1 step.sig2];
+                assert(all(isfinite(windows(:)))&&all(windows(:,1)>=0)&&all(windows(:,2)>windows(:,1)), ...
+                    'Baseline and signal windows must be increasing times in seconds.');
+                assert(all(windows(:,2)<=last+max(1e-9,projectedTR*1e-6)), ...
+                    ['The requested SCM windows exceed the processed duration (%.3g s after block averaging). ' ...
+                     'Use a longer recording or edit the windows/block size before starting.'],last);
+                % Match computePSC and SCM_gui: seconds are rounded to the
+                % nearest frame, with inclusive endpoints. ceil/floor used
+                % here previously undercounted valid SCM windows (e.g.
+                % 30-60 s at TR=25 s resolves to frames at 25 and 50 s).
+                bounds=round(windows/projectedTR)+1;
+                bounds=max(1,min(projectedFrames,bounds));
+                samples=bounds(:,2)-bounds(:,1)+1;
+                assert(all(samples>=1), ...
+                    'The baseline or signal window does not select an output frame.');
+                resolved=(bounds-1)*projectedTR;
+                message=sprintf(['SCM timing at output TR %.6g s: baseline %d frame(s) [%.6g-%.6g s]; ' ...
+                    'signal %d frame(s) [%.6g-%.6g s]. Nearest-frame endpoints, inclusive.'], ...
+                    projectedTR,samples(1),resolved(1,1),resolved(1,2), ...
+                    samples(2),resolved(2,1),resolved(2,2));
+                if any(samples==1)
+                    message=[message ' A single reduced frame is valid for a mean, but offers limited temporal sampling.'];
+                end
+            end
+        end
+    end
     if any(key=='CD') && ndims(D.I)~=3
         ok=false; message='This preset requires 2D + time data. Select a 3D or motor preset.';
     elseif any(key=='EF') && ndims(D.I)~=4

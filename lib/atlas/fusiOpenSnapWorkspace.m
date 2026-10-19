@@ -52,6 +52,7 @@ else
     for k=1:numel(remove),environment.remove(remove{k});end
     paths=strsplit(getenv('PATH'),pathsep);paths=paths(~contains(paths,matlabroot));
     environment.put('PATH',strjoin([{fileparts(executable)} paths],pathsep));
+    fusiNativeProcessEnvironment(builder,fileparts(executable));
     builder.redirectErrorStream(true);builder.redirectOutput(java.io.File([workspace '.itksnap.log']));
     process=builder.start();
 end

@@ -3,7 +3,12 @@ function opt=scmAutoSearchDialog(ctx)
 opt=[]; nz=ctx.sizeYXZ(3); ny=ctx.sizeYXZ(1); nx=ctx.sizeYXZ(2); z=ctx.slice;
 accepted=false; armed=false; dragging=false; anchor=[]; rubber=[];
 paintedMask=[]; painting=false; eraseStroke=false; lastPoint=[];strokeRadius=8;
-hAnatomy=[];hShade=[];underlaySlice=NaN;baseIncluded=true(ny,nx);lastPaintDraw=tic;
+if isfield(ctx,'initialPaintMask')&&isequal(size(ctx.initialPaintMask),[ny nx])
+    paintedMask=logical(ctx.initialPaintMask);
+end
+previousROIMode=1;rectangleTop={'0','0'};
+hAnatomy=[];hShade=[];hRolePaint=[];hBrush=[];underlaySlice=NaN;baseIncluded=true(ny,nx);lastPaintDraw=tic;
+roleMap=zeros(ny,nx,'uint8');roleColors=[1 .62 .05;.05 .78 1;.30 .95 .45];
 anatomyX=[1 nx];anatomyY=[1 ny];
 if isfield(ctx,'underlayXData'),anatomyX=ctx.underlayXData;end
 if isfield(ctx,'underlayYData'),anatomyY=ctx.underlayYData;end
@@ -25,11 +30,12 @@ cbControl=control('checkbox',[.73 .94 .24 .045],'Search Control',@roleTicks);
 set(cbTarget,'Tag','SearchTargetEnabled','Value',1);set(cbControl,'Tag','SearchControlEnabled','Value',1);
 set(pWhich,'Callback',@rolePopup);
 cbBrush=control('checkbox',[.47 .88 .27 .04],'Brush enabled',@brushMode);
-set(cbBrush,'Tag','SearchBrushMode','Value',1);
+set(cbBrush,'Tag','SearchBrushMode','Value',1,'TooltipString', ...
+    'Left-drag adds; right-drag erases. The circle shows the brush radius. The painted mask applies to all searched slices.');
 control('text',[.75 .88 .13 .04],'Radius (pixels)',[]);
-eBrush=control('edit',[.88 .88 .09 .04],'8',[]);set(eBrush,'Tag','SearchBrushRadius');
-btEmpty=control('pushbutton',[.47 .825 .24 .04],'Clear painted area',@(~,~)fillPaint(false));set(btEmpty,'Tag','SearchPaintClear');
-btFill=control('pushbutton',[.73 .825 .24 .04],'Fill painted area',@(~,~)fillPaint(true));set(btFill,'Tag','SearchPaintFill');
+eBrush=control('edit',[.88 .88 .09 .04],'8',@brushRadiusChanged);set(eBrush,'Tag','SearchBrushRadius');
+btEmpty=control('pushbutton',[.47 .825 .24 .04],'Clear mask: ALL slices',@(~,~)fillPaint(false));set(btEmpty,'Tag','SearchPaintClear');
+btFill=control('pushbutton',[.73 .825 .24 .04],'Fill mask: ALL slices',@(~,~)fillPaint(true));set(btFill,'Tag','SearchPaintFill');
 catalog=struct('id',{},'acronym',{},'name',{},'displayName',{},'voxelCount',{});excluded=[];
 hasAtlas=isfield(ctx,'atlasLabels')&&~isempty(ctx.atlasLabels)&&isfield(ctx,'atlasRegionInfo');
 if hasAtlas,[catalog,excluded]=fusiAtlasRegionCatalog(ctx.atlasLabels,ctx.atlasRegionInfo);end
@@ -54,8 +60,20 @@ timingText=control('text',[.025 .94 .425 .035],'',[]);
 set(timingText,'HorizontalAlignment','left','Tag','SearchScanTiming');
 pScan=[];
 if isfield(ctx,'scanLabels')&&~isempty(ctx.scanLabels)
-    pScan=control('popupmenu',[.025 .903 .405 .034],[{'Originally loaded scan (Load fUSI Data selection)','All loaded scans: strongest ROI per region/role/slice'} ctx.scanLabels],@updateScanTiming);
-    set(pScan,'Tag','SearchScanScope','FontSize',10,'Value',1,'TooltipString','Default is the dataset that opened this SCM. Search times apply separately within each chosen scan; switching the overlay does not change this default.');
+    scanChoices={'All attached scans - maximum'};
+    for scanNumber=1:numel(ctx.scanLabels)
+        scanChoices{end+1}=sprintf('Scan %c - %s',char('A'+scanNumber-1),ctx.scanLabels{scanNumber}); %#ok<AGROW>
+    end
+    scanChoice=1;
+    if isfield(ctx,'originalScanIndex')&&~isempty(ctx.originalScanIndex),scanChoice=ctx.originalScanIndex+1;end
+    if isfield(ctx,'scanScope')&&strcmp(ctx.scanScope,'all'),scanChoice=1;
+    elseif isfield(ctx,'scanIndex')&&isscalar(ctx.scanIndex)&&isfinite(ctx.scanIndex),scanChoice=ctx.scanIndex+1;end
+    scanChoice=max(1,min(numel(scanChoices),scanChoice));
+    pScan=control('popupmenu',[.025 .903 .405 .036],scanChoices,@updateScanTiming);
+    set(pScan,'Tag','SearchScanScope','FontSize',11,'Value',scanChoice,'TooltipString', ...
+        ['Maximum search: choose Scan A, B, C, ... or All attached scans. ' ...
+         'All scans keeps the strongest ROI per region/role/slice across the attached scans. ' ...
+         'Times are relative to each scan, not the stitched plot. The overlay selector does not change this choice.']);
 end
 eSize=editrow(.86,'',num2str(ctx.roiSize),'SearchROISize');
 pROIMode=control('popupmenu',[.025 .86 .235 .045],{'ROI: square pixels','ROI: X/Y micrometres','ROI: whole atlas region'},@roiModeChanged);
@@ -104,7 +122,8 @@ sl=control('slider',[.49 .18 .46 .025],'',@changeSlice);
 set(sl,'Min',1,'Max',max(2,nz),'Value',z,'SliderStep',[1/max(1,nz-1) min(1,5/max(1,nz-1))],'Tag','SearchSlice');
 if nz==1, set(sl,'Enable','off'); end
 status=control('text',[.47 .065 .50 .05],'Brush ready: paint with left-drag, erase with right-drag. Your mask applies to all slices.',[]);
-set(status,'HorizontalAlignment','left','Tag','SearchStatus');
+set(status,'HorizontalAlignment','left','Tag','SearchStatus','TooltipString', ...
+    'Orange = selected Target; cyan = selected Control. A bright edge follows the painted support. Dark shading is excluded; dashed outlines show eligible regions.');
 if hasAtlas
     set(status,'String','Atlas search ignores the uploaded SCM mask. Brush: left-drag adds, right-drag erases (all slices).');
 end
@@ -114,7 +133,8 @@ control('pushbutton',[.80 .015 .17 .05],'Cancel',@(~,~)delete(f));
 set(f,'WindowScrollWheelFcn',@scroll,'WindowButtonDownFcn',@mouseDown, ...
     'WindowButtonMotionFcn',@mouseMove,'WindowButtonUpFcn',@mouseUp,'WindowKeyPressFcn',@key, ...
     'Interruptible','off','BusyAction','queue');
-roiModeChanged(); updateScanTiming(); setappdata(f,'SCMSearchDialogReady',true); uiwait(f);
+roiModeChanged(); updateScanTiming(); drawnow nocallbacks;
+setappdata(f,'SCMSearchDialogReady',true); uiwait(f);
 if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
 
     function h=control(style,pos,str,cb)
@@ -134,10 +154,10 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
     function updateScanTiming(varargin)
         durations=ctx.nT*ctx.TR/60;description='Acquisition';
         if isfield(ctx,'scanTiming')&&~isempty(ctx.scanTiming)
-            choice=1;if ~isempty(pScan),choice=get(pScan,'Value');end
+            choice=ctx.originalScanIndex+1;if ~isempty(pScan),choice=get(pScan,'Value');end
             indices=ctx.originalScanIndex;description='Original scan';
-            if choice==2,indices=1:numel(ctx.scanTiming);description='Each scan';
-            elseif choice>2,indices=choice-2;description='Selected scan';end
+            if choice==1,indices=1:numel(ctx.scanTiming);description='Each attached scan';
+            elseif choice>1,indices=choice-1;description=sprintf('Scan %c',char('A'+indices-1));end
             durations=cellfun(@(d)d.nFrames*d.TR/60,ctx.scanTiming(indices));
         end
         range=sprintf('%.3g',max(durations));
@@ -154,7 +174,7 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             'sliceRange',[str2double(get(eFirst,'String')) str2double(get(eLast,'String'))]);
         o.scanScope='original';o.scanIndex=[];
         if ~isempty(pScan)
-            value=get(pScan,'Value');if value==2,o.scanScope='all';elseif value>2,o.scanScope='single';o.scanIndex=value-2;end
+            value=get(pScan,'Value');if value==1,o.scanScope='all';else,o.scanScope='single';o.scanIndex=value-1;end
         end
         modes={'keep','shared','adaptive'};o.displayMode=modes{get(pDisplay,'Value')};o.sharedDisplay=sharedDisplay;
         o.polygons=cell(nz,2); % Keep the region helper/backward metadata contract.
@@ -169,6 +189,9 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             geometry=scmROI('size',o,ctx.spacingUm);o.sizeXY=geometry.sizeXY;
         end
         if strcmp(o.roiSelection,'Target'),o.topCount(2)=0;elseif strcmp(o.roiSelection,'Control'),o.topCount(1)=0;end
+        % One canonical XY restriction is used on every searched slice.
+        % Retain the cells for older protocol readers and exported audits.
+        o.paintMask=paintedMask;o.paintMaskScope='shared-xy-all-slices';
         o.paintMasks=repmat({paintedMask},1,nz);
         if hasAtlas
             o.atlasLabels=ctx.atlasLabels;o.excludedAtlasIDs=excluded;
@@ -215,7 +238,14 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         set(pAtlas,'TooltipString',strjoin(names,newline));
     end
     function roiModeChanged(varargin)
+        finishStroke(false);
         physical=get(pROIMode,'Value')==2;whole=get(pROIMode,'Value')==3;
+        if whole&&~hasAtlas
+            set(pROIMode,'Value',previousROIMode);preview();
+            set(status,'String','Whole-region mode needs saved atlas labels. Load an atlas registration in SCM, then reopen Automatic analysis.','ForegroundColor',[1 .65 .3]);return;
+        end
+        if whole&&previousROIMode~=3,rectangleTop={get(eTopTarget,'String'),get(eTopControl,'String')};end
+        if ~whole&&previousROIMode==3,set(eTopTarget,'String',rectangleTop{1});set(eTopControl,'String',rectangleTop{2});end
         set(eSize,'Visible',onoff(~physical),'Enable',onoff(~whole));
         set([eWidth eHeight],'Visible',onoff(physical));
         set(eCoverage,'Enable',onoff(hasAtlas&&~whole));
@@ -223,6 +253,7 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             set([eTopTarget eTopControl],'String','1');
             set(eSize,'Visible','off');
         end
+        previousROIMode=get(pROIMode,'Value');
         preview();
     end
     function s=onoff(v),s='off';if v,s='on';end,end
@@ -231,8 +262,11 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         set([eFirst eLast],'Enable',enabled);preview();
     end
     function changeSlice(~,~)
-        if dragging||painting,set(sl,'Value',z);return;end
-        z=round(get(sl,'Value')); set(sl,'Value',z); preview();
+        next=max(1,min(nz,round(get(sl,'Value'))));
+        % The slider can receive mouse-up instead of the canvas. Commit the
+        % old stroke before changing anatomy, without painting to the slider.
+        finishStroke(false);
+        z=next;set(sl,'Value',z);preview();
     end
     function rememberDisplay(~,~)
         try
@@ -243,18 +277,20 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         catch ME, set(status,'String',ME.message,'ForegroundColor',[1 .45 .3]); end
     end
     function scroll(~,event)
-        if dragging||painting, return; end
+        finishStroke(false);
         z=max(1,min(nz,z+event.VerticalScrollCount)); set(sl,'Value',z); preview();
     end
     function preview(varargin)
-        if dragging, return; end
-        if painting,updatePaintShade();return;end
+        % A popup/edit can consume mouse-up when the pointer leaves the
+        % canvas. Commit the existing gesture before applying a UI change.
+        finishStroke(false);
         try
             if isempty(hAnatomy)||~isgraphics(hAnatomy)||underlaySlice~=z
                 anatomy=ctx.underlay(z);
                 assert(~isempty(anatomy),'deConfUSIon:SearchPreview','The anatomy underlay is empty.');
                 if isempty(hAnatomy)||~isgraphics(hAnatomy)
-                    hAnatomy=image(ax,'CData',anatomy,'XData',anatomyX,'YData',anatomyY,'Tag','SearchAnatomyImage');
+                    hAnatomy=image(ax,'CData',anatomy,'XData',anatomyX,'YData',anatomyY,'Tag','SearchAnatomyImage', ...
+                        'HitTest','on','PickableParts','visible');
                 else
                     set(hAnatomy,'CData',anatomy,'XData',anatomyX,'YData',anatomyY);
                 end
@@ -278,7 +314,8 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         axis(ax,'image'); set(ax,'YDir','reverse','XColor','w','YColor','w','Color','k'); hold(ax,'on');
         if isfield(ctx,'viewAspect'),set(ax,'DataAspectRatio',ctx.viewAspect);end
         set(ax,'FontSize',12);
-        set(sliceText,'String',sprintf('Slice %d / %d - scroll mouse wheel or move slider',z,nz));
+        set(sliceText,'String',sprintf('Slice %d / %d | ONE shared XY mask on ALL slices',z,nz), ...
+            'TooltipString','Paint and erase on any slice. The same XY restriction is reused on every searched slice; atlas tissue and region boundaries can differ between slices.');
         try
             o=collect(); searched=scmSearchSlices(o,nz);
             if strcmp(o.roiMode,'region')
@@ -293,30 +330,46 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             end
             % Cache eligibility independently of paint. During a stroke only
             % this mask's alpha changes; anatomy and contours stay in place.
-            o.paintMasks=cell(1,nz);
-            r=scmSearchRegions(o,z,ctx.mask(z)); included=false(ny,nx);baseIncluded=false(ny,nx);
+            o.paintMask=[];o.paintMasks=cell(1,nz);
+            r=scmSearchRegions(o,z,ctx.mask(z));baseIncluded=false(ny,nx);roleMap=zeros(ny,nx,'uint8');
             for k=1:numel(r)
                 shown=r(k).mask;if ~isempty(r(k).atlasRegionMask),shown=shown&r(k).atlasRegionMask;end
                 baseIncluded=baseIncluded|shown;
-                if ~isempty(paintedMask),shown=shown&paintedMask;end
-                included=included|shown;
-                c=[1 .55 .05]; if strcmp(r(k).role,'Control'), c=[.05 .65 1]; end
+                % Eligibility is cached; strokes update image alpha only.
+                % Solid colored pixel edges follow the actual painted mask.
+                role=1;if strcmp(r(k).role,'Control'),role=2;elseif strcmp(r(k).role,'Search'),role=3;end
+                roleMap(shown)=role;c=roleColors(role,:);
                 padded=zeros(ny+2,nx+2); padded(2:end-1,2:end-1)=double(shown);
                 if any(shown(:))
-                    [~,outline]=contour(ax,0:nx+1,0:ny+1,padded,[.5 .5],'Color',c,'LineWidth',2);
-                    set(outline,'Tag','SearchRegionOutline');
+                    [~,outline]=contour(ax,0:nx+1,0:ny+1,padded,[.5 .5],'Color',c,'LineWidth',1.2,'LineStyle','--');
+                    set(outline,'Tag','SearchRegionOutline','HitTest','off','PickableParts','none');
                     [yy,xx]=find(shown);name=r(k).role;
                     if ~isempty(r(k).atlasRegion),name=[r(k).atlasRegion.acronym ' / ' name];end
-                    text(ax,mean(xx),min(yy),name,'Color',c, ...
+                    text(ax,mean(xx),min(yy),name,'Color','w', ...
                         'FontWeight','bold','FontSize',14,'HorizontalAlignment','center','VerticalAlignment','top', ...
-                        'BackgroundColor','k','Tag','SearchRegionOutline');
+                        'BackgroundColor',.35*c,'Margin',3,'Tag','SearchRegionOutline','HitTest','off','PickableParts','none');
                 end
             end
             if isempty(hShade)||~isgraphics(hShade)
-                hShade=image(ax,zeros(ny,nx,3),'Tag','SearchPaintShade');
+                hShade=image(ax,zeros(ny,nx,3,'uint8'),'Tag','SearchPaintShade','HitTest','off','PickableParts','none');
             end
-            set(hShade,'AlphaData',.55*double(~included));uistack(hShade,'top');
+            if isempty(hRolePaint)||~isgraphics(hRolePaint)
+                hRolePaint=image(ax,zeros(ny,nx,3,'uint8'),'Tag','SearchRolePaint','HitTest','off','PickableParts','none');
+            end
+            rgb=zeros(ny,nx,3,'uint8');
+            for channel=1:3
+                values=uint8(round(255*[0;roleColors(:,channel)]));rgb(:,:,channel)=reshape(values(double(roleMap(:))+1),ny,nx);
+            end
+            set(hRolePaint,'CData',rgb);updatePaintShade();
+            % Text/eligible contours must never be dimmed by the black shade.
+            uistack(hShade,'top');uistack(hRolePaint,'top');uistack(findall(ax,'Tag','SearchRegionOutline'),'top');
+            if isempty(hBrush)||~isgraphics(hBrush)
+                hBrush=line(ax,NaN,NaN,'Color',[.3 1 .4],'LineWidth',1.3,'Tag','SearchBrushCursor', ...
+                    'HitTest','off','PickableParts','none','Visible','off');
+            end
+            uistack(hBrush,'top');
             xlim(ax,[.5 nx+.5]); ylim(ax,[.5 ny+.5]);
+            paintStatus();
         catch ME
             set(status,'String',ME.message,'ForegroundColor',[1 .45 .3]);
         end
@@ -360,7 +413,7 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             end
             eraseStroke=strcmp(kind,'alt');strokeRadius=radius;
             if isempty(paintedMask),paintedMask=repmat(eraseStroke,ny,nx);end
-            painting=true;lastPoint=[];set(go,'Enable','off');paintTo(p,true);return;
+            painting=true;lastPoint=[];set(go,'Enable','off');updateBrushCursor(q);paintTo(p,true);return;
         end
         if ~armed||~strcmp(q.kind,'normal')||~q.leftDown||~q.inside, return; end
         p=q.xy; if any(p<[.5 .5])||any(p>[nx+.5 ny+.5]), return; end
@@ -368,8 +421,9 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         rubber=rectangle(ax,'Position',[p .01 .01],'EdgeColor','y','LineWidth',2,'LineStyle','--');
     end
     function mouseMove(~,~)
-        if ~painting&&~dragging,return;end
         q=pointerInput();
+        updateBrushCursor(q);
+        if ~painting&&~dragging,return;end
         held=q.leftDown;if painting&&eraseStroke,held=q.rightDown;end
         if ~held||(painting&&~q.inside)
             % Mouse-up can happen outside the window. Never join the last
@@ -399,7 +453,7 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             if includeEndpoint&&~isempty(p)
                 paintedMask=scmPaintMask(paintedMask,lastPoint,p,strokeRadius,eraseStroke);
             end
-            set(status,'String','Painted mask applied to ALL slices. Left adds; right erases.','ForegroundColor','w');
+            paintStatus();
         elseif wasDragging
             lo=max([1 1],ceil(min(anchor,p)));hi=min([nx ny],floor(max(anchor,p)));
             armed=false;set(cbBrush,'Value',1);set(f,'Pointer','crosshair');
@@ -407,10 +461,14 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             set(status,'String','Rectangle applied to every searched slice. Ready to start.','ForegroundColor','w');
         end
         lastPoint=[];anchor=[];if isgraphics(rubber),delete(rubber);end;rubber=[];
-        set(go,'Enable','on');preview();drawnow limitrate nocallbacks;
+        set(go,'Enable','on');
+        if wasPainting,updatePaintShade();else,preview();end
+        % Always flush the final paint/erase endpoint, even if a motion frame
+        % was skipped by the renderer's refresh cap.
+        drawnow nocallbacks;
     end
     function key(~,event)
-        if strcmp(event.Key,'escape'),finishStroke(false);armed=false;set(cbBrush,'Value',0);set(go,'Enable','on');set(f,'Pointer','arrow');preview();end
+        if strcmp(event.Key,'escape'),finishStroke(false);armed=false;set(cbBrush,'Value',0);set(go,'Enable','on');set(f,'Pointer','arrow');hideBrushCursor();end
     end
     function reset(~,~)
         finishStroke(false);armed=false;paintedMask=[];set(cbBrush,'Value',1);set(go,'Enable','on');set(f,'Pointer','crosshair');
@@ -420,29 +478,61 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         finishStroke(false);armed=false;set(go,'Enable','on');
         if get(cbBrush,'Value')
             set(f,'Pointer','crosshair');set(status,'String','First left stroke starts empty; first right stroke starts full. Painting, Clear and Fill apply to ALL slices.','ForegroundColor','w');
-        else,set(f,'Pointer','arrow');end
+        else,set(f,'Pointer','arrow');hideBrushCursor();end
     end
     function fillPaint(value)
-        finishStroke(false);paintedMask=repmat(logical(value),ny,nx);preview();
-        set(status,'String','Area updated on ALL slices. This mask stays active when the brush is switched off.','ForegroundColor','w');
+        finishStroke(false);paintedMask=repmat(logical(value),ny,nx);updatePaintShade();paintStatus();drawnow nocallbacks;
     end
     function paintTo(p,forceDraw)
         from=lastPoint;if isempty(from),from=p;end
         paintedMask=scmPaintMask(paintedMask,from,p,strokeRadius,eraseStroke);
         lastPoint=p;
         if forceDraw||toc(lastPaintDraw)>=1/60
-            % Our own refresh cap keeps rendering bounded. MATLAB's
-            % additional limitrate cap would reduce brush feedback to 20 Hz.
-            updatePaintShade();drawnow nocallbacks;lastPaintDraw=tic;
+            updatePaintShade();
+            if forceDraw,drawnow nocallbacks;else,drawnow limitrate nocallbacks;end
+            lastPaintDraw=tic;
         end
     end
     function updatePaintShade()
         if isempty(hShade)||~isgraphics(hShade),return;end
         included=baseIncluded;if ~isempty(paintedMask),included=included&paintedMask;end
         set(hShade,'AlphaData',.55*double(~included));
+        if isempty(hRolePaint)||~isgraphics(hRolePaint),return;end
+        selected=roleMap;selected(~included)=0;
+        % Four-neighbour edge: bounded image updates, no contour recreation
+        % while drawing, and no Image Processing Toolbox dependency.
+        interior=false(ny,nx);
+        if ny>2&&nx>2
+            center=selected(2:end-1,2:end-1);
+            interior(2:end-1,2:end-1)=center>0 & center==selected(1:end-2,2:end-1) & ...
+                center==selected(3:end,2:end-1) & center==selected(2:end-1,1:end-2) & center==selected(2:end-1,3:end);
+        end
+        alpha=.24*double(included);alpha(included&~interior)=1;
+        set(hRolePaint,'AlphaData',alpha);
+    end
+    function paintStatus()
+        included=baseIncluded;if ~isempty(paintedMask),included=included&paintedMask;end
+        set(status,'String',sprintf('%d / %d eligible pixels selected on this slice. Left adds; right erases. Mask applies to ALL slices.', ...
+            nnz(included),nnz(baseIncluded)),'ForegroundColor','w');
+    end
+    function brushRadiusChanged(~,~)
+        updateBrushCursor(pointerInput());drawnow limitrate nocallbacks;
+    end
+    function updateBrushCursor(q)
+        radius=str2double(get(eBrush,'String'));
+        if ~get(cbBrush,'Value')||~q.inside||~isfinite(radius)||radius<=0||radius>max(nx,ny)
+            hideBrushCursor();return;
+        end
+        if isempty(hBrush)||~isgraphics(hBrush),return;end
+        theta=linspace(0,2*pi,65);color=[.3 1 .4];if painting&&eraseStroke,color=[1 .45 .15];end
+        set(hBrush,'XData',q.xy(1)+radius*cos(theta),'YData',q.xy(2)+radius*sin(theta),'Color',color,'Visible','on');
+    end
+    function hideBrushCursor()
+        if ~isempty(hBrush)&&isgraphics(hBrush),set(hBrush,'Visible','off');end
     end
     function accept(~,~)
         try
+            finishStroke(true);
             o=collect(); w=o.signalSec;
             whole=strcmp(o.roiMode,'region');
             if whole

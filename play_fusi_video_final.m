@@ -21,34 +21,13 @@ if isempty(I_interp)
     I_interp = I;
 end
 
-% Keep robust fallback if missing
-if ~isfield(par,'previewCaxis') || isempty(par.previewCaxis)
-    tmp = PSC(:);
-    tmp = tmp(isfinite(tmp));
-    if isempty(tmp)
-        par.previewCaxis = [-5 5];
-    else
-        low  = prctile_fallback(tmp, 1);
-        high = prctile_fallback(tmp, 99);
-        if ~isfinite(low) || ~isfinite(high) || high <= low
-            par.previewCaxis = [-5 5];
-        else
-            par.previewCaxis = [low high];
-        end
-    end
-end
-
-% Requested overlay start range
-% DECONF_STD_VIDEO_DISPLAY_V61
-if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
-    par.previewCaxis = double(par.standardCaxis(:)).';
-else
-    % DECONF_STD_VIDEO_DISPLAY_V71
+% Set the requested initial display range directly. The former fallback
+% sorted the entire 3D time series twice for percentiles that were then
+% immediately overwritten by this range (several GB for a matrix scan).
 if isfield(par,'standardCaxis') && numel(par.standardCaxis) == 2
     par.previewCaxis = double(par.standardCaxis(:)).';
 else
     par.previewCaxis = [0 100];
-end
 end
 
 % ---------------- DIMENSIONS (PSC) ----------------
@@ -165,7 +144,8 @@ overlaySignMode = 1;      % 1=positive only, 2=negative only, 3=positive+negativ
 overlayPrevSignMode = 1;  % for SCM-like auto colormap switching
 mapA = getCmap(overlayCmapName, Nc);
 
-[tmpThrMin, tmpThrMax] = getSuggestedThresholdRange(PSC, par.previewCaxis);
+% The controls use this fixed initial range; do not sort the full movie for
+% suggested thresholds that would immediately be overwritten.
 tmpThrMin = 0;
 tmpThrMax = 100;
 
@@ -570,6 +550,8 @@ set(slVlv,'SliderStep',[1/max(1,MAX_CONLEV) 10/max(1,MAX_CONLEV)]);
 txtVlv = mkValBox(pUnder,sprintf('%d',uState.conectLev));
 
 btnLoadUnder   = mkBtn(pUnder,'LOAD NEW UNDERLAY',@loadNewUnderlayCB,[0.20 0.38 0.62],12);
+btnLoadAtlas = mkBtn(pUnder,'LOAD ATLAS',@loadAtlasUnderlayFolderCB,[0.20 0.38 0.62],12);
+setappdata(fig,'FUSILoadAtlas',@(path)loadAtlasUnderlayFolderCB([],[],path));
 setappdata(fig,'FUSILoadUnderlay',@(file)loadNewUnderlayCB([],[],file));
 setappdata(fig,'FUSIUnderlayData',@underlayData);
 setappdata(fig,'FUSIWarpFunctionalToAtlas',@(varargin)warpFunctionalToAtlasCB([],[],varargin{:}));
@@ -679,6 +661,10 @@ saveMP4Btn = uicontrol(fig,'Style','pushbutton','String','Save MP4', ...
     'BackgroundColor',[0.25 0.40 0.65],'ForegroundColor','w', ...
     'FontName',uiFontName,'FontSize',13,'FontWeight','bold', ...
     'Callback',@saveVideo);
+if ~ispc&&~ismac
+    set(saveMP4Btn,'String','Save AVI');
+    set(cbSequenceMovie,'TooltipString','Play included scans in order. Save AVI has its own scan and slice selector.');
+end
 
 volume3DBtn = uicontrol(fig,'Style','pushbutton','String','3D brain / volume', ...
     'Units','pixels','Tag','Video3DVolume', ...
@@ -949,8 +935,8 @@ set(contentFrame,'Position',[10 contentFrameY panelW-20 contentFrameH]);
     wVal   = 116;
     wCtrl  = max(140, xVal - xCtrl - 12);
 
-    rowHUnder=min(rowHc,max(24,floor((h-76-4*36-16*3)/12)));
-    gapc=max(3,min(12,floor((h-76-12*rowHUnder-4*36)/16)));
+    rowHUnder=min(rowHc,max(24,floor((h-76-5*36-17*3)/12)));
+    gapc=max(3,min(12,floor((h-76-12*rowHUnder-5*36)/17)));
     gapBig=gapc+4;
 
     y0 = h - 52;
@@ -1002,6 +988,9 @@ set(contentFrame,'Position',[10 contentFrameY panelW-20 contentFrameH]);
     y0 = y0 - (rowHUnder + gapBig);
 
     set(btnLoadUnder,'Position',[xLabel y0 (w-2*pad) 36]);
+    y0 = y0 - (36 + gapc);
+
+    set(btnLoadAtlas,'Position',[xLabel y0 (w-2*pad) 36]);
     y0 = y0 - (36 + gapc);
 
     set(btnLoadGAVideo,'Position',[xLabel y0 (w-2*pad) 36]);
@@ -2590,6 +2579,8 @@ function saveVideo(~,~)
 
             outFile = fullfile(videosDir, ...
                 sprintf('video_z%02d.mp4',zz));
+            movieProfile='MPEG-4';
+            if ~ispc&&~ismac,[outFile,movieProfile]=fusiMovieOutput(outFile);end
 
             disp('--- SAVE VIDEO DEBUG ---');
             disp(['slice         = ' num2str(zz)]);
@@ -2600,11 +2591,11 @@ function saveVideo(~,~)
 
             paperFile=fusiPaperMoviePath(outFile);
             movieStage=fusiMovieStage({outFile,paperFile});discardStage=onCleanup(movieStage.cleanup);
-            vid = VideoWriter(movieStage.files{1}, 'MPEG-4');
+            vid = VideoWriter(movieStage.files{1}, movieProfile);
             vid.FrameRate = exportFPS;
             vid.Quality   = exportQuality;
             open(vid);
-            paperVid=VideoWriter(movieStage.files{2},'MPEG-4');paperVid.FrameRate=exportFPS;paperVid.Quality=exportQuality;
+            paperVid=VideoWriter(movieStage.files{2},movieProfile);paperVid.FrameRate=exportFPS;paperVid.Quality=exportQuality;
             open(paperVid);
 
             for v = 1:exportCount
@@ -2768,7 +2759,8 @@ outRGB = baseRGB;
             close(paperVid);paperVid=[];
             movieStage.commit();clear discardStage;
             savedFiles=[savedFiles {outFile paperFile}]; %#ok<AGROW>
-            fprintf('Video saved: %s\nPaper-ready MP4 saved: %s\n',outFile,paperFile);
+            if ispc||ismac,fprintf('Video saved: %s\nPaper-ready MP4 saved: %s\n',outFile,paperFile);
+            else,fprintf('Video saved: %s\nPaper-ready AVI saved: %s\n',outFile,paperFile);end
         end
 
         try
@@ -2866,7 +2858,8 @@ outRGB = baseRGB;
 
         statusLine = ['Video save failed: ' ME.message];
         render();
-        errordlg(sprintf('MP4 export failed:\n\n%s', ME.message), 'Save MP4 failed');
+        if ispc||ismac,errordlg(sprintf('MP4 export failed:\n\n%s', ME.message), 'Save MP4 failed');
+        else,errordlg(sprintf('AVI export failed:\n\n%s',ME.message),'Save AVI failed');end
     end
 end
 
@@ -3696,25 +3689,6 @@ end
 
     cm(1,:) = 0;
 end
-
-% =========================================================
-% THRESHOLD RANGE HELPER
-% =========================================================
-    function [thrMin, thrMax] = getSuggestedThresholdRange(PSC0, cax0)
-        v = PSC0(:);
-        v = v(isfinite(v));
-        if isempty(v)
-            thrMin = cax0(1);
-            thrMax = cax0(2);
-            return;
-        end
-        thrMin = prctile_fallback(v,1);
-        thrMax = prctile_fallback(v,99);
-        if ~isfinite(thrMin) || ~isfinite(thrMax) || thrMax <= thrMin
-            thrMin = cax0(1);
-            thrMax = cax0(2);
-        end
-    end
 
 % =========================================================
 % SMALL HELPERS
@@ -5529,6 +5503,38 @@ function applyStepMotorUnderlayBundleVideo(bundle)
     set(btnWarpAtlas,'String','STEP MOTOR ATLAS-WARPED','TooltipString',bundle.sessionFile);
     statusLine=sprintf('Saved atlas session: %d/%d planes | %s. Alignment is available to all loaded scans.',numel(bundle.sourceSliceIndices),bundle.sourceNSlices,bundle.names{bundle.selected});render();
 end
+function loadAtlasUnderlayFolderCB(~,~,selected)
+    if nargin<3
+        lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
+        dialogs=struct();if isappdata(fig,'FUSIAtlasPickerDialogs'),dialogs=getappdata(fig,'FUSIAtlasPickerDialogs');end
+        [selected,options]=fusiChooseAtlasSource(par,getDatasetRootForVideoSelectors(),state.atlasTransformFile,lastFile,dialogs);
+        setappdata(fig,'FUSIUnderlayPickerOptions',options);
+        if isempty(selected),return;end
+    end
+    if isfile(selected)
+        contents=whos('-file',selected);fields={contents.name};
+        isTransform=any(ismember({'Transf','Reg2D'},fields))&& ...
+            ~any(ismember({'atlasUnderlay','atlasUnderlayRGB','brainImage','atlasUnderlayMeta','stepMotorUnderlayMeta'},fields));
+        if isTransform,warpFunctionalToAtlasCB([],[],selected);else,loadNewUnderlayCB([],[],selected);end
+        return;
+    end
+    folder=char(selected);
+    nativeRegions=fullfile(folder,'LightSuite_Native_Regions.mat');
+    if isfile(nativeRegions),loadNewUnderlayCB([],[],nativeRegions);return;end
+    options=fusiUnderlayPickerOptions(struct('underlayStartPath',folder),folder,'','');
+    folder=options.startPath;
+    for pattern={'Histology.mat','AtlasUnderlay_histology*.mat','Vascular.mat','AtlasUnderlay_vascular*.mat','Regions*.mat','AtlasUnderlay_regions*.mat'}
+        files=dir(fullfile(folder,pattern{1}));files=files(~[files.isdir]);
+        if isempty(files),continue;end
+        [~,recent]=max([files.datenum]);loadNewUnderlayCB([],[],fullfile(files(recent).folder,files(recent).name));return;
+    end
+    if ~isempty(fusiReadStepMotorUnderlays2D(selected)),loadNewUnderlayCB([],[],selected);return;end
+    files=dir(fullfile(folder,'CoronalRegistration2D*.mat'));
+    if isempty(files),files=dir(fullfile(folder,'Transformation.mat'));end
+    if ~isempty(files),warpFunctionalToAtlasCB([],[],fullfile(files(1).folder,files(1).name));return;end
+    errordlg('No saved atlas underlay or transform was found in this folder.','Load atlas');
+end
+
 function loadNewUnderlayCB(~,~,selectedFile)
     ensureUnderlayStateFields();
     groupingOverride='';
@@ -5711,6 +5717,15 @@ end
 end
     function Uout = fitUnderlayToCurrentDisplay(Uin, ny0, nx0, nZ0)
     U = squeeze(double(Uin));
+
+    % Native RGB region stacks use [Y X color Z], as the renderer does.
+    % Preserve their physical grid instead of treating a color channel as Z.
+    if ndims(U)==4 && size(U,3)==3
+        assert(isequal(size(U,[1 2 4]),[ny0 nx0 nZ0]), ...
+            'deConfUSIon:RGBUnderlayGrid','RGB underlay stack must match the current recording grid.');
+        Uout=U;
+        return;
+    end
 
     % ---------------- RGB 2D ----------------
     if ndims(U) == 3 && size(U,3) == 3
@@ -6160,6 +6175,12 @@ function meta = defaultUnderlayMeta()
 end
 
     function [U, meta] = extractUnderlayFromMatStruct(S)
+    if isfield(S,'lightSuiteNativeMeta')
+        assert(~state.isAtlasWarped && ~state.isStepMotorAtlasWarped, ...
+            'deConfUSIon:LightSuiteNativeGrid','Open the native recording view before loading LightSuite native region labels.');
+        [matched,L,meta]=fusiLightSuiteRegionInput(S,[ny nx nZ]);
+        if matched,U=fusiRegionLabelRGB(L,meta.regionInfo);return;end
+    end
     [matched,U,meta]=fusiReadAtlasUnderlay3D(S);if matched,return;end
     meta = defaultUnderlayMeta();
 

@@ -1308,6 +1308,7 @@ set(S.ax1,'Position',[.095 .40 .850 .245]);
 try, fcGACleanFinalLayout_20260624(S); fcGAFixRow2Overlap_FORCE_20260624(S); catch, end%INIT_FCGA_LAYOUT
 guidata(hFig,S);
 setappdata(hFig,'FUSIFCLoadBundles',@loadFCFileListIntoState);
+setappdata(hFig,'FUSIGAAddFiles',@(files)onAddFiles([],[],files));
 try, set(hFig,'WindowScrollWheelFcn',@onMapScrollWheel); catch, end
 updateManualTabs();
 refreshTable();
@@ -1316,7 +1317,6 @@ refreshMapBundlePopup();
 updateMapSideSummaryTable();
 setStatusText('Ready. Modular main loaded.');
 
-try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
 drawnow;
 gaInstallEditSelection(hFig);
 
@@ -1571,23 +1571,30 @@ gaInstallEditSelection(hFig);
         helpdlg(msg,'GroupAnalysis Help');
     end
 
-    function onAddFiles(~,~)
+    function onAddFiles(~,~,files)
         syncSubjFromTable();
         S0 = guidata(hFig);
-        startPath = getSmartBrowseDir(S0);
-        if isfield(S0,'lastROIAddDir') && isfolder(S0.lastROIAddDir), startPath=S0.lastROIAddDir; end
-        [f,p] = uigetfile({'*.mat;*.txt','MAT or TXT (*.mat, *.txt)'}, ...
-            'Select DATA / ROI / bundle files',startPath,'MultiSelect','on');
-        if isequal(f,0), return; end
-        if ischar(f), f = {f}; end
-        for i = 1:numel(f)
-            S0 = addFileSmartLight(S0,fullfile(p,f{i}));
+        if nargin<3
+            startPath = getSmartBrowseDir(S0);
+            if isfield(S0,'lastROIAddDir') && isfolder(S0.lastROIAddDir), startPath=S0.lastROIAddDir; end
+            [f,p] = uigetfile({'*.mat;*.txt','MAT or TXT (*.mat, *.txt)'}, ...
+                'Select DATA / ROI / bundle files',startPath,'MultiSelect','on');
+            if isequal(f,0), return; end
+            if ischar(f), f = {f}; end
+            files=cellfun(@(name)fullfile(p,name),f,'UniformOutput',false);
+        else
+            if ischar(files),files={files};elseif isstring(files),files=cellstr(files);end
+            if isempty(files),return;end
+            p=fileparts(files{end});
+        end
+        for i = 1:numel(files)
+            S0 = addFileSmartLight(S0,files{i});
         end
         S0.opt.startDir = p;
         S0.lastROIAddDir = p;
         guidata(hFig,S0);
         refreshTable();
-        setStatusText(sprintf('Added %d file(s).',numel(f)));
+        setStatusText(sprintf('Added %d file(s).',numel(files)));
     end
 
     function onAddBundles(~,~)
@@ -2143,7 +2150,6 @@ gaInstallEditSelection(hFig);
         end
         setStatus(false);
         setStatusText(sprintf('Computing group maps from %d bundle row(s)...',numel(mapIdx)));
-        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
 drawnow;
         try
             subjActive = S0.subj(mapIdx,:);
@@ -2281,7 +2287,6 @@ S0.activeTab = 'MAP';
         try, prevFCState_20260624 = S0.FC; catch, prevFCState_20260624 = struct(); end
         setStatus(false);
         setStatusText('Loading FC bundles...');
-        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
 drawnow;
         try
             [FC,cacheOut] = callFC('loadFCGroupBundlesFromFiles',fileList,S0.cache);
@@ -2558,7 +2563,6 @@ drawnow;
 
         setStatus(false);
         setStatusText(sprintf('Running ROI analysis for %d row(s)...',numel(roiIdx)));
-        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
 drawnow;
         try
             [R,cacheOut] = callCommon('runROITimecourseAnalysis',S0,subjActive,S0.cache);
@@ -2675,38 +2679,16 @@ S0.activeTab = 'PREV';
 
     function updateManualTabs()
         S0 = guidata(hFig);
-
-        set(S0.tabROI,'Visible','off');
-        set(S0.tabMAP,'Visible','off');
-        set(S0.tabFC,'Visible','off');
-        set(S0.tabSTATS,'Visible','off');
-        set(S0.tabPREV,'Visible','off');
-
+        panels=[S0.tabROI S0.tabMAP S0.tabFC S0.tabSTATS S0.tabPREV];
+        buttons=[S0.hTabROI S0.hTabMAP S0.hTabFC S0.hTabSTATS S0.hTabPREV];
+        names={'ROI','MAP','FC','STATS','PREV'};
         tabOff = [0.18 0.18 0.18];
         tabOn  = [0.34 0.34 0.34];
-
-        set(S0.hTabROI,'BackgroundColor',tabOff);
-        set(S0.hTabMAP,'BackgroundColor',tabOff);
-        set(S0.hTabFC,'BackgroundColor',tabOff);
-        set(S0.hTabSTATS,'BackgroundColor',tabOff);
-        set(S0.hTabPREV,'BackgroundColor',tabOff);
-
-        switch upper(S0.activeTab)
-            case 'ROI'
-                set(S0.tabROI,'Visible','on');
-                set(S0.hTabROI,'BackgroundColor',tabOn);
-            case 'MAP'
-                set(S0.tabMAP,'Visible','on');
-                set(S0.hTabMAP,'BackgroundColor',tabOn);
-            case 'FC'
-                set(S0.tabFC,'Visible','on');
-                set(S0.hTabFC,'BackgroundColor',tabOn);
-            case 'STATS'
-                set(S0.tabSTATS,'Visible','on');
-                set(S0.hTabSTATS,'BackgroundColor',tabOn);
-            case 'PREV'
-                set(S0.tabPREV,'Visible','on');
-                set(S0.hTabPREV,'BackgroundColor',tabOn);
+        for k=1:numel(panels)
+            visible='off';color=tabOff;
+            if strcmpi(S0.activeTab,names{k}),visible='on';color=tabOn;end
+            if ~strcmp(get(panels(k),'Visible'),visible),set(panels(k),'Visible',visible);end
+            if ~isequal(get(buttons(k),'BackgroundColor'),color),set(buttons(k),'BackgroundColor',color);end
         end
         gaInstallEditSelection(hFig);
     end
@@ -2821,7 +2803,6 @@ S0.activeTab = 'PREV';
             try, cla(S0.ax2); catch, end
         end
 
-        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
 drawnow limitrate;
     end
     function updatePreview()
@@ -3003,7 +2984,6 @@ try, S0 = readPlotScaleSettingsFromUI(S0); catch, end
         end
         S0 = readMapSettingsFromUI(S0);
         setStatusText(sprintf('Previewing bundle row %d...',r));
-        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
 drawnow;
         try
             [G,cacheOut] = callMap('getCachedGroupBundle',S0.cache,bf);
@@ -3220,8 +3200,8 @@ drawnow;
             set(S0.hMapExportStatus,'String',txt);
         catch
         end
-        try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
-drawnow limitrate;
+        % Status changes need no overlay recalculation or legacy helper.
+        drawnow limitrate nocallbacks;
     end
 
     function setStatus(isReady)
@@ -3336,6 +3316,11 @@ function gaInstallEditSelection(fig)
 % including its sign and decimal part. Hidden tabs create their Java peers
 % when shown, so install once per peer without a timer or a preview redraw.
 edits=findall(fig,'Type','uicontrol','Style','edit');
+state=guidata(fig);key='FIGURE';
+if isstruct(state)&&isfield(state,'activeTab'),key=upper(state.activeTab);end
+key=[key '_' char(get(fig,'Visible'))];
+bound=getappdata(fig,'GA_EditSelectionTabs');
+if isstruct(bound)&&isfield(bound,key)&&isequal(bound.(key),edits),return;end
 for k=1:numel(edits)
     h=edits(k);
     if ~isempty(getappdata(h,'GA_EditSelectionReady')),continue;end
@@ -3355,6 +3340,8 @@ try
         previous=getappdata(fig,'GA_EditSelectionBridges');
         setappdata(fig,'GA_EditSelectionBridges',[previous bridges]);
     end
+    if ~isstruct(bound),bound=struct();end
+    bound.(key)=edits;setappdata(fig,'GA_EditSelectionTabs',bound);
 catch ME
     % Native selection remains available if this MATLAB release has no peer.
     setappdata(fig,'GA_EditSelectionError',ME.message);
@@ -3811,8 +3798,8 @@ else
     S.subj(end+1,:) = row;
 end
 
-S = sanitizeTableStruct(S);
-S = ensureFCRowFilesSizeGA_TARGETED(S);
+% The callers append a batch, then refreshTable sanitizes/resizes it once.
+% Reprocessing all preceding rows here made a batch quadratic in file count.
 end
 
 
@@ -4425,6 +4412,19 @@ end
 end
 
 function meta = parseMetaSingleText(txt)
+% Pure filename parsing: reuse metadata for unchanged paths/IDs between table
+% refreshes. No file content or statistical/group assignment is cached here.
+persistent parsed
+if isempty(parsed),parsed=containers.Map('KeyType','char','ValueType','any');end
+key=strtrimSafe(txt);
+if isempty(key),meta=parseMetaSingleTextUncached(key);return;end
+if isKey(parsed,key),meta=parsed(key);return;end
+meta=parseMetaSingleTextUncached(key);
+if parsed.Count>=4096,remove(parsed,keys(parsed));end
+parsed(key)=meta;
+end
+
+function meta = parseMetaSingleTextUncached(txt)
 meta = struct('animalID','N/A','session','N/A','scanID','N/A');
 txt = strrep(strtrimSafe(txt),'\','/');
 txtU = upper(txt);
@@ -4682,8 +4682,7 @@ else
     ga_plot_roi_bottom(ax,R,S,fgCol,bgCol,colA,colB,showAnimalLabels);
 end
 
-try, try, GA_force_scm_alpha_20260504(gcf,10,20); catch, end; % AUTO_FORCE_SCM_ALPHA_20260504
-drawnow limitrate; catch, end
+try, drawnow limitrate; catch, end
 end
 
 function R = ga_get_roi_preview_data(S)
@@ -4880,10 +4879,11 @@ fid = fopen(fname,'r');
 if fid < 0, return; end
 cleanupObj = onCleanup(@()fclose(fid)); %#ok<NASGU>
 
-inData = false;
+header=fusiSCMEnsembleHeader(fid);
+inData = header.tableFound;
 isThreeColumn = false;
-isRebased = false;
-baselineSec = [NaN NaN];
+isRebased = header.isRebased;
+baselineSec = header.baselineSec;
 
 while true
     ln = fgetl(fid);

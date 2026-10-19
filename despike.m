@@ -32,48 +32,16 @@ else
 end
 
 flat = reshape(data4D,[],T);
-Nvox = size(flat,1);
 progress=deConfUSIon_ui('progress','Motion correction - despiking');
 progressGuard=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
 
 totalPoints = numel(flat);
-removedPoints = 0;
 
-spikesPerFrame = zeros(1,T,'single');
-spikeMap = zeros(Y,X,Z,'single');
-
-for v = 1:Nvox
-    if mod(v-1,128)==0, deConfUSIon_ui('progressupdate',progress,.95*(v-1)/Nvox,'Detecting and interpolating voxel spikes'); end
-
-    sig = flat(v,:);
-    med = median(sig);
-    madv = median(abs(sig - med));
-
-    if madv < eps
-        continue
-    end
-
-    robustZ = 0.6745 * (sig - med) / madv;
-    spikeMask = abs(robustZ) > zthr;
-
-    if any(spikeMask)
-
-        removedPoints = removedPoints + sum(spikeMask);
-        spikesPerFrame = spikesPerFrame + spikeMask;
-
-        [yy,xx,zz] = ind2sub([Y,X,Z],v);
-        spikeMap(yy,xx,zz) = spikeMap(yy,xx,zz) + sum(spikeMask);
-
-        good = ~spikeMask;
-
-        if nnz(good) >= 2
-            x = 1:T;
-            sig(spikeMask) = interp1(x(good),sig(good),...
-                                     x(spikeMask),'linear','extrap');
-            flat(v,:) = sig;
-        end
-    end
-end
+[flat,spikesPerFrame,spikeCounts] = fusiDespikeVoxels(flat,zthr, ...
+    @(fraction)deConfUSIon_ui('progressupdate',progress,.95*fraction, ...
+    'Detecting and interpolating voxel spikes'));
+removedPoints = sum(double(spikeCounts));
+spikeMap = reshape(spikeCounts,Y,X,Z);
 
 out = reshape(flat,Y,X,Z,T);
 if numel(sz)==3, out=reshape(out,sz); end

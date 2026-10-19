@@ -1,6 +1,13 @@
 function report=fusiExportVolume(fig, filename, nFrames, movieType)
 % Export only the 3D scene, legend and caption; retain settings alongside it.
 filename=fusiAnalysisOutputPath(filename);
+movieProfile='MPEG-4';
+if ~ispc&&~ismac
+    [~,~,requestedExtension]=fileparts(filename);
+    if any(strcmpi(requestedExtension,{'.mp4','.avi'}))
+        [filename,movieProfile]=fusiMovieOutput(filename);
+    end
+end
 destinationFolder=fileparts(filename);
 if ~isempty(destinationFolder)&&~isfolder(destinationFolder),mkdir(destinationFolder);end
 if nargin<3,nFrames=120;end
@@ -35,7 +42,7 @@ if strcmpi(extension,'.png')
     % synchronous scene renderer as movies so the actual brain is captured.
     movieCanvas=fusiVolumeMovieCanvas(fig,state);closeCanvas=onCleanup(@()movieCanvas.close());
     captureMethod=movieCanvas.method;imwrite(movieCanvas.capture(),filename);
-elseif strcmpi(extension,'.mp4')
+elseif strcmpi(extension,'.mp4') || (~ispc&&~ismac&&strcmpi(extension,'.avi'))
     timeSeries=any(strcmpi(movieType,{'timeseries','combined'}));rotateCamera=~strcmpi(movieType,'timeseries');
     if timeSeries
         if isfield(state.metadata,'slabs') && isfield(state.metadata.slabs,'requestedTimeRowMinutes') && ~isempty(state.metadata.slabs.requestedTimeRowMinutes)
@@ -77,9 +84,9 @@ elseif strcmpi(extension,'.mp4')
     end
     paperFile=fusiPaperMoviePath(filename);
     stage=fusiMovieStage({filename,paperFile});discardStage=onCleanup(stage.cleanup);
-    writer=VideoWriter(stage.files{1},'MPEG-4');writer.FrameRate=encodedFPS;writer.Quality=100;
+    writer=VideoWriter(stage.files{1},movieProfile);writer.FrameRate=encodedFPS;writer.Quality=100;
     open(writer);closeWriter=onCleanup(@()close(writer));
-    paperWriter=VideoWriter(stage.files{2},'MPEG-4');paperWriter.FrameRate=writer.FrameRate;paperWriter.Quality=writer.Quality;
+    paperWriter=VideoWriter(stage.files{2},movieProfile);paperWriter.FrameRate=writer.FrameRate;paperWriter.Quality=writer.Quality;
     open(paperWriter);closePaper=onCleanup(@()close(paperWriter));
     if (~isempty(state.viewer) && isvalid(state.viewer)) || (~isempty(state.axes) && isvalid(state.axes))
         try
@@ -142,7 +149,7 @@ if isappdata(fig,'FUSIVolumeExportIdentity')
 end
 metadata.exportSeconds=toc(started);
 metadata.sceneCapture=captureMethod;
-if strcmpi(extension,'.mp4')
+if strcmpi(extension,'.mp4') || (~ispc&&~ismac&&strcmpi(extension,'.avi'))
     metadata.movieFrames=nFrames;metadata.movieFPS=encodedFPS;metadata.movieType='Camera rotation of a static selected volume';
     if timeSeries
         metadata.movieAcquisitionFPS=movieInfo.FPS;metadata.movieType='Acquired PSC time series with fixed camera';
@@ -178,7 +185,10 @@ clear closeFile;
 report=struct('file',filename,'paperFile',paperFile,'settingsFile',[filename '.json'],'seconds',toc(started));
 setappdata(fig,'FUSIVolumeLastExport',report);
 fprintf('3D export saved: %s\nSettings saved: %s\nExport completed in %.1f seconds.\n',report.file,report.settingsFile,report.seconds);
-if ~isempty(paperFile),fprintf('Paper-ready MP4 saved: %s\n',paperFile);end
+if ~isempty(paperFile)
+    if ispc||ismac,fprintf('Paper-ready MP4 saved: %s\n',paperFile);
+    else,fprintf('Paper-ready AVI saved: %s\n',paperFile);end
+end
 
     function pixels=captureScene(fast)
         if fast

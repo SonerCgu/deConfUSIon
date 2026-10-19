@@ -14,7 +14,7 @@ for k=1:numel(parts)
  end
 end
 directories={root,fullfile(root,'atlas_tools'),fullfile(root,'acquisition')};
-modules={'atlas','volume','roi','connectivity','group','display','io','preprocessing','metadata'};
+modules={'atlas','volume','roi','connectivity','group','display','io','preprocessing','metadata','lightsuite'};
 for k=1:numel(modules),directories{end+1}=fullfile(root,'lib',modules{k});end %#ok<AGROW>
 for k=1:numel(directories)
  folder=directories{k};

@@ -191,6 +191,20 @@ for k=1:numel(roots)
  candidates=[candidates {fullfile(roots{k},'Registration2D'),fullfile(roots{k},'Registration'),fullfile(roots{k},'Registration3D'),roots{k}}]; %#ok<AGROW>
 end
 candidates=unique(candidates,'stable');
+% Coronal registration saves each plane in a dated SliceNNN_* child.
+% Prefer the newest saved plane in this recording over its empty parent.
+planeFolders={};planeTimes=[];
+for k=1:numel(candidates)
+ if isempty(candidates{k})||~isfolder(candidates{k}),continue;end
+ for pattern={'Slice*','SourceSlice*_AtlasSlice*'}
+  planes=dir(fullfile(candidates{k},pattern{1}));planes=planes([planes.isdir]);
+  for j=1:numel(planes)
+   folder=fullfile(planes(j).folder,planes(j).name);
+   if hasAtlasFiles(folder),planeFolders{end+1}=folder;planeTimes(end+1)=planes(j).datenum;end %#ok<AGROW>
+  end
+ end
+end
+if ~isempty(planeFolders),[~,latest]=max(planeTimes);finish(planeFolders{latest});return;end
 for k=1:numel(candidates)
  if ~isempty(candidates{k})&&isfolder(candidates{k})&&hasAtlasFiles(candidates{k}),finish(candidates{k});return;end
 end
