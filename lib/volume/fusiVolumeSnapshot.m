@@ -32,19 +32,14 @@ if numel(spacing)~=3 || any(~isfinite(spacing) | spacing<=0)
     error('deConfUSIon:VolumeSpacing','Row, column and slice spacing must all be positive.');
 end
 keep = true(sz(1),sz(2),z(2)-z(1)+1);
-overlayMask=isfield(opt,'applyOverlayMask') && opt.applyOverlayMask;
+overlayMask=opt.applyMask;if isfield(opt,'applyOverlayMask'),overlayMask=opt.applyOverlayMask;end
 acc = zeros(size(keep),'double');
 for k=selected
     a = double(data.PSC(:,:,z(1):z(2),indices(k)));
     good = isfinite(a);
-    if (opt.applyMask || overlayMask) && isfield(data,'mask') && ~isempty(data.mask)
-        m = logical(data.mask(:,:,:,min(k,size(data.mask,4))));
-        % Match Video GUI: an empty mask imposes no restriction.
-        if any(m(:))
-            m=m(:,:,z(1):z(2));
-            if ~data.maskIsInclude, m=~m; end
-            good=good & m;
-        end
+    if overlayMask
+        m=maskForFrame(data,'overlayMask',sz,z,k);
+        if ~isempty(m),good=good&m;end
     end
     keep=keep & good;
     a(~good)=0; acc=acc+a;
@@ -52,8 +47,10 @@ end
 psc = single(acc/numel(selected)); psc(~keep)=NaN;
 % Anatomy is invariant across movie frames unless a time-dependent ROI mask
 % is applied to it. Reuse the already prepared display arrays in that case.
-if nargin>=3 && ~isempty(anatomy) && ~opt.applyMask
+staticBrain=isfield(data,'brainMask')&&(isempty(data.brainMask)||ndims(data.brainMask)<=3);
+if nargin>=3 && ~isempty(anatomy) && (~opt.applyMask||staticBrain)
     S=anatomy;S.psc=psc;S.timeSec=[timeSec(selected(1)) timeSec(selected(end))];
+    S.overlayMaskApplied=overlayMask;
     S.originalFrames=selected;S.frameCount=numel(selected);return;
 end
 u = data.underlay; note='';reference='Video underlay';
@@ -86,9 +83,13 @@ elseif ~isequal([size(u,1) size(u,2) size(u,3)],sz) || ndims(u)>3
 end
 u = single(u(:,:,z(1):z(2)));
 validU = isfinite(u);
-if opt.applyMask, validU=validU & keep; end
+if opt.applyMask
+    for k=selected
+        m=maskForFrame(data,'brainMask',sz,z,k);if ~isempty(m),validU=validU&m;end
+    end
+end
 values=sort(double(u(validU)));
-if isempty(values), error('deConfUSIon:VolumeUnderlay','No finite underlay voxels remain.'); end
+if isempty(values),values=0;end % An explicitly empty brain mask is valid.
 lo=values(max(1,round(.01*numel(values))));
 hi=values(max(1,round(.995*numel(values))));
 if hi<=lo, lo=min(values); hi=max(values); end
@@ -129,9 +130,24 @@ if isfield(data,'baselineUnderlay') && ~isempty(data.baselineUnderlay)
         signal(:)=0;
     end
 end
+signal(~validU)=0;
 S=struct('underlay',u,'underlayValid',validU,'psc',psc,'spacing',spacing, ...
     'units',opt.units,'slices',z,'timeSec',[timeSec(selected(1)) timeSec(selected(end))], ...
     'originalFrames',selected,'frameCount',numel(selected),'underlayRange',[lo hi], ...
     'note',note,'maskApplied',logical(opt.applyMask),'overlayMaskApplied',overlayMask, ...
     'signal',signal,'underlaySource',reference,'source',data.label);
+end
+
+function M=maskForFrame(data,name,shape,z,k)
+M=[];
+if isfield(data,name)
+    source=data.(name);if isempty(source),return;end
+    assert(isequal(size(source,[1 2 3]),shape),'deConfUSIon:VolumeMaskGrid','Saved %s does not match the model grid.',name);
+    M=logical(source(:,:,z(1):z(2),min(k,size(source,4))));return;
+end
+if isfield(data,'mask')&&~isempty(data.mask)
+    if ~any(data.mask(:)),return;end % Legacy placeholder for a mask never drawn.
+    source=data.mask(:,:,:,min(k,size(data.mask,4)));
+    M=logical(source(:,:,z(1):z(2)));if ~data.maskIsInclude,M=~M;end
+end
 end

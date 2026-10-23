@@ -299,6 +299,7 @@ state.atlasDisplay3D=[];
 state.atlasInPlaneSpacingUm=[NaN NaN NaN];
 state.atlasUnderlays = struct();
 state.atlasUnderlayChoice = 'normal';
+state.lightSuiteAtlasLibrary=[];state.atlasRegistrationStage='';state.atlasIntensityLimits=[];state.atlasUpright=false;state.atlasFullReference=false;
 state.lastAtlasUnderlayBuildMessage = '';
 state.lastTcExportLabel = 'Target';
 state.singleScmExportBusy = false;
@@ -373,6 +374,7 @@ y0 = max(40, round((scr(4)-figH0)/2));
 
 fig = figure( ...
     'Name', 'SCM Viewer', ...
+    'Units','pixels', ...
     'Color', [0.05 0.05 0.05], ...
     'Position', [x0 y0 figW0 figH0], ...
     'MenuBar', 'none', ...
@@ -429,9 +431,9 @@ hold(ax, 'on');
 
 bg2 = getBg2DForSlice(state.z);
 hBG = image(ax, renderUnderlayRGB(bg2));
-set(hBG,'XData',[1 nX],'YData',[1 nY]);
+set(hBG,'XData',[1 nX],'YData',[1 nY],'Tag','SCM_UnderlayImage');
 hOV = imagesc(ax, zeros(nY, nX));
-set(hOV, 'AlphaData', zeros(nY, nX));
+set(hOV, 'AlphaData', zeros(nY, nX),'Tag','SCM_OverlayImage');
 
 cmapNames = { ...
     'blackbdy_iso', ...
@@ -466,7 +468,12 @@ cb.FontSize = 12;
 set(cb, 'Units', 'pixels');
 
 hLiveRect = rectangle(ax, 'Position', [1 1 1 1], ...
-    'EdgeColor', [0 1 0], 'LineWidth', 2, 'Visible', 'off');
+    'EdgeColor', [0 1 0], 'LineWidth', 2, 'Visible', 'off','HitTest','off','Tag','SCM_LiveROIBox');
+hScanField=rectangle(ax,'Position',[.5 .5 nX nY],'EdgeColor',[.30 .75 .85], ...
+    'LineStyle','--','LineWidth',1,'Visible','off','HitTest','off','Tag','SCM_RecordedField');
+txtScanField=text(ax,.012,.012,'Dashed box: acquired field | Outside: atlas only, no measured signal', ...
+    'Units','normalized','Color',[.65 .85 .90],'FontSize',10,'BackgroundColor','k', ...
+    'VerticalAlignment','bottom','Interpreter','none','HitTest','off','Visible','off','Tag','SCM_RecordedFieldLabel');
 
 txtSliceOverlay = text(ax, 0.985, 0.985, '', ...
     'Units', 'normalized', 'Color', [0.86 0.93 1.00], ...
@@ -711,6 +718,16 @@ popUnder = mkPopup(pUnderlay, { ...
 lblAtlasChoice=mkLbl(pUnderlay,'Atlas underlay');
 popAtlasChoice=mkPopup(pUnderlay,{'Load a saved atlas underlay first'},1,@atlasUnderlayChoiceCB);
 set(popAtlasChoice,'Tag','AtlasUnderlayChoice','Enable','off');
+lblAtlasStage=mkLbl(pUnderlay,'Registration stage');
+popAtlasStage=mkPopup(pUnderlay,{'Load a LightSuite atlas first'},1,@atlasRegistrationStageCB);
+set(popAtlasStage,'Tag','AtlasRegistrationStage','Enable','off','TooltipString', ...
+    'Compare Affine only with Affine + B-spline. Backgrounds, boundaries and region lookup switch together on the original recording grid.');
+cbAtlasUpright=mkChk(pUnderlay,'Upright atlas view',0,@atlasUprightChanged);
+set(cbAtlasUpright,'Tag','SCM_AtlasUpright','Enable','off','TooltipString', ...
+    'Rotate the entire display together using the saved atlas orientation. Signal, atlas and ROIs stay aligned; measurements remain on the original recording grid.');
+cbAtlasFullReference=mkChk(pUnderlay,'Show atlas outside acquired field',0,@atlasReferenceExtentChanged);
+set(cbAtlasFullReference,'Tag','SCM_AtlasFullReference','Enable','off','TooltipString', ...
+    'Show full reference anatomy beyond the recorded voxels. Outside the dashed acquisition box there are no measured PSC values or selectable signal ROIs. This changes the view, never the registration.');
 cbRegionLabels=uicontrol(pUnderlay,'Style','checkbox','String','Region abbreviations','Value',0, ...
     'ForegroundColor','w','BackgroundColor',[.08 .08 .08],'FontSize',12, ...
     'Tag','AtlasRegionLabelsToggle','Callback',@updateRegionLabels);
@@ -731,7 +748,8 @@ state.underlayRevision=0;state.renderedAtlasCache={};
 state.atlasRegionSearch=[];
 lblBri = mkLbl(pUnderlay, 'Underlay brightness');
 cbPhysicalScale=mkChk(pUnderlay,'Physical X/Y scale',1,@imageAppearanceChanged);set(cbPhysicalScale,'Tag','SCM_PhysicalScale');
-cbSharpPixels=mkChk(pUnderlay,'Sharp pixels',1,@imageAppearanceChanged);set(cbSharpPixels,'Tag','SCM_SharpPixels');
+cbSharpPixels=mkChk(pUnderlay,'Sharp pixels (underlay)',1,@imageAppearanceChanged);set(cbSharpPixels,'Tag','SCM_SharpPixels');
+set(cbSharpPixels,'TooltipString','Changes only the underlay: checked shows individual pixels; unchecked uses linear display sampling. The signal overlay and region IDs always retain sharp pixels.');
 slBri = mkSlider(pUnderlay, -0.80, 0.80, uState.brightness, @underlaySliderChanged);
 txtBri = mkValBox(pUnderlay, sprintf('%.2f', uState.brightness));
 lblCon = mkLbl(pUnderlay, 'Underlay contrast');
@@ -751,6 +769,9 @@ txtVlv = mkValBox(pUnderlay, sprintf('%d', uState.conectLev));
 
 btnLoadUnder = mkBtn(pUnderlay, 'LOAD NEW UNDERLAY', @loadNewUnderlayCB, colBtnNeutral, 12);
 btnLoadAtlasFolder=mkBtn(pUnderlay,'LOAD ATLAS',@loadAtlasUnderlayFolderCB,colBtnNeutral,12);
+btnExportAtlas=mkBtn(pUnderlay,'EXPORT ATLAS',@exportRegisteredAtlasCB,colBtnExport,12);
+set(btnExportAtlas,'Tag','SCM_ExportRegisteredAtlas','Enable','off','TooltipString', ...
+    'Export both loaded LightSuite stages as portable native Regions, Backgrounds and Mask MAT files.');
 set(btnLoadAtlasFolder,'Tag','SCM_LoadAtlasFolder','TooltipString', ...
  'Choose a single saved atlas/transform file or a registration/session folder. Starts at this animal''s atlas folder.');
 setappdata(fig,'FUSILoadAtlas',@(path)loadAtlasUnderlayFolderCB([],[],path));
@@ -759,6 +780,7 @@ setappdata(fig,'FUSILoadMask',@(file)loadMaskCB([],[],file));
 setappdata(fig,'FUSIUnderlayData',@underlayData);
 setappdata(fig,'FUSIWarpFunctionalToAtlas',@(varargin)warpFunctionalToAtlasCB([],[],varargin{:}));
 setappdata(fig,'FUSISetSlice',@browseSlice);
+setappdata(fig,'FUSIExportRegisteredAtlas',@(folder)exportRegisteredAtlasCB([],[],folder));
 btnWarpAtlas = mkBtn(pUnderlay, 'WARP FUNCTIONAL TO ATLAS', @warpFunctionalToAtlasCB, colBtnExport, 12);
 btnResetWarp = mkBtn(pUnderlay, 'RESET TO NATIVE', @resetWarpToNativeCB, colBtnNeutral, 12);
 btnSigUnder  = mkBtn(pUnderlay, 'SIGNAL UNDERLAY (sharp)', @signalUnderlayCB, colBtnNeutral, 12);
@@ -813,8 +835,9 @@ btnCompute = uicontrol(fig, 'Style', 'pushbutton', 'String', 'Compute SCM', ...
 btnAutomatic = uicontrol(fig,'Style','pushbutton','String','Automatic analysis', ...
     'Units','pixels','Callback',@automaticAnalysisCB,'BackgroundColor',[.23 .42 .30], ...
     'ForegroundColor','w','FontSize',12,'FontWeight','bold', ...
-    'TooltipString','Find and review exploratory ROIs, or run a saved fixed-ROI protocol on matching anatomy.');
+    'TooltipString','Find peak ROIs, rank whole atlas regions brain-wide, or run a saved fixed-ROI protocol.');
 setappdata(fig,'FUSIAutomaticSearch',@automaticPeakROI);
+setappdata(fig,'FUSIAtlasRegionRanking',@automaticAtlasRanking);
 btnMaskQuick = uicontrol(fig, 'Style', 'pushbutton', 'String', 'LOAD MASK', ...
     'Units', 'pixels', 'Callback', @loadMaskCB, 'BackgroundColor', colBtnNeutral, ...
     'ForegroundColor', 'w', 'FontSize', 15, 'FontWeight', 'bold');
@@ -1102,6 +1125,12 @@ function layoutUnder(w, h)
     else
         rowHLoc = rowH; gapLoc = gap; groupGapLoc = groupGap; sliderHLoc = sliderH; wideBtnHLoc = wideBtnH;
     end
+    required=14*(rowHLoc+gapLoc)+4*(wideBtnHLoc+gapLoc)+groupGapLoc+8;
+    if required>h
+        factor=(h-8)/required;rowHLoc=max(24,floor(rowHLoc*factor));
+        gapLoc=max(2,floor(gapLoc*factor));groupGapLoc=max(4,floor(groupGapLoc*factor));
+        wideBtnHLoc=max(26,floor(wideBtnHLoc*factor));
+    end
     xLabel = pad; wLabel = min(220,round(w*0.42)); wVal = 95; xVal = w - pad - wVal;
     xCtrl = xLabel + wLabel + 16; wCtrl = max(90, xVal - xCtrl - 12);
     y = h - rowHLoc;
@@ -1110,6 +1139,13 @@ function layoutUnder(w, h)
     y=y-(rowHLoc+gapLoc);
     set(lblAtlasChoice,'Position',[xLabel y wLabel rowHLoc]);
     set(popAtlasChoice,'Position',[xCtrl y (w-xCtrl-pad) rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(lblAtlasStage,'Position',[xLabel y wLabel rowHLoc]);
+    set(popAtlasStage,'Position',[xCtrl y (w-xCtrl-pad) rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(cbAtlasUpright,'Position',[xLabel y w-2*pad rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(cbAtlasFullReference,'Position',[xLabel y w-2*pad rowHLoc]);
     y=y-(rowHLoc+gapLoc);
     set(cbRegionLabels,'Position',[xLabel y max(160,round(w*.52)) rowHLoc]);
     set(btnRegionList,'Position',[xVal y wVal rowHLoc]);
@@ -1129,9 +1165,10 @@ function layoutUnder(w, h)
     setRowSliderUnder(lblVsz, slVsz, txtVsz);
     setRowSliderUnder(lblVlv, slVlv, txtVlv);
     y = y - 2;
-    loadWidth=round((w-2*pad-8)/2);
+    loadWidth=floor((w-2*pad-16)/3);
     set(btnLoadUnder, 'Position', [xLabel y loadWidth wideBtnHLoc]);
     set(findall(fig,'Tag','SCM_LoadAtlasFolder'),'Position',[xLabel+loadWidth+8 y loadWidth wideBtnHLoc]);
+    set(btnExportAtlas,'Position',[xLabel+2*(loadWidth+8) y loadWidth wideBtnHLoc]);
     y = y - (wideBtnHLoc + gapLoc);
     set(btnWarpAtlas, 'Position', [xLabel y (w-2*pad) wideBtnHLoc]);
     y = y - (wideBtnHLoc + gapLoc);
@@ -1414,7 +1451,7 @@ function onWindowEdited(~,~)
         if strcmp(get(hLiveRect,'Visible'),'on')
             % The displayed rectangle is authoritative, including ROIs added
             % by coordinates and pinned ROIs whose size has since changed.
-            bounds=get(hLiveRect,'Position');
+            bounds=get(hLiveRect,'Position');bounds(1:2)=bounds(1:2)+.5;
             x1=round(bounds(1)); y1=round(bounds(2));
             x2=x1+round(bounds(3))-1; y2=y1+round(bounds(4))-1;
             tc=computeRoiPSC_idx(state.z,x1,x2,y1,y2,state.hoverIdx);
@@ -1515,8 +1552,20 @@ function imageAppearanceChanged(~,~)
     state.physicalScale=logical(get(cbPhysicalScale,'Value'));state.sharpPixels=logical(get(cbSharpPixels,'Value'));
     syncSCMImageGeometry();drawnow limitrate;
 end
+function atlasUprightChanged(~,~)
+    state.atlasUpright=logical(get(cbAtlasUpright,'Value'));
+    syncSCMImageGeometry();drawnow limitrate;
+end
+function atlasReferenceExtentChanged(~,~)
+    state.atlasFullReference=logical(get(cbAtlasFullReference,'Value'));
+    syncSCMImageGeometry();updateRegionLabels();drawnow limitrate;
+end
 function spacing=currentROISpacingUm()
     spacing=spatial.spacingUm;
+    if ~isempty(state.lightSuiteAtlasLibrary)
+        % The saved LightSuite spacing was verified on this exact native grid.
+        spacing=state.atlasInPlaneSpacingUm;
+    end
     if state.isAtlasWarped || state.isStepMotorAtlasWarped
         % ROI coordinates belong to the functional grid, not the finer
         % reference texture or the original acquisition after resampling.
@@ -1584,20 +1633,17 @@ end
 
 function mouseMove(~,~)
     if roi.isFrozen, roi.pendingHover=[]; return; end
-    if ~isPointerOverImageAxis()
+    [xy,~,inside]=fusiImagePointer(ax,fig,[nY nX]);
+    if ~inside
         roi.pendingHover=[];
-        return;
-    end
-    cp = get(ax, 'CurrentPoint');
-    x = round(cp(1,1)); ypix = round(cp(1,2));
-    if x < 1 || x > nX || ypix < 1 || ypix > nY
-        roi.pendingHover=[];
+        roi.lastHoverXY=[];
         set(hLiveRect, 'Visible', 'off');
         set(hLivePSC, 'Visible', 'off');
         set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
         applyTimecourseAxisMode();
         return;
     end
+    x=round(xy(1));ypix=round(xy(2));
     queueHover(x,ypix);
 end
 
@@ -1606,7 +1652,7 @@ function queueHover(x,ypix)
     roi.pendingHover=[state.z x ypix roi.revision];
     roi.lastHoverMove=now;
     [x1,x2,y1,y2]=roiBounds(x,ypix);
-    set(hLiveRect,'Position',[x1 y1 x2-x1+1 y2-y1+1],'Visible','on');
+    set(hLiveRect,'Position',[x1-.5 y1-.5 x2-x1+1 y2-y1+1],'Visible','on');
     if ~roi.hoverScheduled
         roi.hoverScheduled=true;
         start(hoverTimer);
@@ -1626,7 +1672,7 @@ function renderPendingHover(~,~)
     if isequal(roi.lastHoverXY,target) && strcmp(get(hLiveRect,'Visible'),'on'), return; end
     [x1,x2,y1,y2] = roiBounds(x, ypix);
     col = roi.colors(mod(numel(ROI_byZ{state.z}), size(roi.colors,1))+1, :);
-    set(hLiveRect, 'Position', [x1 y1 x2-x1+1 y2-y1+1], 'EdgeColor', col, 'Visible', 'on');
+    set(hLiveRect, 'Position', [x1-.5 y1-.5 x2-x1+1 y2-y1+1], 'EdgeColor', col, 'Visible', 'on');
     set(hRoiCoordTxt, 'String', roiCoordinateText(state.z,x1,x2,y1,y2), 'Visible', 'on');
     tc = computeHoverPSC(x1,x2,y1,y2);
     if isempty(tc) || numel(tc) ~= numel(state.tminHover)
@@ -1648,10 +1694,9 @@ function disposeHoverTimer(~,~)
 end
 
 function mouseClick(~,~)
-    if roi.addBusy || ~isPointerOverImageAxis(), return; end
-    cp = get(ax, 'CurrentPoint');
-    x = round(cp(1,1)); ypix = round(cp(1,2));
-    if x < 1 || x > nX || ypix < 1 || ypix > nY, return; end
+    if roi.addBusy, return; end
+    [xy,~,inside]=fusiImagePointer(ax,fig,[nY nX]);if ~inside,return;end
+    x=round(xy(1));ypix=round(xy(2));
     type = get(fig, 'SelectionType');
     if strcmp(type, 'normal')
         addRoiAtCenter(x, ypix);
@@ -1681,6 +1726,8 @@ function browseSlice(z)
     mask2D = getMaskForCurrentSlice();
     updateSCMUnderlayDisplay(state.z);
     roi.pendingHover=[];
+    roi.lastHoverXY=[];
+    set(hLiveRect,'Visible','off');set(hLivePSC,'Visible','off');
     set(hRoiCoordTxt, 'Visible', 'off', 'String', '');
     updateSliceIndicators(); updateInfoLines(); computeSCM(); redrawROIsForCurrentSlice();
 end
@@ -1724,7 +1771,7 @@ function addRoiAtCenter(x, ypix)
     % Adding one ROI must not recalculate or replace the existing curves.
     setappdata(fig,'FUSICurveReadBatch',[1 1]);
     drawRoiForCurrentSlice(r,scmAutomaticROISelections(fig),tc);
-    set(hLiveRect, 'Position', [x1 y1 x2-x1+1 y2-y1+1], 'EdgeColor', col, 'Visible', 'on');
+    set(hLiveRect, 'Position', [x1-.5 y1-.5 x2-x1+1 y2-y1+1], 'EdgeColor', col, 'Visible', 'on');
     tcHover = tc(state.hoverIdx);
     if ~isempty(tcHover) && numel(tcHover) == numel(state.tminHover)
         setLiveCurve(tcHover,state.z,x1,x2,y1,y2);
@@ -2291,9 +2338,64 @@ function result=underlayData()
         'roiDefinitions',{roiDefinitionsForCurrentView()}, ...
         'regionInfo',state.regionInfo,'atlasRegionSearch',state.atlasRegionSearch,'transformFile',state.atlasTransformFile, ...
         'underlayMode',state.atlasUnderlayChoice,'appearance',uState, ...
+        'registrationStage',state.atlasRegistrationStage, ...
+        'atlasUpright',state.atlasUpright, ...
+        'atlasFullReference',state.atlasFullReference, ...
         'imageGeometry',struct('xlim',ax.XLim,'ylim',ax.YLim,'aspect',ax.DataAspectRatio, ...
+        'cameraUpVector',ax.CameraUpVector, ...
         'underlayX',hBG.XData,'underlayY',hBG.YData,'overlayX',hOV.XData,'overlayY',hOV.YData, ...
         'underlayTextureSize',size(hBG.CData,[1 2])),'displayRGB',hBG.CData);
+end
+function installNativeAtlasStages(library)
+    state.lightSuiteAtlasLibrary=library;
+    enabled='off';if numel(library.stages)>1,enabled='on';end
+    set(popAtlasStage,'String',cellfun(@(stage)stage.name,library.stages,'UniformOutput',false), ...
+        'Value',library.selectedStage,'Enable',enabled);
+    set(btnExportAtlas,'Enable',enabled);
+    state.atlasRegistrationStage=library.stages{library.selectedStage}.id;
+    context=library.stages{library.selectedStage}.context;
+    available=isfield(context,'displayProvider')&&isfield(context.displayProvider,'uprightVectorXY');
+    enabled='off';if available,enabled='on';end
+    % Loading an atlas must preserve the acquired scan's orientation.
+    % Upright viewing is an explicit, reversible presentation choice.
+    state.atlasUpright=false;set(cbAtlasUpright,'Value',0,'Enable',enabled);
+    state.atlasFullReference=false;set(cbAtlasFullReference,'Value',0,'Enable','on');
+end
+function resetNativeAtlasStages()
+    state.lightSuiteAtlasLibrary=[];state.atlasRegistrationStage='';
+    state.atlasUpright=false;set(cbAtlasUpright,'Value',0,'Enable','off');
+    state.atlasFullReference=false;set(cbAtlasFullReference,'Value',0,'Enable','off');
+    set(popAtlasStage,'String',{'Load a LightSuite atlas first'},'Value',1,'Enable','off');
+    set(btnExportAtlas,'Enable','off');
+end
+function atlasRegistrationStageCB(~,~)
+    library=state.lightSuiteAtlasLibrary;if isempty(library),return;end
+    index=get(popAtlasStage,'Value');stage=library.stages{index};
+    selected=find(cellfun(@(entry)strcmp(entry.meta.atlasMode,state.atlasUnderlayChoice),stage.entries),1);
+    if isempty(selected),selected=stage.selected;end
+    setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',stage.entries);
+    setappdata(popAtlasChoice,'AtlasRegionContext2D',stage.context);
+    setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});
+    set(popAtlasChoice,'String',stage.names,'Value',selected,'Enable','on');
+    library.selectedStage=index;state.lightSuiteAtlasLibrary=library;state.atlasRegistrationStage=stage.id;
+    atlasUnderlayChoiceCB([],[]);
+    set(info1,'String',['LightSuite: ' stage.name ' | ' state.atlasUnderlayChoice]);
+end
+function exportRegisteredAtlasCB(~,~,folder)
+    try
+        library=state.lightSuiteAtlasLibrary;
+        assert(~isempty(library),'Load a LightSuite atlas containing both stages first.');
+        if nargin<3
+            parent=uigetdir(getDatasetRootForSelectors(),'Export both registered atlas stages');if isequal(parent,0),return;end
+            folder=fullfile(parent,['LightSuite_Atlas_' char(datetime('now','Format','yyyyMMdd_HHmmss_SSS'))]);
+        end
+        files=fusiLightSuiteCopyNativeAtlas(library,folder);
+        setappdata(fig,'FUSIRegisteredAtlasExport',struct('folder',folder,'files',{files}));
+        set(info1,'String',['Saved both atlas stages: ' shortenPath(folder,70)],'TooltipString',folder);
+    catch err
+        if nargin>=3,rethrow(err);end
+        errordlg(err.message,'Atlas export failed');
+    end
 end
 function atlasUnderlayChoiceCB(~,~)
     entries=getappdata(popAtlasChoice,'AtlasUnderlayEntries2D');
@@ -2328,12 +2430,14 @@ function refreshAtlasUnderlayChoices(space)
     state.atlasRegionSearch=fusiAtlasSearchContext(bundle,space,state.atlasRegionSearch);
 end
 function loadAtlasUnderlayFolderCB(~,~,selected)
+    sourceKind='';
     if nargin<3
         lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
         dialogs=struct();if isappdata(fig,'FUSIAtlasPickerDialogs'),dialogs=getappdata(fig,'FUSIAtlasPickerDialogs');end
         [selected,options]=fusiChooseAtlasSource(par,getDatasetRootForSelectors(),state.atlasTransformFile,lastFile,dialogs);
         setappdata(fig,'FUSIUnderlayPickerOptions',options);
         if isempty(selected),return;end
+        sourceKind=options.sourceKind;
     end
     if isfile(selected)
         contents=whos('-file',selected);fields={contents.name};
@@ -2344,7 +2448,11 @@ function loadAtlasUnderlayFolderCB(~,~,selected)
     end
     folder=char(selected);
     nativeRegions=fullfile(folder,'LightSuite_Native_Regions.mat');
-    if isfile(nativeRegions),loadNewUnderlayCB([],[],nativeRegions);return;end
+    if ~strcmp(sourceKind,'Normal folder')&&isfile(nativeRegions)
+        chooser=@listdlg;if isappdata(fig,'FUSILightSuiteProjectChooser'),chooser=getappdata(fig,'FUSILightSuiteProjectChooser');end
+        folder=fusiLightSuiteChooseAtlasProject(folder,chooser);if isempty(folder),return;end
+        loadNewUnderlayCB([],[],fullfile(folder,'LightSuite_Native_Regions.mat'));return;
+    end
     % The folder button also accepts the dated 3D Histology/Regions bundle.
     for filename={'Histology.mat','Vascular.mat','Regions.mat'}
         file=fullfile(folder,filename{1});
@@ -2423,6 +2531,18 @@ function loadNewUnderlayCB(~,~,selectedFile)
             warpFunctionalToAtlasStepMotorFolder(fullf);state.lastUnderlayFile=fullf;return;
         end
         [Uraw, meta] = readUnderlayFile(fullf);
+        if isfield(meta,'nativeUnderlayLibrary')
+            library=meta.nativeUnderlayLibrary;
+            installNativeAtlasStages(library);
+            setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',library.entries);
+            setappdata(popAtlasChoice,'AtlasRegionContext2D',library.context);
+            setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});
+            set(popAtlasChoice,'String',library.names,'Value',library.selected,'Enable','on');
+            state.atlasInPlaneSpacingUm=meta.voxelSizeUm;updateROIPhysicalSize();
+            state.lastUnderlayFile=fullf;atlasUnderlayChoiceCB([],[]);
+            set(info1,'String',['Loaded LightSuite native atlas: ' shortenPath(fullf,70)],'TooltipString',fullf);
+            return;
+        end
         if isfield(meta,'registrationBundle3D') && meta.registrationBundle3D
             [Uraw,meta]=fusiAtlasRegroupUnderlay3D(Uraw,meta,groupingOverride);
             assert(isequal(double(meta.transform.scanGeometry.originalSize),double(size(origPSC,[1 2 3]))), ...
@@ -2987,6 +3107,7 @@ state.stepMotorUnderlayBundle=[];state.atlasRegionSearch=[];state.retainedUnderl
 setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',{});setappdata(popAtlasChoice,'AtlasRegionContext2D',[]);
 setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});setappdata(popAtlasChoice,'AtlasUnderlayGroupings',{});
 set(popAtlasChoice,'String',{'Load a saved atlas underlay first'},'Value',1,'Enable','off');
+resetNativeAtlasStages();
 if isappdata(fig,'FUSIAtlasAppliedTransformFile'),rmappdata(fig,'FUSIAtlasAppliedTransformFile');end
 
 state.stepMotorAtlasFolder = '';
@@ -3251,6 +3372,18 @@ function syncSCMImageGeometry()
     end
     set(hBG,'XData',xData,'YData',yData);
     set(hOV,'XData',[1 nX],'YData',[1 nY]);
+    viewBounds=[xData+[-.5 .5];yData+[-.5 .5]];
+    if ~isempty(state.atlasDisplay3D)&&isfield(state.atlasDisplay3D,'viewBounds')
+        viewBounds=state.atlasDisplay3D.viewBounds;
+    end
+    if ~isempty(state.lightSuiteAtlasLibrary)&&~state.atlasFullReference
+        viewBounds=[.5 nX+.5;.5 nY+.5];
+    end
+    expanded=~isempty(state.lightSuiteAtlasLibrary)&& ...
+        (viewBounds(1,1)<.5||viewBounds(1,2)>nX+.5||viewBounds(2,1)<.5||viewBounds(2,2)>nY+.5);
+    visibility='off';if expanded,visibility='on';end
+    set(hScanField,'Position',[.5 .5 nX nY],'Visible',visibility);
+    set(txtScanField,'Visible',visibility);
     aspect=1;
     if ~isempty(state.atlasDisplay3D)
         spacing=state.atlasDisplay3D.spacingUm;aspect=spacing(2)/spacing(1);
@@ -3262,22 +3395,36 @@ function syncSCMImageGeometry()
     elseif nZ>1
         aspect=deConfUSIon_utils('deConfUSIon_view_aspect',par);
     end
-    if ~isequal(ax.XLim,xData+[-.5 .5]),set(ax,'XLim',xData+[-.5 .5]);end
-    if ~isequal(ax.YLim,yData+[-.5 .5]),set(ax,'YLim',yData+[-.5 .5]);end
-    set(ax,'YDir','reverse','DataAspectRatio',[1 aspect 1],'PlotBoxAspectRatioMode','auto','Color','k');
+    if ~isequal(ax.XLim,viewBounds(1,:)),set(ax,'XLim',viewBounds(1,:));end
+    if ~isequal(ax.YLim,viewBounds(2,:)),set(ax,'YLim',viewBounds(2,:));end
+    set(ax,'XDir','normal','YDir','reverse','View',[0 90], ...
+        'DataAspectRatio',[1 aspect 1],'PlotBoxAspectRatioMode','auto','Color','k');
     if ~state.physicalScale,set(ax,'DataAspectRatio',[1 1 1]);end
-    interpolation='bilinear';if state.sharpPixels,interpolation='nearest';end
-    for imageHandle=[hBG hOV],if isprop(imageHandle,'Interpolation'),set(imageHandle,'Interpolation',interpolation);end,end
+    % Image axes reverse Y. MATLAB's automatic camera therefore points up
+    % along negative Y; forcing [0 1 0] turns the image over on slice redraw.
+    set(ax,'CameraPositionMode','auto','CameraTargetMode','auto', ...
+        'CameraUpVectorMode','auto','CameraViewAngleMode','auto');
+    if state.atlasUpright&&~isempty(state.atlasDisplay3D)&&isfield(state.atlasDisplay3D,'uprightVectorXY')
+        up=[state.atlasDisplay3D.uprightVectorXY 0];
+        % A projected atlas axis can point backwards in an oblique scan.
+        % Choose its equivalent direction nearest the native screen-up axis.
+        if up(2)<0,up=-up;end
+        set(ax,'CameraUpVector',-up);
+    end
+    % Underlay appearance must never blur the measured signal overlay.
+    if isprop(hOV,'Interpolation'),set(hOV,'Interpolation','nearest');end
+    interpolation='bilinear';if state.sharpPixels||state.isColorUnderlay,interpolation='nearest';end
+    if isprop(hBG,'Interpolation'),set(hBG,'Interpolation',interpolation);end
 end
 
 %% ==========================================================
 % EXPORTS
 %% ==========================================================
 function automaticAnalysisCB(~,~)
-    choice=questdlg('Find and review peak ROIs (current or all slices), or load a fixed protocol?', ...
-        'Automatic analysis','Find and review ROI','Load fixed protocol','Cancel','Find and review ROI');
-    if strcmp(choice,'Find and review ROI'), automaticPeakROI(); return; end
-    if ~strcmp(choice,'Load fixed protocol'), return; end
+    automaticPeakROI();
+end
+
+function automaticFixedProtocol()
     [name,folder]=uigetfile('*.json','Select a prespecified Automatic SCM protocol');
     if isequal(name,0), return; end
     set(btnAutomatic,'Enable','off');
@@ -3296,10 +3443,90 @@ function automaticAnalysisCB(~,~)
     end
 end
 
-function automaticPeakROI(useAwakePreset,searchOverride,searchCache)
+function reports=automaticAtlasRanking(optOverride)
+    if nargin<1,optOverride=[];end
+    reports={};
+    if isempty(optOverride)
+        automaticPeakROI(false,[],[],true);
+        if isappdata(fig,'AtlasRankingReports'),reports=getappdata(fig,'AtlasRankingReports');end
+        return;
+    end
+    if isappdata(fig,'AtlasRankingLastError'),rmappdata(fig,'AtlasRankingLastError');end
+    try
+        if ~isempty(state.atlasRegionSearch)
+            atlas=state.atlasRegionSearch;
+        elseif ~isempty(state.regionLabelUnderlay)&&isfield(state.regionInfo,'name')
+            atlas=struct('labels',state.regionLabelUnderlay,'info',state.regionInfo);
+        else
+            error('deConfUSIon:AtlasRankingAtlas','Load a registered Regions atlas first (LightSuite or standard atlas). Histology / vascular views can remain displayed.');
+        end
+        [b0,b1]=selectedBaselineFrames();
+        [s0,s1]=parseRangeSafe(getStr(ebSig),360,540);
+        if isVolMode,s0=(s0-1)*TR;s1=(s1-1)*TR;end
+        ctx=struct('sizeYXZ',[nY nX nZ],'signalSec',[s0 s1], ...
+            'baselineSec',tsec([b0 b1]),'baselineMode','local','TR',TR,'nT',nT);
+        if fusiBaselineReference('isExternal',baseline),ctx.baselineMode='external';end
+        if ~isempty(state.scanSequence)
+            ctx.scanLabels=fusiScanSequence('labels',state.scanSequence);
+            ctx.scanTiming=state.scanSequence.scans;ctx.activeScanIndex=state.scanSequence.active;
+        end
+        opt=optOverride;
+        defaults=struct('roiMode','atlasRanking','roiSelection','Both','bilateral',false,'leftIsTarget',true, ...
+            'splitX',floor(nX/2),'scanScope','current','scanIndex',1,'metric','mean','direction','increase', ...
+            'topCount',[20 20],'minCoverage',.75,'baselineSec',ctx.baselineSec);
+        fields=fieldnames(defaults);
+        for k=1:numel(fields),if ~isfield(opt,fields{k}),opt.(fields{k})=defaults.(fields{k});end,end
+        opt.baselineMode=ctx.baselineMode;
+        if isfield(atlas,'provenance'),opt.atlasProvenance=atlas.provenance;end
+        set(btnAutomatic,'Enable','off');guard=onCleanup(@()set(btnAutomatic,'Enable','on')); %#ok<NASGU>
+        setappdata(fig,'StudioActionBusy',true);busyGuard=onCleanup(@()setappdata(fig,'StudioActionBusy',false)); %#ok<NASGU>
+        progress=deConfUSIon_ui('progress','Ranking atlas regions',true);
+        pg=onCleanup(@()deConfUSIon_ui('progressclose',progress)); %#ok<NASGU>
+        report=@(fraction,message)deConfUSIon_ui('progressupdate',progress,fraction,message);
+        skipped={};
+        if isempty(state.scanSequence)
+            reports=scmRankAtlasRoles(PSC,TR,atlas.labels,atlas.info,opt,report);
+            for k=1:numel(reports)
+                r=reports{k};r.sourceScanLabel=fileLabel;r.sourceScanKey=fileLabel;r.sourceScanIndex=1;r.sourceBaseline=baseline;
+                reports{k}=r;
+            end
+        else
+            scanContext=struct('power',baselineRaw,'par',par,'mapping',state.currentROIMapping,'displayShape',[nY nX nZ]);
+            [reports,skipped]=scmRankAtlasScanSequence(PSC,TR,state.scanSequence,baseline, ...
+                atlas.labels,atlas.info,opt,scanContext,report);
+        end
+        clear pg;
+        if isempty(reports)
+            error('deConfUSIon:AtlasRankingEmpty','No selected scan contains the requested interval. %s',strjoin(skipped,' '));
+        end
+        setappdata(fig,'AtlasRankingReports',reports);setappdata(fig,'AtlasRankingSkipped',skipped);
+        candidates=scmAtlasRankingCandidates(reports,opt,TR,nT);
+        assert(~isempty(candidates),'deConfUSIon:AtlasRankingEmpty','No regions meet the selected slice / side / coverage requirements.');
+        replaceUnsavedAutomaticROIs();audit=scmAutomaticROISelections(fig);
+        for k=1:numel(candidates)
+            c=candidates{k};c.roiId=roi.nextId;roi.nextId=roi.nextId+1;
+            c.source=c.searchScanLabel;c.color=[.3 .9 .5];
+            if strcmp(c.role,'Target'),c.color=[1 .55 .05];elseif strcmp(c.role,'Control'),c.color=[.05 .65 1];end
+            audit{end+1}=c;candidates{k}=c; %#ok<AGROW>
+        end
+        setappdata(fig,'AutomaticROISelections',audit);
+        setappdata(fig,'AutomaticROISearchSummary',struct('searchedSlices',opt.sliceRange(1):opt.sliceRange(2), ...
+            'skippedRegions',{skipped},'parameters',candidates{1}.searchParameters));
+        redrawROIsForCurrentSlice();set(hRoiCoordTxt,'Visible','off');
+        showCandidateReview(candidates,skipped,opt,[]);
+    catch ME
+        setappdata(fig,'AtlasRankingLastError',ME);
+        if ~strcmp(ME.identifier,'deConfUSIon:ProcessingCancelled'),errordlg(ME.message,'Atlas region ranking');end
+    end
+end
+
+function automaticPeakROI(useAwakePreset,searchOverride,searchCache,startRanking)
     if nargin<1, useAwakePreset=false; end
     if nargin<2,searchOverride=[];end
     if nargin<3,searchCache=[];end
+    if nargin<4,startRanking=false;end
+    dialogOptions=[];
+    if isstruct(startRanking),dialogOptions=startRanking;startRanking=strcmp(dialogOptions.roiMode,'atlasRanking');end
     if isappdata(fig,'AutomaticROILastError'),rmappdata(fig,'AutomaticROILastError');end
     [s0,s1]=parseRangeSafe(getStr(ebSig),360,540);
     if isVolMode, s0=(s0-1)*TR; s1=(s1-1)*TR; end
@@ -3310,6 +3537,9 @@ function automaticPeakROI(useAwakePreset,searchOverride,searchCache)
         'underlay',@currentUnderlayDisplayRGB,'underlayXData',hBG.XData,'underlayYData',hBG.YData, ...
         'mask',@(z)getMaskForSlice(z));
     ctx.spacingUm=currentROISpacingUm();ctx.sizeMode=roi.sizeMode;ctx.sizeUm=roi.sizeUm;ctx.viewAspect=ax.DataAspectRatio;
+    ctx.baselineMode='local';if fusiBaselineReference('isExternal',baseline),ctx.baselineMode='external';end
+    if startRanking,ctx.initialROIMode=4;end
+    if ~isempty(dialogOptions),ctx.initialSearchOptions=dialogOptions;end
     if ~isempty(state.scanSequence)
         ctx.scanLabels=fusiScanSequence('labels',state.scanSequence);ctx.scanTiming=state.scanSequence.scans;
         ctx.originalScanIndex=find(cellfun(@(d)strcmp(d.key,state.originalScanKey),state.scanSequence.scans),1);
@@ -3346,13 +3576,17 @@ function automaticPeakROI(useAwakePreset,searchOverride,searchCache)
             if isfield(ctx,'atlasProvenance'),opt.atlasProvenance=ctx.atlasProvenance;end
         end
     else
-        ctx.plateauSec=180; ctx.roiSize=6; ctx.signalSec=[420 840];
+        ctx.plateauSec=180;ctx.roiSize=6;
         ctx.display=struct('caxis',sscanf(strrep(getStr(ebCax),',',' '),'%f')', ...
             'modMin',str2double(getStr(ebModMin)),'modMax',str2double(getStr(ebModMax)), ...
             'alphaPercent',get(slAlpha,'Value'),'signMode',get(popSignMode,'Value'));
         % Reopening Automatic analysis on another slice keeps the accepted
         % drawing, but never reuses it after a coordinate-grid change.
         paintKey=struct('sizeYXZ',[nY nX nZ],'viewKey',roi.viewKey,'mapping',roi.viewMapping);
+        if isappdata(fig,'AutomaticSCMSearchSides')
+            saved=getappdata(fig,'AutomaticSCMSearchSides');
+            if isequaln(saved.key,paintKey),ctx.initialSides=saved.sides;end
+        end
         if isappdata(fig,'AutomaticSCMSearchPaint')
             savedPaint=getappdata(fig,'AutomaticSCMSearchPaint');
             if isstruct(savedPaint)&&isfield(savedPaint,'key')&&isfield(savedPaint,'mask')&&isequaln(savedPaint.key,paintKey)
@@ -3360,9 +3594,18 @@ function automaticPeakROI(useAwakePreset,searchOverride,searchCache)
             end
         end
         opt=scmAutoSearchDialog(ctx); if isempty(opt), return; end
-        if isfield(opt,'paintMask')
+        if isfield(opt,'paintMask')&&~strcmp(opt.roiMode,'atlasRanking')
             setappdata(fig,'AutomaticSCMSearchPaint',struct('key',paintKey,'mask',opt.paintMask));
         end
+        if isfield(opt,'midlineXY')
+            sides=struct('midlineXY',opt.midlineXY,'splitX',opt.splitX,'leftIsTarget',opt.leftIsTarget,'bilateral',opt.bilateral);
+            setappdata(fig,'AutomaticSCMSearchSides',struct('key',paintKey,'sides',sides));
+        end
+    end
+    if isfield(opt,'analysisMode')&&strcmp(opt.analysisMode,'protocol'),automaticFixedProtocol();return;end
+    if isfield(opt,'roiMode')&&strcmp(opt.roiMode,'atlasRanking')
+        slices=scmSearchSlices(opt,nZ);opt.sliceRange=[min(slices) max(slices)];
+        automaticAtlasRanking(opt);return;
     end
     if ~isempty(state.scanSequence)
         if ~isfield(opt,'scanScope'),opt.scanScope='all';opt.scanIndex=[];end
@@ -3436,8 +3679,8 @@ function automaticPeakROI(useAwakePreset,searchOverride,searchCache)
             candidate=candidates{ci}; bounds=candidate.boundsXY; id=roi.nextId; zz=candidate.slice;
             color=[1 .55 .05]; if strcmp(candidate.role,'Control'), color=[.05 .65 1]; end
             if ismember(zz,highSlices), color=[1 .15 .15]; end
-            ROI_byZ{zz}(end+1)=struct('id',id,'x1',bounds(1),'x2',bounds(2),'y1',bounds(3),'y2',bounds(4),'color',color);
             roi.nextId=id+1; candidate.roiId=id; candidate.source=fileLabel;
+            candidate.color=color;
             if isfield(candidate,'searchScanLabel'),candidate.source=candidate.searchScanLabel;end
             candidate.displayPresetApplied=cleanDisplay;
             if ~isempty(displayProfile), candidate.automaticDisplay=displayProfile; end
@@ -3463,15 +3706,8 @@ function automaticPeakROI(useAwakePreset,searchOverride,searchCache)
             setappdata(fig,'AutomaticDisplayProfile',displayProfile);alphaModToggled([],[]);
         end
         [~,order]=sort(cellfun(@(c)c.meanPSC,candidates),'descend'); candidates=candidates(order);
-        candidate=candidates{1}; id=candidate.roiId;
-        showAutomaticWindow(candidate);
         setHoverActive(false);
-        if nZ>1&&state.z~=candidate.slice
-            set(slZ,'Value',nZ-candidate.slice+1); sliceChanged([],[]);
-        else
-            computeSCM([],[]); redrawROIsForCurrentSlice();
-        end
-        set(hRoiCoordTxt,'Visible','on','String',sprintf('Peak ROI %d | %d voxels | mean %.3g%% | %d baseline / %d signal frames | review before export',id,candidate.pixelCount,candidate.meanPSC,numel(candidate.baselineFrames),numel(candidate.signalFrames)));
+        computeSCM([],[]);redrawROIsForCurrentSlice();set(hRoiCoordTxt,'Visible','off');
         showCandidateReview(candidates,skipped,opt,searchCache);
     catch ME
         setappdata(fig,'AutomaticROILastError',ME);
@@ -3481,24 +3717,43 @@ end
 
 function showCandidateReview(candidates,skipped,searchOptions,searchCache)
     closeCandidateReviews();
+    ranking=isfield(searchOptions,'roiMode')&&strcmp(searchOptions.roiMode,'atlasRanking');
+    reviewSize=[min(1560,scr(3)-60) min(1000,scr(4)-100)];
     review=figure('Name',['Automatic ROI candidates | ' fileLabel],'Tag','AutomaticROICandidateReview', ...
-        'NumberTitle','off','MenuBar','none','ToolBar','none','Color','k','Position',[160 100 1280 760]);
+        'NumberTitle','off','MenuBar','none','ToolBar','none','Color','k','Position',[160 80 reviewSize]);
+    movegui(review,'center');
     setappdata(review,'deConfUSIonNoMaximize',true); setappdata(review,'SCMOwner',fig);
-    order=[]; selected=[]; exportIds=[];
-    if any(cellfun(@(c)isfield(c,'requestedTopN')&&c.requestedTopN>0,candidates))
-        exportIds=cellfun(@(c)c.roiId,candidates);
-    end
+    setappdata(review,'AutomaticCandidates',candidates);
+    order=[];selected=[];exportIds=[];manualExportIds=[];autoPairLinks=zeros(0,2);previewIds=[];pairNote='';suppressedControls=[];
+    traceCache=cell(size(candidates));averageSelection=[];averageUnit=[];
     description=sprintf('%d candidates. Green = marked for export; red text = slice with mean PSC >200%%.\nThe scan selector controls search, ranking and export independently of the overlay. Source scan is shown in the table.',numel(candidates));
     if ~isempty(skipped), description=sprintf('%s\nNo valid ROI: %s',description,strjoin(skipped,', ')); end
     summary=scmSearchParameterSummary(candidates,skipped,fileLabel);
     brief=strsplit(summary,newline);brief=brief(1:min(5,numel(brief)));
+    if ranking
+        c=candidates{1};
+        brief={['Atlas region ranking | ' fileLabel], ...
+            sprintf('%s / %s | %.6g-%.6g min | slices %d-%d | %d region results', ...
+                c.searchParameters.rankingMetric,c.searchParameters.rankingDirection,c.signalSec/60,min(c.searchedSlices),max(c.searchedSlices),numel(candidates)), ...
+            'Click a Target for a temporary preview with the same region on the opposite side as Control.', ...
+            'All checkboxes start empty. Tick Mark / export to keep a Target and its matching Control selected.', ...
+            'Orange = Target; cyan = Control. Side assignments use the displayed image. Ranking is exploratory.'};
+    end
     hParameters=ctl('text',[.025 .84 .95 .145],strjoin(brief,newline),[]);
     set(hParameters,'Tag','CandidateSearchParameters','HorizontalAlignment','left','FontSize',12, ...
         'BackgroundColor','k','TooltipString',summary);
     setappdata(review,'SearchParameterSummary',summary);
     scanSelector=[];
+    pairCheckbox=[];
+    if ranking
+        pairCheckbox=ctl('checkbox',[.025 .78 .46 .035],'Pair same region on opposite side',@pairModeChanged);
+        set(pairCheckbox,'Value',double(searchOptions.bilateral),'Enable',onoffLocal(searchOptions.bilateral), ...
+            'Tag','CandidatePairOpposite','BackgroundColor','k', ...
+            'TooltipString','Pairs the same atlas region ID within one source scan and time window. Row clicks preview; checkboxes retain the pair for averages and export.');
+    end
     if ~isempty(state.scanSequence)
         labels=fusiScanSequence('labels',state.scanSequence);choices={'All attached scans - maximum'};
+        if ranking,choices{1}='All attached scans - separate region rankings';end
         for si=1:numel(labels),choices{end+1}=sprintf('Scan %c - %s',char('A'+si-1),labels{si});end %#ok<AGROW>
         selectedScope=1;
         if strcmp(searchOptions.scanScope,'single'),selectedScope=searchOptions.scanIndex+1;
@@ -3506,28 +3761,70 @@ function showCandidateReview(candidates,skipped,searchOptions,searchCache)
             selectedScope=find(cellfun(@(d)strcmp(d.key,state.originalScanKey),state.scanSequence.scans),1)+1;
         end
         scanSelector=ctl('popupmenu',[.025 .775 .95 .045],choices,@changeSearchScan);
+        if ranking,set(scanSelector,'Position',[.50 .775 .475 .045]);end
         set(scanSelector,'Tag','CandidateSearchScanScope','Value',selectedScope,'FontSize',12, ...
             'TooltipString','Recompute the table maximum and export ROIs from Scan A, B, C or all attached scans. Independent-window searches reuse cached candidates when available; the overlay selection is separate.');
+        if ranking,set(scanSelector,'TooltipString','Choose one source scan or keep separate regional rankings for every attached scan. Times start at zero within each scan.');end
     end
     description=description(1:min(numel(description),300));
     role=ctl('popupmenu',[.025 .71 .18 .045],{'All','Target','Control','Search'},@refresh);
     set(role,'Tag','CandidateRoleFilter');
     sortBy=ctl('popupmenu',[.225 .71 .25 .045],{'Maximum PSC first','Minimum PSC first','Slice ascending','Slice descending'},@refresh);
     set(sortBy,'Tag','CandidateSort');
+    if ranking,set(sortBy,'String',{'Ranked regional change first','Minimum mean PSC first','Slice ascending','Slice descending'});end
     units=ctl('popupmenu',[.50 .71 .17 .045],{'Time: minutes','Time: seconds'},@refresh);
     set(units,'Tag','CandidateTimeUnits');
     sliceRange=ctl('edit',[.69 .71 .13 .045],sprintf('1 %d',nZ),@refresh); set(sliceRange,'Tag','CandidateSliceFilter','TooltipString','Slice range: start end (inclusive)');
     ctl('pushbutton',[.84 .71 .135 .045],'Show maximum',@showMaximum);
-    tbl=uitable(review,'Units','normalized','Position',[.025 .23 .95 .445],'Data',cell(0,11), ...
-        'ColumnName',{'Slice','ROI','Role','Region','Mean PSC (%)','Center X','Center Y','Start (min)','End (min)','Export','Source scan'}, ...
+    tbl=uitable(review,'Units','normalized','Position',[.025 .455 .95 .24],'Data',cell(0,11), ...
+        'ColumnName',{'Slice','ROI','Role','Region','Mean PSC (%)','Center X','Center Y','Start (min)','End (min)','Mark / export','Source scan'}, ...
         'ColumnEditable',[false(1,9) true false],'ColumnFormat',[repmat({'char'},1,9) {'logical','char'}], ...
         'ColumnWidth',{55 55 85 170 100 65 65 90 90 70 180},'CellEditCallback',@markForExport, ...
         'FontSize',12,'ForegroundColor','w','CellSelectionCallback',@reviewSlice,'Tag','CandidateTable');
-    msg=ctl('text',[.025 .155 .76 .06],'',[]); set(msg,'Tag','CandidateStatus');
-    ctl('pushbutton',[.80 .155 .175 .05],'Edit export note...',@editExportNote);
+    if ranking
+        headers=get(tbl,'ColumnName');headers=[headers(:)' {'Rank / side','Ranked change (%)','Usable coverage (%)','Voxels'}];
+        headers{6}='Peak PSC (%)';headers{7}='Peak time (min)';
+        formats=get(tbl,'ColumnFormat');formats=[formats(:)' repmat({'char'},1,4)];formats{3}={'Target','Control','Search'};
+        widths=get(tbl,'ColumnWidth');widths=[widths(:)' {85 120 120 85}];
+        widths{4}=260;widths{6}=90;widths{7}=100;
+        set(tbl,'ColumnName',headers,'ColumnEditable',[false false true false(1,6) true false(1,5)], ...
+            'ColumnFormat',formats,'ColumnWidth',widths);
+        setappdata(review,'AtlasRankingReports',getappdata(fig,'AtlasRankingReports'));
+        setappdata(review,'AtlasRankingExport',@exportRankingToFolder);
+    end
+    averageAxes=gobjects(1,2);averageValues=gobjects(1,2);averageRoles={'Target','Control'};
+    averageColors={[1 .55 .05],[.05 .65 1]};
+    averageValueHelp=['Equal-weight mean of the checked ROIs'' Mean PSC (%) values in the table. ' ...
+        'Each ROI uses its own selected signal window (Start/End). Source scans stay separate.'];
+    for ri=1:2
+        averageAxes(ri)=axes('Parent',review,'Units','normalized', ...
+            'Position',[.085+(ri-1)*.49 .265 .385 .125], ...
+            'Color',[.055 .055 .055],'XColor','w','YColor','w','FontSize',10, ...
+            'Tag',['Candidate' averageRoles{ri} 'AverageAxes'],'NextPlot','add','Box','on');
+        grid(averageAxes(ri),'on');
+        averageValues(ri)=ctl('text',[.085+(ri-1)*.49 .178 .385 .035], ...
+            'Mean ROI window PSC: --',[]);
+        set(averageValues(ri),'Tag',['Candidate' averageRoles{ri} 'AverageValue'], ...
+            'BackgroundColor','k','ForegroundColor',averageColors{ri},'FontSize',12,'FontWeight','bold', ...
+            'TooltipString',averageValueHelp);
+    end
+    linkaxes(averageAxes,'xy');
+    averageInfo=ctl('text',[.025 .422 .95 .026], ...
+        'Tick Export to preview the Target and Control averages. Checked ROIs include hidden rows; each source scan has its own curve.',[]);
+    set(averageInfo,'Tag','CandidateAverageInfo','BackgroundColor','k');
+    msg=ctl('text',[.025 .14 .76 .035],'',[]); set(msg,'Tag','CandidateStatus');
+    ctl('pushbutton',[.80 .14 .175 .035],'Edit export note...',@editExportNote);
+    if ranking
+        h=findall(review,'String','Edit export note...');set(h,'String','Export tables + curves','Callback',@exportRankedTables,'Tag','AtlasRankingExport');
+    end
     ctl('pushbutton',[.025 .065 .25 .07],'Export SELECTED ROIs (TXT)',@exportSelected);
     ctl('pushbutton',[.29 .065 .25 .07],'Choose Target + Control to export',@exportPair);
-    ctl('pushbutton',[.555 .065 .24 .07],'Clear ALL marked ROIs',@clearAllMarkedROIs);
+    if ranking
+        h=ctl('pushbutton',[.555 .065 .115 .07],'Clear selection',@clearSelection);set(h,'Tag','CandidateClearSelection');
+        h=ctl('pushbutton',[.68 .065 .115 .07],'Edit midline...',@(~,~)automaticPeakROI(false,[],[],searchOptions));set(h,'Tag','CandidateEditMidline');
+    else
+        ctl('pushbutton',[.555 .065 .24 .07],'Clear ALL marked ROIs',@clearAllMarkedROIs);
+    end
     ctl('pushbutton',[.82 .065 .155 .07],'Close','delete(gcbf)');
     bundleButton=ctl('pushbutton',[.025 .005 .95 .05],'Export checked ROIs: bundle + averaged TXT per source scan and role',@exportBundles);
     set(bundleButton,'Tag','SCM_ExportROIBundles');
@@ -3535,6 +3832,9 @@ function showCandidateReview(candidates,skipped,searchOptions,searchCache)
     function h=ctl(style,pos,str,cb)
         h=uicontrol(review,'Style',style,'Units','normalized','Position',pos,'String',str, ...
             'BackgroundColor',[.10 .10 .10],'ForegroundColor','w','FontSize',11,'Callback',cb);
+    end
+    function value=onoffLocal(enabled)
+        value='off';if enabled,value='on';end
     end
     function changeSearchScan(~,~)
         value=get(scanSelector,'Value');nextOptions=searchOptions;
@@ -3560,49 +3860,233 @@ function showCandidateReview(candidates,skipped,searchOptions,searchCache)
         divisor=60; unit='min';
         if get(units,'Value')==2, divisor=1; unit='s'; end
         headers=get(tbl,'ColumnName'); headers{8}=['Start (' unit ')']; headers{9}=['End (' unit ')'];
+        if ranking,headers{7}=['Peak time (' unit ')'];end
         set(tbl,'ColumnName',headers);
-        rows=cell(numel(order),11);
+        columns=11;if ranking,columns=15;end
+        rows=cell(numel(order),columns);
         for row=1:numel(order)
             c=candidates{order(row)};
             regionText=c.region;
-            if strcmp(c.roiMode,'region'),regionText=sprintf('%s | %d voxels',regionText,c.pixelCount);
+            if strcmp(c.roiMode,'atlasRanking')
+                regionText=sprintf('%s | slices %d-%d',regionText,min(c.activeSlices),max(c.activeSlices));
+            elseif strcmp(c.roiMode,'region'),regionText=sprintf('%s | %d voxels',regionText,c.pixelCount);
             elseif all(isfinite(c.sizeXYUm)),regionText=sprintf('%s | %.6g x %.6g um',regionText,c.sizeXYUm);end
             values={c.slice c.roiId c.role regionText c.meanPSC mean(c.boundsXY(1:2)) mean(c.boundsXY(3:4)) c.signalSampleSec(1)/divisor c.signalSampleSec(end)/divisor};
+            if ranking,values{6}=c.peakPSC;values{7}=c.peakSampleSec/divisor;end
             for col=1:9
                 v=values{col}; if isnumeric(v), v=sprintf('%.6g',v); end
-                if ismember(c.slice,highSlices), v=['<html><font color="#ff3030">' v '</font></html>']; end
+                if ismember(c.slice,highSlices)&&~(ranking&&col==3),v=['<html><font color="#ff3030">' v '</font></html>'];end
                 rows{row,col}=v;
             end
             rows{row,10}=ismember(c.roiId,exportIds);
             rows{row,11}=fileLabel;
             if isfield(c,'searchScanLabel'),rows{row,11}=sprintf('Scan %s | %s',c.searchScanCode,c.searchScanLabel);end
+            if ranking,rows(row,12:15)={c.selectionRank c.rankingValue c.coveragePercent c.pixelCount};end
         end
         set(tbl,'Data',rows); setappdata(tbl,'CandidateIndices',order);
+        setappdata(review,'AutomaticCandidates',candidates);
         selected=[]; updateExportAppearance(false);
     end
     function updateExportAppearance(preserve)
         % Avoid replacing Data after checkbox edits. Preserve the native
         % viewport around recoloring too: MATLAB also resets it for colors.
-        colors=repmat([.10 .10 .10],max(1,numel(order)),1);
-        colors(2:2:end,:)=repmat([.14 .14 .14],floor(size(colors,1)/2),1);
+        colors=zeros(max(1,numel(order)),3);
+        colors(2:2:end,:)=repmat([.055 .055 .055],floor(size(colors,1)/2),1);
         if ~isempty(order)
             checked=ismember(cellfun(@(c)c.roiId,candidates(order)),exportIds);
             colors(checked,:)=repmat([22 128 60]/255,nnz(checked),1);
         end
-        scmCandidateTableColors(tbl,colors,preserve); setappdata(tbl,'ExportROIIds',exportIds);
+        data=get(tbl,'Data');changed=false;
+        for row=1:numel(order)
+            checked=ismember(candidates{order(row)}.roiId,exportIds);
+            if ~isequal(data{row,10},checked),data{row,10}=checked;changed=true;end
+            if ranking&&~strcmp(data{row,3},candidates{order(row)}.role)
+                data{row,3}=candidates{order(row)}.role;changed=true;
+            end
+        end
+        if changed,scmCandidateTableColors(tbl,colors,preserve,data);
+        else,scmCandidateTableColors(tbl,colors,preserve);end
+        setappdata(tbl,'ExportROIIds',exportIds);setappdata(review,'AutomaticCandidates',candidates);
+        setappdata(review,'PreviewROIIds',previewIds);
         set(msg,'String',sprintf('%d / %d shown; %d selected for export (including hidden rows).',numel(order),numel(candidates),numel(exportIds)));
+        updateAverages();
+    end
+    function updateAverages()
+        timeUnit=get(units,'Value');
+        shownIds=exportIds;isPreview=ranking&&~isempty(previewIds);
+        if isPreview,shownIds=previewIds;end
+        key=struct('ids',shownIds,'preview',isPreview);
+        if isequal(key,averageSelection)&&isequal(timeUnit,averageUnit),return;end
+        for ri=1:2
+            legend(averageAxes(ri),'off');cla(averageAxes(ri));
+            set(averageValues(ri),'String','Mean ROI window PSC: --','UserData',[],'TooltipString',averageValueHelp);
+        end
+        divisor=60;unit='min';if timeUnit==2,divisor=1;unit='s';end
+        xEnd=max(TR,tsec(end))/divisor;yLow=0;yHigh=0;
+        chosen=candidates(ismember(cellfun(@(c)c.roiId,candidates),shownIds));
+        try
+            bundles=scmROIEnsembles(PSC,TR,chosen,fileLabel,@cachedCandidateTrace);
+            styles={'-','--',':','-.'};
+            for ri=1:2
+                groups=bundles(cellfun(@(b)strcmp(b.role,averageRoles{ri}),bundles));
+                roiCount=0;percentages=zeros(1,numel(groups));valueLabels=cell(1,numel(groups));
+                for bi=1:numel(groups)
+                    b=groups{bi};count=numel(b.members);roiCount=roiCount+count;
+                    percentages(bi)=mean(cellfun(@(c)c.meanPSC,b.members));
+                    valueLabels{bi}=sprintf('%.2f%%',percentages(bi));
+                    if numel(groups)>1
+                        sourceLabel=b.source;if ~isempty(b.scanTag),sourceLabel=['Scan ' b.members{1}.searchScanCode];end
+                        valueLabels{bi}=[sourceLabel ': ' valueLabels{bi}];
+                    end
+                    label=sprintf('%d selected',count);
+                    if ~isempty(b.scanTag),label=sprintf('Scan %s: %d selected',b.members{1}.searchScanCode,count);end
+                    curve=plot(averageAxes(ri),b.time/divisor,b.mean, ...
+                        'Color',averageColors{ri},'LineStyle',styles{mod(bi-1,numel(styles))+1}, ...
+                        'LineWidth',2.3,'DisplayName',label,'Tag',['Candidate' averageRoles{ri} 'Mean']);
+                    setappdata(curve,'ROIIds',cellfun(@(c)c.roiId,b.members));
+                    setappdata(curve,'SourceScan',b.source);
+                    xEnd=max(xEnd,b.time(end)/divisor);
+                    finite=b.mean(isfinite(b.mean));
+                    if ~isempty(finite),yLow=min(yLow,min(finite));yHigh=max(yHigh,max(finite));end
+                end
+                kind='selected';if isPreview,kind='preview';end
+                title(averageAxes(ri),sprintf('%s average (%d %s)',averageRoles{ri},roiCount,kind), ...
+                    'Color',averageColors{ri},'FontSize',12);
+                if ~isempty(groups)
+                    valueText=['Mean ROI window PSC: ' strjoin(valueLabels,' | ')];
+                    set(averageValues(ri),'String',valueText,'UserData',percentages, ...
+                        'TooltipString',[valueText newline 'Equal-weight mean of the checked ROIs'' table values. ' ...
+                        'Each ROI uses its own selected signal window (Start/End); this is not a mean over the full recording.']);
+                end
+                if isempty(groups)
+                    text(averageAxes(ri),.5,.5,['Select ' averageRoles{ri} ' ROIs'], ...
+                        'Units','normalized','HorizontalAlignment','center','Color',[.7 .7 .7],'FontSize',10);
+                elseif numel(groups)>1
+                    legend(averageAxes(ri),'show','Location','northeast','TextColor','w', ...
+                        'Color',[.10 .10 .10],'EdgeColor',[.35 .35 .35],'FontSize',9);
+                end
+            end
+            if isPreview
+                set(averageInfo,'String',['Temporary region preview; checkboxes are unchanged. ' pairNote]);
+            else
+                set(averageInfo,'String',['Equal-weight mean of checked ROI traces; source scans stay separate. ' pairNote]);
+            end
+            if isappdata(review,'CandidateAverageError'),rmappdata(review,'CandidateAverageError');end
+            averageSelection=key;averageUnit=timeUnit;
+        catch ME
+            % Never leave an old or partial mean labelled as the new selection.
+            for ri=1:2
+                cla(averageAxes(ri));
+                title(averageAxes(ri),[averageRoles{ri} ' average'],'Color',averageColors{ri});
+                set(averageValues(ri),'String','Mean ROI window PSC: unavailable','UserData',[]);
+            end
+            setappdata(review,'CandidateAverageError',ME);
+            set(averageInfo,'String',['Average preview unavailable: ' ME.message]);
+        end
+        padding=max(1,(yHigh-yLow)*.08);
+        for ri=1:2
+            xlabel(averageAxes(ri),['Time (' unit ')'],'Color','w');
+            ylabel(averageAxes(ri),'PSC (%)','Color','w');
+            set(averageAxes(ri),'XLim',[0 xEnd],'YLim',[yLow-padding yHigh+padding]);
+        end
+    end
+    function [tc,time,sourceTR,sourceLabel]=cachedCandidateTrace(c)
+        index=find(cellfun(@(candidate)candidate.roiId==c.roiId,candidates),1);
+        if isempty(traceCache{index})
+            [tc,time,sourceTR,sourceLabel]=scmCandidateExportTrace(PSC,TR,c);
+            traceCache{index}=struct('trace',tc,'time',time,'TR',sourceTR,'source',sourceLabel);
+        else
+            cached=traceCache{index};tc=cached.trace;time=cached.time;sourceTR=cached.TR;sourceLabel=cached.source;
+        end
     end
     function markForExport(~,event)
+        if ranking&&~isempty(event.Indices)&&event.Indices(2)==3&&event.Indices(1)<=numel(order)
+            newRole=char(event.NewData);
+            if ~any(strcmp(newRole,{'Target','Control','Search'})),refresh();return;end
+            index=order(event.Indices(1));setCandidateRole(index,newRole);
+            rebuildPairs();refresh();previewCandidate(index);return;
+        end
         if isempty(event.Indices)||event.Indices(2)~=10||event.Indices(1)>numel(order), return; end
         if (isstruct(event)&&isfield(event,'Error') || isobject(event)&&isprop(event,'Error')) && ~isempty(event.Error)
             set(msg,'String','The checkbox edit failed; export selection was kept.'); return;
         end
-        id=candidates{order(event.Indices(1))}.roiId;
-        if logical(event.NewData), exportIds=unique([exportIds id],'stable');
-        else, exportIds(exportIds==id)=[]; end
+        index=order(event.Indices(1));id=candidates{index}.roiId;previewIds=[];
+        if logical(event.NewData)
+            manualExportIds=unique([manualExportIds id],'stable');
+            suppressedControls(suppressedControls==id)=[];
+            if ranking&&strcmp(candidates{index}.role,'Target')
+                opposite=scmAtlasCounterpart(candidates,index);
+                if ~isempty(opposite),suppressedControls(suppressedControls==candidates{opposite}.roiId)=[];end
+            end
+            rebuildPairs();
+        else
+            manualExportIds(manualExportIds==id)=[];
+            if ranking&&strcmp(candidates{index}.role,'Control'),suppressedControls=unique([suppressedControls id]);end
+            autoPairLinks(any(autoPairLinks==id,2),:)=[];
+            exportIds=unique([manualExportIds autoPairLinks(:,2)'],'stable');
+        end
+        syncCandidateMarks();redrawROIsForCurrentSlice();
         % MATLAB already committed the checkbox to Data. Keep the row order,
         % selection, column widths and both scroll positions intact.
         updateExportAppearance(true);
+    end
+    function setCandidateRole(index,newRole)
+        c=candidates{index};if strcmp(c.role,newRole),return;end
+        if ~isfield(c,'originalAssignedRole'),c.originalAssignedRole=c.role;end
+        c.role=newRole;c.color=[.3 .9 .5];
+        if strcmp(newRole,'Target'),c.color=[1 .55 .05];elseif strcmp(newRole,'Control'),c.color=[.05 .65 1];end
+        candidates{index}=c;averageSelection=[];
+    end
+    function rebuildPairs()
+        autoPairLinks=zeros(0,2);pairNote='';
+        if ranking&&get(pairCheckbox,'Value')
+            for id=manualExportIds
+                index=find(cellfun(@(c)c.roiId==id,candidates),1);
+                if isempty(index)||~strcmp(candidates{index}.role,'Target'),continue;end
+                [opposite,note]=scmAtlasCounterpart(candidates,index);
+                if isempty(opposite),pairNote=note;continue;end
+                if ismember(candidates{opposite}.roiId,suppressedControls),continue;end
+                setCandidateRole(opposite,'Control');
+                autoPairLinks(end+1,:)=[id candidates{opposite}.roiId]; %#ok<AGROW>
+            end
+        end
+        exportIds=unique([manualExportIds autoPairLinks(:,2)'],'stable');
+    end
+    function previewCandidate(index)
+        c=candidates{index};previewIds=c.roiId;pairNote='';
+        if ranking&&get(pairCheckbox,'Value')&&any(strcmp(c.role,{'Target','Control'}))
+            [opposite,note]=scmAtlasCounterpart(candidates,index);pairNote=note;
+            if ~isempty(opposite)
+                role='Control';if strcmp(c.role,'Control'),role='Target';end
+                setCandidateRole(opposite,role);previewIds=[previewIds candidates{opposite}.roiId];
+            end
+        end
+        syncCandidateMarks();displayCandidate(candidates{index});updateExportAppearance(true);
+    end
+    function syncCandidateMarks()
+        ids=cellfun(@(c)c.roiId,candidates);shown=unique([exportIds previewIds]);
+        for zz=1:nZ,marks=ROI_byZ{zz};ROI_byZ{zz}=marks(~ismember([marks.id],ids));end
+        audit=scmAutomaticROISelections(fig);
+        for ci=1:numel(candidates)
+            c=candidates{ci};c.previewOnly=ismember(c.roiId,previewIds)&&~ismember(c.roiId,exportIds);
+            links=autoPairLinks(any(autoPairLinks==c.roiId,2),:);c.pairedROIIds=setdiff(links(:)',c.roiId);
+            candidates{ci}=c;
+            ai=find(cellfun(@(a)a.roiId==c.roiId,audit),1);if ~isempty(ai),audit{ai}=c;end
+            if ~ismember(c.roiId,shown),continue;end
+            slices=c.slice;if isfield(c,'activeSlices'),slices=c.activeSlices;end
+            for zz=slices
+                m=scmROI('mask',c,zz,[nY nX nZ]);[yy,xx]=find(m);if isempty(xx),continue;end
+                ROI_byZ{zz}(end+1)=struct('id',c.roiId,'x1',min(xx),'x2',max(xx),'y1',min(yy),'y2',max(yy),'color',c.color);
+            end
+        end
+        setappdata(fig,'AutomaticROISelections',audit);setappdata(review,'AutomaticCandidates',candidates);
+    end
+    function pairModeChanged(~,~)
+        previewIds=[];suppressedControls=[];rebuildPairs();syncCandidateMarks();redrawROIsForCurrentSlice();updateExportAppearance(true);
+    end
+    function clearSelection(~,~)
+        manualExportIds=[];autoPairLinks=zeros(0,2);exportIds=[];previewIds=[];pairNote='';suppressedControls=[];
+        syncCandidateMarks();redrawROIsForCurrentSlice();updateExportAppearance(true);set(hRoiCoordTxt,'Visible','off');
     end
     function exportSelected(~,~)
         if isempty(exportIds)
@@ -3615,8 +4099,29 @@ function showCandidateReview(candidates,skipped,searchOptions,searchCache)
         answer=inputdlg('Observations saved beside the ROI files (note.txt):','ROI export note',[8 90],{note});
         if ~isempty(answer),setappdata(fig,'SCMExportNote',answer{1});end
     end
+    function paths=exportRankingToFolder(folder)
+        reports=getappdata(review,'AtlasRankingReports');
+        for ri=1:numel(reports)
+            r=reports{ri};r.table.AssignedRole=repmat({''},height(r.table),1);r.table.ROIID=zeros(height(r.table),1);
+            r.table.MarkedForExport=false(height(r.table),1);
+            for ci=1:numel(candidates)
+                c=candidates{ci};if c.rankingReportIndex~=ri,continue;end
+                r.table.AssignedRole{c.rankingRow}=c.role;r.table.ROIID(c.rankingRow)=c.roiId;
+                r.table.MarkedForExport(c.rankingRow)=ismember(c.roiId,exportIds);
+            end
+            reports{ri}=r;
+        end
+        paths=scmExportAtlasRanking(reports,skipped,folder);
+    end
+    function exportRankedTables(~,~)
+        P=getSimpleExportPaths();parent=uigetdir(P.root,'Save ranked atlas tables and curves');if isequal(parent,0),return;end
+        folder=fullfile(parent,['AtlasRanking_' char(datetime('now','Format','yyyyMMdd_HHmmss_SSS'))]);
+        try
+            exportRankingToFolder(folder);set(msg,'String',['Saved rankings: ' folder]);
+        catch ME,set(msg,'String',['Ranking export failed: ' ME.message]);end
+    end
     function exportBundles(~,~)
-        if isempty(exportIds),set(msg,'String','Tick Export for the ROIs to average, or choose top-N in automatic analysis.');return;end
+        if isempty(exportIds),set(msg,'String','Tick Mark / export for the ROIs to average and export.');return;end
         if roi.exportBusy,return;end
         roi.exportBusy=true;lock=onCleanup(@releaseRoiExportLock); %#ok<NASGU>
         try
@@ -3641,11 +4146,14 @@ function showCandidateReview(candidates,skipped,searchOptions,searchCache)
         next=order(cells(1,1));c=candidates{next};shown=c.signalSec;
         if isVolMode,shown=shown/TR+1;end
         if isequal(selected,next)&&state.z==c.slice&&strcmp(getStr(ebSig),sprintf('%.9g-%.9g',shown)),return;end
-        selected=next; displayCandidate(candidates{selected});
+        selected=next;previewCandidate(selected);
+        if ranking
+            c=candidates{selected};set(msg,'String',sprintf('%s | slices %d-%d | %d voxels | %.3g%% usable coverage',c.region,min(c.activeSlices),max(c.activeSlices),c.pixelCount,c.coveragePercent));
+        end
     end
     function showMaximum(~,~)
         if isempty(order), return; end
-        [~,ix]=max(cellfun(@(c)c.meanPSC,candidates(order))); selected=order(ix); displayCandidate(candidates{selected});
+        [~,ix]=max(cellfun(@(c)c.meanPSC,candidates(order)));selected=order(ix);previewCandidate(selected);
     end
 end
 
@@ -3683,6 +4191,7 @@ function replaceUnsavedAutomaticROIs()
     end
     if ~isempty(audit), audit=audit(~cellfun(@(c)ismember(c.roiId,remove),audit)); end
     setappdata(fig,'AutomaticROISelections',audit);
+    existing=[existing cellfun(@(c)c.roiId,audit)];
     roi.nextId=max([0 existing])+1;
 end
 
@@ -3920,16 +4429,16 @@ function exportSCMImageCB(~,~)
         tf = figure('Visible','off','Color',[0.05 0.05 0.05],'InvertHardcopy','off','Units','pixels','Position',[200 120 1400 980]);
         ax2 = axes('Parent',tf,'Units','normalized','Position',[0.06 0.10 0.74 0.84]);
         axis(ax2,'image'); axis(ax2,'off'); set(ax2,'YDir','reverse'); hold(ax2,'on');
-        image(ax2,'CData',get(hBG,'CData'),'XData',hBG.XData,'YData',hBG.YData);
+        background2=image(ax2,'CData',get(hBG,'CData'),'XData',hBG.XData,'YData',hBG.YData);
         h2 = imagesc(ax2,hOV.XData,hOV.YData,get(hOV,'CData')); set(h2,'AlphaData',get(hOV,'AlphaData'));
-        set(ax2,'DataAspectRatio',ax.DataAspectRatio,'XLim',ax.XLim,'YLim',ax.YLim);
+        copySCMImageAppearance(ax2,background2,h2);
         try, colormap(ax2, colormap(ax)); catch, colormap(ax2, colormap(fig)); end
         caxis(ax2, state.cax);
 
         ROI = ROI_byZ{state.z};
         for k = 1:numel(ROI)
             r = ROI(k);
-            rectangle(ax2, 'Position', [r.x1 r.y1 r.x2-r.x1+1 r.y2-r.y1+1], 'EdgeColor', r.color, 'LineWidth', 2);
+            rectangle(ax2, 'Position', [r.x1-.5 r.y1-.5 r.x2-r.x1+1 r.y2-r.y1+1], 'EdgeColor', r.color, 'LineWidth', 2);
             text(ax2, r.x1, max(1,r.y1-2), sprintf('%d',r.id), 'Color', r.color, 'FontWeight','bold', ...
                 'FontSize',12,'Interpreter','none','VerticalAlignment','bottom','BackgroundColor',[0 0 0],'Margin',1);
         end
@@ -3976,6 +4485,13 @@ function exportSCMImageCB(~,~)
         try, if ~isempty(tf) && isgraphics(tf), close(tf); end, catch, end
         errordlg(ME.message, 'Export SCM Image failed');
     end
+end
+
+function copySCMImageAppearance(targetAxes,backgroundImage,overlayImage)
+    set(targetAxes,'DataAspectRatio',ax.DataAspectRatio,'XLim',ax.XLim,'YLim',ax.YLim, ...
+        'CameraUpVector',ax.CameraUpVector,'CameraViewAngleMode','auto');
+    if isprop(backgroundImage,'Interpolation'),set(backgroundImage,'Interpolation',hBG.Interpolation);end
+    if isprop(overlayImage,'Interpolation'),set(overlayImage,'Interpolation','nearest');end
 end
 
 function releaseSingleScmExportLock()
@@ -4201,7 +4717,7 @@ drawnow;
 
             bgRGB = currentUnderlayDisplayRGB(zSel);
             set(hBgT,'CData',bgRGB,'XData',hBG.XData,'YData',hBG.YData);
-            set(axT,'DataAspectRatio',ax.DataAspectRatio,'XLim',ax.XLim,'YLim',ax.YLim);
+            copySCMImageAppearance(axT,hBgT,hT);
 
             tilePNG = {};
             tileLBL = {};
@@ -4664,6 +5180,7 @@ G.display.exportStyle = 'SCM_gui_6tile_black_editable_ppt';
         G.underlayInfo = struct();
         G.underlayInfo.availableModes = fieldnames(state.atlasUnderlays);
         G.underlayInfo.selectedMode = state.atlasUnderlayChoice;
+        G.underlayInfo.registrationStage=state.atlasRegistrationStage;
         G.underlayInfo.isColorUnderlay = logical(state.isColorUnderlay);
         G.underlayInfo.regionLabelUnderlay = state.regionLabelUnderlay;
         G.underlayInfo.regionInfo = state.regionInfo;
@@ -5123,7 +5640,7 @@ function applyRecommendedUnderlayDisplayForModeLocal(modeName)
     end
 
     switch modeName
-        case 'normal'
+        case {'normal','recorded'}
             uState.mode = 3;
             uState.brightness = -0.04;
             uState.contrast = 1.10;
@@ -6090,7 +6607,14 @@ function tc = computeRoiPSC_atSlice(zSel, x1, x2, y1, y2,roiId)
     if nargin>=6
         audit=scmAutomaticROISelections(fig);
         for ai=1:numel(audit)
-            if audit{ai}.roiId==roiId&&(audit{ai}.slice==zSel||isfield(audit{ai},'roiMaskVolumeIndices')),tc=scmROI('trace',PSC,candidateForBaseline(audit{ai}));return;end
+            if audit{ai}.roiId==roiId&&(audit{ai}.slice==zSel||isfield(audit{ai},'roiMaskVolumeIndices'))
+                c=audit{ai};currentKey=fileLabel;
+                if ~isempty(state.scanSequence),currentKey=state.scanSequence.scans{state.scanSequence.active}.key;end
+                if isfield(c,'rankingValue')&&c.searchTraceValid&&strcmp(c.searchScanKey,currentKey)&&numel(c.searchTrace)==nT
+                    tc=c.searchTrace;return;
+                end
+                tc=scmROI('trace',PSC,candidateForBaseline(c));return;
+            end
         end
         if numel(roi.sizingById)>=roiId&&~isempty(roi.sizingById{roiId})&&isfield(roi.sizingById{roiId},'roiMaskVolumeIndices')
             c=candidateForBaseline(roi.sizingById{roiId});tc=scmROI('trace',PSC,c);return;
@@ -6234,15 +6758,19 @@ function drawRoiForCurrentSlice(r,audit,tc)
         end
     end
     selection=[];for ai=1:numel(audit),if audit{ai}.roiId==r.id&&(audit{ai}.slice==state.z||isfield(audit{ai},'roiMaskVolumeIndices')),selection=audit{ai};break;end,end
+    lineStyle='-';
+    if ~isempty(selection)&&isfield(selection,'previewOnly')&&selection.previewOnly
+        lineStyle='--';markerLabel=['Preview ' markerLabel];
+    end
     if isempty(selection)&&numel(roi.sizingById)>=r.id&&~isempty(roi.sizingById{r.id})&&isfield(roi.sizingById{r.id},'roiMaskVolumeIndices'),selection=roi.sizingById{r.id};end
     if ~isempty(selection)&&(isfield(selection,'roiMaskIndices')||isfield(selection,'roiMaskVolumeIndices'))
         m=scmROI('mask',selection,state.z,[nY nX nZ]);padded=zeros(nY+2,nX+2);padded(2:end-1,2:end-1)=double(m);
         previousPlot=ax.NextPlot;ax.NextPlot='add';restorePlot=onCleanup(@()set(ax,'NextPlot',previousPlot));
-        [~,outline]=contour(ax,0:nX+1,0:nY+1,padded,[.5 .5],'LineColor',r.color,'LineWidth',2);roiHandles(end+1)=outline;
+        [~,outline]=contour(ax,0:nX+1,0:nY+1,padded,[.5 .5],'LineColor',r.color,'LineWidth',2,'LineStyle',lineStyle);roiHandles(end+1)=outline;
         clear restorePlot;
     else
-        roiHandles(end+1) = rectangle(ax,'Position',[r.x1 r.y1 r.x2-r.x1+1 r.y2-r.y1+1], ...
-            'EdgeColor',r.color,'LineWidth',2);
+        roiHandles(end+1) = rectangle(ax,'Position',[r.x1-.5 r.y1-.5 r.x2-r.x1+1 r.y2-r.y1+1], ...
+            'EdgeColor',r.color,'LineWidth',2,'LineStyle',lineStyle);
     end
     roiTextHandles(end+1) = text(ax,r.x1,max(1,r.y1-2),markerLabel, ...
         'Color',r.color,'FontWeight','bold','FontSize',12,'Interpreter','none', ...
@@ -6970,14 +7498,18 @@ end
 
 function U = processUnderlay(Uin)
     excluded = ~isfinite(Uin);
+    atlasContinuous=any(strcmp(state.atlasUnderlayChoice,{'histology','vascular'}))&&~isempty(state.atlasIntensityLimits);
+    if atlasContinuous,excluded=excluded|(Uin==0);end
     U = double(Uin); U(excluded) = 0;
     switch uState.mode
         case 1
             U = mat2gray_safe(U);
         case 2
-            U = clip01_percentile(U, 1, 99);
+            if atlasContinuous,U=(U-state.atlasIntensityLimits(1))/diff(state.atlasIntensityLimits);U=min(1,max(0,U));
+            else,U = clip01_percentile(U, 1, 99);end
         case 3
-            U = clip01_percentile(U, 0.5, 99.5);
+            if atlasContinuous,U=(U-state.atlasIntensityLimits(1))/diff(state.atlasIntensityLimits);U=min(1,max(0,U));
+            else,U = clip01_percentile(U, 0.5, 99.5);end
         case 4
             U = clip01_percentile(U, 0.5, 99.5);
             U = vesselEnhanceStrong(U, uState.conectSize, uState.conectLev);
@@ -7284,7 +7816,13 @@ function [U, meta] = readUnderlayFile(f)
     switch e
         case '.mat'
             [matched,U,meta]=fusiCachedAtlasUnderlay3D(f);if matched,return;end
-            S = load(f); [U,meta] = extractUnderlayFromMatStruct(S);
+            S = load(f);
+            if isfield(S,'lightSuiteNativeMeta')
+                assert(~state.isAtlasWarped && ~state.isStepMotorAtlasWarped, ...
+                    'deConfUSIon:LightSuiteNativeGrid','Open the native recording view before loading LightSuite backgrounds.');
+                [U,meta]=fusiLightSuiteUnderlayLibrary(S,f,[nY nX nZ]);return;
+            end
+            [U,meta] = extractUnderlayFromMatStruct(S);
         case '.nii'
             U = double(niftiread(f));
         case {'.png','.jpg','.jpeg','.tif','.tiff','.bmp'}
@@ -7429,9 +7967,18 @@ function applyUnderlayMeta(meta, U)
     if isfield(state,'underlayRevision'),state.underlayRevision=state.underlayRevision+1;end
     state.renderedAtlasCache={};
     ensureUnderlayStateFields();
+    if ~isstruct(meta)||~isfield(meta,'lightSuiteNativeGrid')||~meta.lightSuiteNativeGrid,resetNativeAtlasStages();end
     state.atlasUnderlayChoice='normal';
-    if isstruct(meta)&&isfield(meta,'atlasMode')&&any(strcmpi(meta.atlasMode,{'histology','vascular','regions'}))
+    if isstruct(meta)&&isfield(meta,'atlasMode')&&any(strcmpi(meta.atlasMode,{'histology','vascular','regions','recorded'}))
         state.atlasUnderlayChoice=lower(char(meta.atlasMode));
+    end
+    % Keep the current defaults: sharp native anatomy, smooth continuous atlas.
+    state.sharpPixels=~any(strcmp(state.atlasUnderlayChoice,{'histology','vascular'}));
+    set(cbSharpPixels,'Value',double(state.sharpPixels));
+    state.atlasIntensityLimits=[];
+    if any(strcmp(state.atlasUnderlayChoice,{'histology','vascular'}))
+        if isfield(meta,'displayIntensityLimits'),state.atlasIntensityLimits=meta.displayIntensityLimits;
+        else,state.atlasIntensityLimits=fusiAtlasIntensityLimits(U);end
     end
     state.atlasDisplay3D=[];
     if isstruct(meta) && isfield(meta,'displayProvider'),state.atlasDisplay3D=meta.displayProvider;end
@@ -7460,6 +8007,9 @@ function applyUnderlayMeta(meta, U)
         if isfield(meta,'isColor') && meta.isColor, state.isColorUnderlay = true; end
     end
     if nargin < 2 || isempty(U), return; end
+    if isstruct(meta)&&isfield(meta,'lightSuiteNativeGrid')&&meta.lightSuiteNativeGrid
+        state.isColorUnderlay=logical(meta.isColor);return;
+    end
     if isstruct(meta) && isfield(meta,'registrationBundle3D') && meta.registrationBundle3D
         state.isColorUnderlay=logical(meta.isColor);return;
     end
@@ -8985,13 +9535,8 @@ end
 % GENERIC HELPERS
 %% ==========================================================
 function tf = isPointerOverImageAxis()
-    tf = false;
-    try
-        h = hittest(fig); if isempty(h), return; end
-        axHit = ancestor(h, 'axes'); tf = ~isempty(axHit) && axHit == ax;
-    catch
-        try, tf = isequal(gca, ax); catch, tf = false; end
-    end
+    % Image alpha, labels and the ruler must not create dead hover/wheel areas.
+    [~,tf]=fusiImagePointer(ax,fig,[nY nX]);
 end
 
 function analysedRoot = guessAnalysedRoot(p0)

@@ -1,9 +1,11 @@
 function [matched,labels,meta]=fusiLightSuiteRegionInput(S,targetSize)
-% Read the explicit nonlinear native-grid label bundle without affine fiction.
+% Read either registered atlas stage on its exact original recording grid.
 matched=isfield(S,'lightSuiteNativeMeta')&&isstruct(S.lightSuiteNativeMeta)&& ...
     isfield(S.lightSuiteNativeMeta,'kind')&&strcmp(S.lightSuiteNativeMeta.kind,'deConfUSIon_LightSuite_native_regions');
 labels=[];meta=struct();if ~matched,return;end
 q=S.lightSuiteNativeMeta;targetSize=double(targetSize(:)');targetSize(end+1:3)=1;
+stage='affine_bspline';if isfield(q,'registrationStage'),stage=char(q.registrationStage);end
+files=fusiLightSuiteNativeFiles('',stage);
 assert(numel(q.voxelSizeMm)==3&&all(isfinite(q.voxelSizeMm))&&all(q.voxelSizeMm>0),'Invalid LightSuite native voxel spacing.');
 assert(q.fitReviewed&&isequal(double(q.nativeSize),targetSize), ...
     'deConfUSIon:LightSuiteNativeGrid','LightSuite labels must match the exact native recording grid. They cannot label cropped, resampled or atlas-space data.');
@@ -25,6 +27,7 @@ meta=struct('kind',q.kind,'isColor',true,'atlasMode','regions','space','native',
     'field','atlasRegionLabels3D','transformFile',q.transformFile, ...
     'excludedRegionIDs',excluded,'catalog',catalog, ...
     'leftHemisphereMask',logical(S.leftHemisphereMask),'rightHemisphereMask',logical(S.rightHemisphereMask), ...
-    'nonlinearNativeGrid',true,'sourceMeta',q);
+    'lightSuiteNativeGrid',true,'nonlinearNativeGrid',strcmp(stage,'affine_bspline'), ...
+    'registrationStage',stage,'registrationStageName',files.name,'sourceMeta',q);
 meta.nameTable=struct('labels',(1:numel(info.name))','names',{cellstr(string(info.acr(:)))},'fullNames',{cellstr(string(info.name(:)))});
 end

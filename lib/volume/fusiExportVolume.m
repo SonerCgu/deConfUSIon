@@ -18,7 +18,6 @@ if isappdata(fig,'FUSIVolumePlayback'),pb=getappdata(fig,'FUSIVolumePlayback');p
 if ~isappdata(fig,'FUSIVolumeExport')
     error('deConfUSIon:VolumeExport','Apply a valid volume view before exporting.');
 end
-state=getappdata(fig,'FUSIVolumeExport');
 if isappdata(fig,'FUSIVolumeExportBusy')&&getappdata(fig,'FUSIVolumeExportBusy')
     error('deConfUSIon:VolumeExportBusy','A volume export is already running.');
 end
@@ -27,6 +26,7 @@ controls=findall(fig,'-property','Enable');enabled=get(controls,'Enable');
 if ischar(enabled),enabled={enabled};end
 lock=@()lockControls(controls);setappdata(fig,'FUSIVolumeExportLock',lock);lock();
 unlock=onCleanup(@()finishExport(fig,controls,enabled)); %#ok<NASGU>
+state=getappdata(fig,'FUSIVolumeExport');
 if ~isempty(state.viewer) && isvalid(state.viewer)
     view=state.viewer;
     state.metadata.camera=struct('position',view.CameraPosition,'target',view.CameraTarget, ...
@@ -41,7 +41,7 @@ if strcmpi(extension,'.png')
     % viewer3d can be omitted from exportapp's compositor. Use the same
     % synchronous scene renderer as movies so the actual brain is captured.
     movieCanvas=fusiVolumeMovieCanvas(fig,state);closeCanvas=onCleanup(@()movieCanvas.close());
-    captureMethod=movieCanvas.method;imwrite(movieCanvas.capture(),filename);
+    captureMethod=movieCanvas.method;pixels=movieCanvas.capture();imwrite(pixels,filename);
 elseif strcmpi(extension,'.mp4') || (~ispc&&~ismac&&strcmpi(extension,'.avi'))
     timeSeries=any(strcmpi(movieType,{'timeseries','combined'}));rotateCamera=~strcmpi(movieType,'timeseries');
     if timeSeries
@@ -149,6 +149,7 @@ if isappdata(fig,'FUSIVolumeExportIdentity')
 end
 metadata.exportSeconds=toc(started);
 metadata.sceneCapture=captureMethod;
+metadata.imageOutputSizeYX=size(pixels,[1 2]);
 if strcmpi(extension,'.mp4') || (~ispc&&~ismac&&strcmpi(extension,'.avi'))
     metadata.movieFrames=nFrames;metadata.movieFPS=encodedFPS;metadata.movieType='Camera rotation of a static selected volume';
     if timeSeries

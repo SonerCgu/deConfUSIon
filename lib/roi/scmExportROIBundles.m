@@ -4,31 +4,8 @@ function [files,folder]=scmExportROIBundles(A,TR,candidates,root,fileLabel,note)
 assert(~isempty(candidates),'deConfUSIon:ROIBundle','Select at least one ROI.');
 if nargin<6,note='';end
 root=fusiAnalysisOutputPath(root);
-roles={'Target','Control'};bundles={};
-sourceKeys=cell(size(candidates));
-for k=1:numel(candidates)
-    sourceKeys{k}='overlay';
-    if isfield(candidates{k},'searchScanKey'),sourceKeys{k}=candidates{k}.searchScanKey;end
-end
-scanKeys=unique(sourceKeys,'stable');
 % Separate recordings are never silently averaged into one observation.
-for si=1:numel(scanKeys)
-for ri=1:2
-    members=candidates(strcmp(sourceKeys,scanKeys{si})&cellfun(@(c)strcmp(c.role,roles{ri}),candidates));
-    if isempty(members),continue;end
-    [firstTrace,time,sourceTR,sourceLabel]=scmCandidateExportTrace(A,TR,members{1});
-    if isempty(sourceLabel),sourceLabel=fileLabel;end
-    traces=zeros(numel(time),numel(members));traces(:,1)=firstTrace;
-    for k=2:numel(members)
-        [curve,times,step]=scmCandidateExportTrace(A,TR,members{k});
-        assert(step==sourceTR&&isequal(times,time),'deConfUSIon:ROIBundle','ROI curves from one scan must have the same acquisition time grid.');
-        traces(:,k)=curve;
-    end
-    scanTag='';if isfield(members{1},'searchScanCode'),scanTag=['Scan' members{1}.searchScanCode '_'];end
-    bundles{end+1}=struct('role',roles{ri},'members',{members},'traces',traces,'mean',mean(traces,2), ...
-        'time',time,'TR',sourceTR,'source',sourceLabel,'scanTag',scanTag); %#ok<AGROW>
-end
-end
+bundles=scmROIEnsembles(A,TR,candidates,fileLabel);
 assert(~isempty(bundles),'deConfUSIon:ROIBundle','No Target or Control ROI selected.');
 if ~exist(root,'dir'),mkdir(root);end
 counts=cellfun(@(b)sprintf('%s%d',b.role,numel(b.members)),bundles,'UniformOutput',false);
@@ -70,7 +47,11 @@ for bi=1:numel(bundles)
         fprintf(fid,'# TraceSourceScan: %s\n# TraceTimeConvention: Seconds within the source scan, starting at zero; no overlay substitution.\n',b.source);
         fprintf(fid,'# ROI_AGGREGATION: Equal-weight pointwise mean of %d ROI traces on the original time grid; all members required at every time point.\n',n);
         fprintf(fid,'# GroupAnalysis: One source-recording observation per role; repeated scans from one animal are not independent animals. Load either mean OR allROIs, never both. Column 3 is the same ensemble PSC in both files.\n');
-        fprintf(fid,'# Selection: Automatic per-slice maxima retained according to the checked ROI selection; see member ranks when top-N was requested. Exploratory selection, not outlier removal.\n');
+        if isfield(first,'rankingValue')
+            fprintf(fid,'# Selection: Whole atlas-volume regions ranked by %s / %s, retained according to checked ROI selection. Exploratory ranking, not a significance test.\n',first.searchParameters.rankingMetric,first.searchParameters.rankingDirection);
+        else
+            fprintf(fid,'# Selection: Automatic per-slice maxima retained according to the checked ROI selection; see member ranks when top-N was requested. Exploratory selection, not outlier removal.\n');
+        end
         fprintf(fid,'# Plateau_note: Maximum of the averaged trace is not the mean of independently selected ROI maxima.\n');
         fprintf(fid,'# BaselineWindow: %.12g %.12g sec\n',first.baselineSampleSec([1 end]));
         fprintf(fid,'# SearchInterval_sec: %.12g %.12g\n# PlateauDuration_sec: %.12g\n',first.searchIntervalSec,first.plateauSec);

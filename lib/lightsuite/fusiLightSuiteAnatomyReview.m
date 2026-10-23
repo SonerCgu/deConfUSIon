@@ -26,9 +26,17 @@ mode=uicontrol(fig,'Style','popupmenu','Units','normalized','Position',[.025 .82
 uicontrol(fig,'Style','text','Units','normalized','Position',[.35 .825 .14 .04], ...
     'String','Anatomy opacity','FontSize',12,'HorizontalAlignment','left');
 opacity=uicontrol(fig,'Style','slider','Units','normalized','Position',[.49 .835 .23 .025], ...
-    'Min',0,'Max',1,'Value',.65,'Callback',@(~,~)render());
+    'Min',0,'Max',1,'Value',.65,'Callback',@(~,~)render(),'Tag','LightSuiteMappedOpacity');
 uicontrol(fig,'Style','pushbutton','Units','normalized','Position',[.76 .82 .215 .055], ...
     'String','Open project folder','Callback',@(~,~)winopen(session.opts.savepath));
+uicontrol(fig,'Style','text','Units','normalized','Position',[.025 .775 .13 .03], ...
+    'String','Atlas contrast','HorizontalAlignment','left');
+atlasGain=uicontrol(fig,'Style','slider','Units','normalized','Position',[.16 .785 .24 .02], ...
+    'Min',.4,'Max',3,'Value',1,'Callback',@(~,~)render(),'Tag','LightSuiteMappedAtlasContrast');
+uicontrol(fig,'Style','text','Units','normalized','Position',[.45 .775 .17 .03], ...
+    'String','Anatomy contrast','HorizontalAlignment','left');
+anatomyGain=uicontrol(fig,'Style','slider','Units','normalized','Position',[.63 .785 .24 .02], ...
+    'Min',.4,'Max',3,'Value',1,'Callback',@(~,~)render(),'Tag','LightSuiteMappedAnatomyContrast');
 axesHandles=gobjects(1,3);images=gobjects(1,3);sliders=gobjects(1,3);numbers=gobjects(1,3);labels=gobjects(1,3);
 names={'Coronal / AP','Horizontal / DV','Sagittal / ML'};
 for d=1:3
@@ -49,7 +57,7 @@ uicontrol(fig,'Style','text','Units','normalized','Position',[.025 .025 .95 .08]
     'String',{'Scroll over a panel, drag its slider, or type a slice number. No percent-change scale is applied to anatomy.', ...
     'Next: export native region labels in the workspace. Use the original recording with those labels in SCM / Video / FC; anatomy_in_atlas.mat is an anatomical QC result, not a warped functional recording.'}, ...
     'HorizontalAlignment','left','FontSize',12);
-fusiLightSuiteStyle(fig);render();
+fusiLightSuiteStyle(fig);fusiLightSuiteLabelWindow(fig,session);render();
     function setSlice(d,value)
         if isfinite(value),index(d)=max(1,min(size(atlas,d),round(value)));end
         render();
@@ -65,9 +73,9 @@ fusiLightSuiteStyle(fig);render();
             sub={':',':',':'};sub{dim}=index(dim);
             A=single(squeeze(atlas(sub{:})));B=single(squeeze(anatomy(sub{:})));
             inside=isfinite(B)&B>0;A(~isfinite(A))=0;
-            A=min(1,max(0,(A-lim(1))/(lim(2)-lim(1))));
+            A=min(1,max(0,(A-lim(1))/(lim(2)-lim(1))*atlasGain.Value));
             % Background zeros and missing acquisition stay transparent.
-            B=fusiStandardDopplerDisplay(B);B(~inside)=0;
+            B=min(1,fusiStandardDopplerDisplay(B)*anatomyGain.Value);B(~inside)=0;
             if mode.Value==2,rgb=repmat(A,1,1,3);
             elseif mode.Value==3,rgb=repmat(B,1,1,3);
             else

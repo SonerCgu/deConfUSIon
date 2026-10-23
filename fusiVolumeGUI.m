@@ -69,7 +69,11 @@ addLabel('PSC time selection',3); mode=uidropdown(g,'Items',{'Frame','Interval m
 addLabel('Original frame',4); fr=uieditfield(g,'numeric','Value',min(nOriginal,data.frame),'Limits',[1 nOriginal],'RoundFractionalValues','on','FontSize',12,'Tag','VolumeFrame');place(fr,4,2);
 addLabel('Mean start (min)',5); start=uieditfield(g,'numeric','Value',0,'Limits',[0 max(eps,lastMin)],'FontSize',12,'Tag','VolumeMeanStart');place(start,5,2);
 addLabel('Mean end (min)',6); finish=uieditfield(g,'numeric','Value',lastMin,'Limits',[0 max(eps,lastMin)],'FontSize',12,'Tag','VolumeMeanEnd');place(finish,6,2);
-maskBox=uicheckbox(g,'Text','Apply current Video ROI mask','FontSize',12,'Value',data.applyMask,'Tag','VolumeApplyMask');place(maskBox,7,[1 2]);
+maskBox=uicheckbox(g,'Text','Apply brain / underlay mask','FontSize',12,'Value',data.applyMask,'Tag','VolumeApplyMask');place(maskBox,7,[1 2]);
+overlayMaskBox=uicheckbox(g,'Text','Apply overlay mask to PSC','Value',true,'Tag','VolumeApplyOverlayMask');
+loadMasks=uibutton(g,'Text','Load underlay + masks...','BackgroundColor',[.12 .45 .23],'FontColor','w','Tag','VolumeLoadMasks','ButtonPushedFcn',@(~,~)loadSavedMasks('both'));
+loadOverlayMask=uibutton(g,'Text','Load overlay mask...','BackgroundColor',[.12 .45 .23],'FontColor','w','Tag','VolumeLoadOverlayMask','ButtonPushedFcn',@(~,~)loadSavedMasks('overlay'));
+maskSource=uilabel(g,'Text','Reuse a saved Mask Editor bundle. Brain and signal masks can be switched independently.','WordWrap','on','FontColor','w','Tag','VolumeMaskSource');
 addLabel('Spacing in array order: row, column, slice. XYZ are local grid axes, not anatomical labels.',8,true);
 addLabel('Spacing units',9); unit=uidropdown(g,'Items',{'voxels','mm'},'Value',units,'FontSize',12,'Tag','VolumeUnits');place(unit,9,2);
 addLabel('Depth / row spacing (Y)',10); dy=uieditfield(g,'numeric','Value',spacing(1),'Limits',[eps Inf],'FontSize',14);place(dy,10,2);
@@ -132,6 +136,9 @@ clearAtlas=uibutton(g,'Text','Native view','BackgroundColor',[.12 .45 .23],'Font
 adjustAtlas=uibutton(g,'Text','Register / adjust atlas','BackgroundColor',[.12 .45 .23],'FontColor','w','Tag','VolumeAdjustAtlas','ButtonPushedFcn',@adjustAtlasContext);place(adjustAtlas,36,[1 2]);
 reviewAtlas=uibutton(g,'Text','Review all three planes','BackgroundColor',[.12 .45 .23],'FontColor','w','Tag','VolumeReviewAtlas','ButtonPushedFcn',@reviewAtlasContext);place(reviewAtlas,37,1);
 atlasType=uidropdown(g,'Items',{'Histology','Vascular'},'Tag','VolumeAtlasType','ValueChangedFcn',@changed);place(atlasType,37,2);
+atlasStage=uidropdown(g,'Items',{'Affine + B-spline','Affine only'},'Enable','off','Tag','VolumeAtlasStage', ...
+    'Tooltip','Switch the saved LightSuite atlas stage; no refitting.','ValueChangedFcn',@atlasStageChanged);
+place(atlasStage,43,[1 2]);
 atlasNote=uilabel(g,'Text','Load a reviewed 3D transform to add whole-brain atlas context.','FontColor','w','WordWrap','on');place(atlasNote,38,[1 2]);
 atlasPreview=uibutton(g,'Text','Open complete Allen brain','BackgroundColor',[.12 .45 .23],'FontColor','w','Tag','VolumeAtlasOnly','ButtonPushedFcn',@(~,~)fusiAtlasVolumeGUI());place(atlasPreview,39,[1 2]);
 help.Parent=g;place(help,30,2);atlasPreview.Parent=exports;atlasPreview.Text='Allen brain atlas';place(atlasPreview,2,2);
@@ -258,9 +265,10 @@ motionPath=uidropdown(g,'Items',{'Orbit around current view','Gentle yaw','Gentl
 motionSpeed=uieditfield(g,'numeric','Value',10,'Limits',[.1 120],'Tag','VolumeMotionSpeed','ValueChangedFcn',@stopPlayback);
 motionAmplitude=uieditfield(g,'numeric','Value',20,'Limits',[1 80],'Tag','VolumeMotionAmplitude','ValueChangedFcn',@stopPlayback);
 rotationDuration=uieditfield(g,'numeric','Value',12,'Limits',[1 600],'Tag','VolumeRotationDuration');
-C=struct();names={'backend','mode','fr','start','finish','sliceEdit','excluded','maskBox','follow','pscBox','signs','color','rangeEdit','alpha','strength','clearPSC','modulate','low','high','smooth','pscCut','pscOnly','vessels','reference','underPreset','vesselGamma','vesselGain','opacity','cutoff','autoBg','loadAtlas','clearAtlas','adjustAtlas','reviewAtlas','atlasType','atlasAlpha','atlasNote','viewChoice','nativeLR','nativeConfirmed','rulerBox','rulerLength','help','stackTiles','stackCols','slabWidth','stackRange','stackNote','unit','dy','dx','dz'};
+C=struct();names={'backend','mode','fr','start','finish','sliceEdit','excluded','maskBox','follow','pscBox','signs','color','rangeEdit','alpha','strength','clearPSC','modulate','low','high','smooth','pscCut','pscOnly','vessels','reference','underPreset','vesselGamma','vesselGain','opacity','cutoff','autoBg','loadAtlas','clearAtlas','adjustAtlas','reviewAtlas','atlasType','atlasStage','atlasAlpha','atlasNote','viewChoice','nativeLR','nativeConfirmed','rulerBox','rulerLength','help','stackTiles','stackCols','slabWidth','stackRange','stackNote','unit','dy','dx','dz'};
 names=[names {'rulerUnit','rulerPosition','axesBox','movieResolution','voxelPSC','slabMode','slabCount','slabDepthGain','stackTimes','stackLabels','stackGap','stackStagger','stackView','stackYaw','stackTilt','stackRoll','displayLR','lrMarker','markerX','markerY','stackAutoLayout','stackAutoFit','stackFit'}];
 names=[names {'scanButton','scanChoice','baselineButton','baselineReset','normalise','sequenceMovie','baselineNote','motionPath','motionSpeed','motionAmplitude','rotationDuration'}];
+names=[names {'overlayMaskBox','loadMasks','loadOverlayMask','maskSource'}];
 for k=1:numel(names),C.(names{k})=eval(names{k});end
 fusiVolumeControlsLayout(fig,left,root,g,C,atlasOnly);
 for h={stackTiles stackCols slabWidth stackRange},h{1}.ValueChangedFcn=@stackChanged;end
@@ -268,11 +276,12 @@ stackTabs=findobj(fig,'Tag','VolumeAtlasTabs');stackTabs.SelectionChangedFcn=@st
 if atlasOnly,movieKind.Items={'Camera rotation'};movieKind.Value='Camera rotation';end
 left.RowHeight={'1x',215,70};
 if atlasOnly,left.RowHeight={'1x',128,70};end
-controlsToUpdate={backend,mode,fr,start,finish,maskBox,unit,dy,dx,dz,sliceEdit,cutoff,opacity,pscBox,signs,pscCut,rangeEdit,alpha,modulate,low,high,color,smooth,autoBg,reference};
+controlsToUpdate={backend,mode,fr,start,finish,maskBox,overlayMaskBox,unit,dy,dx,dz,sliceEdit,cutoff,opacity,pscBox,signs,pscCut,rangeEdit,alpha,modulate,low,high,color,smooth,autoBg,reference};
 for k=1:numel(controlsToUpdate),controlsToUpdate{k}.ValueChangedFcn=@changed;end
 follow.ValueChangedFcn=@followChanged;
 setappdata(fig,'FUSIVolumeSync',@syncVideo);setappdata(fig,'FUSIVolumeRefresh',@refresh);
 setappdata(fig,'FUSIVolumeLoadAtlas',@installAtlasContext);
+setappdata(fig,'FUSIVolumeLoadMasks',@installSavedMasks);
 movieRendering=false;
 playMotionOffset=0;
 sequencePlan=[];playShownFrame=0;playCamera=[];
@@ -292,6 +301,7 @@ cutoff.Tooltip='Percentage of normalized linear Doppler power. Higher hides fain
 low.Tooltip='The absolute PSC at which the opacity ramp starts, using exactly the Video GUI formula.';
 high.Tooltip='The absolute PSC at which the opacity ramp saturates at the selected PSC opacity.';
 if exist('viewer3d','file')~=2 || exist('volshow','file')~=2, backend.Value='Surface rendering'; end
+if isfield(data,'volumeBackend')&&ismember(data.volumeBackend,backend.Items),backend.Value=data.volumeBackend;end
 drawnow nocallbacks; % Finish the grid layout before allocating the 3D viewport.
 refreshSequenceWidgets();refresh();alignCamera([],[]);
 
@@ -546,7 +556,7 @@ refreshSequenceWidgets();refresh();alignCamera([],[]);
             selectedRulerUm=rulerLengthUm();
             opt=struct('mode',mode.Value,'frame',fr.Value,'intervalMin',[start.Value finish.Value], ...
                 'slices',sscanf(sliceEdit.Value,'%f')','spacing',[dy.Value dx.Value dz.Value], ...
-                'units',unit.Value,'applyMask',maskBox.Value,'applyOverlayMask',true,'underlaySource',reference.Value,'underlayPreset',underPreset.Value,'excludedSlices',sscanf(excluded.Value,'%f')');
+                'units',unit.Value,'applyMask',maskBox.Value,'applyOverlayMask',overlayMaskBox.Value,'underlaySource',reference.Value,'underlayPreset',underPreset.Value,'excludedSlices',sscanf(excluded.Value,'%f')');
             if isappdata(fig,'FUSIVolumeExportSlices')
                 chosenSlices=getappdata(fig,'FUSIVolumeExportSlices');
                 opt.slices=[min(chosenSlices) max(chosenSlices)];
@@ -559,7 +569,8 @@ refreshSequenceWidgets();refresh();alignCamera([],[]);
             end
             if ~isequal(opt,cachedOpt)
                 key=rmfield(opt,{'mode','frame','intervalMin'});
-                reuse=isequal(key,anatomyKey) && ~opt.applyMask;
+                staticBrain=isfield(data,'brainMask')&&(isempty(data.brainMask)||ndims(data.brainMask)<=3);
+                reuse=isequal(key,anatomyKey) && (~opt.applyMask||staticBrain);
                 if reuse,cachedSnapshot=fusiVolumeSnapshot(data,opt,nativeAnatomy);
                 else,cachedSnapshot=fusiVolumeSnapshot(data,opt);nativeAnatomy=cachedSnapshot;anatomyKey=key;end
                 cachedSnapshot=excludeSourceSlices(cachedSnapshot,opt.excludedSlices);
@@ -710,6 +721,9 @@ refreshSequenceWidgets();refresh();alignCamera([],[]);
                 metadata.acquiredCoverageFractionOfAtlasBrain=nnz(S.atlasCoverageMask)/max(1,nnz(S.atlasBrainMask));
             end
             metadata.videoUnderlaySource=data.underlayLabel;
+            for field={'maskUnderlayFile','maskOverlayFile','maskImportAlignment'}
+                if isfield(data,field{1}),metadata.(field{1})=data.(field{1});end
+            end
             metadata.exportAnalysisFolder=fusiModelAnalysisFolder(data.par);
             metadata.baseline=data.baseline;
             if fusiBaselineReference('isExternal',data.baseline)
@@ -1291,27 +1305,103 @@ refreshSequenceWidgets();refresh();alignCamera([],[]);
         if ~isempty(renderer) && isvalid(renderer),renderer.Interactions='all';end
         updateDecorations();
     end
+    function loadSavedMasks(mode)
+        stopPlayback();folder=fusiModelAnalysisFolder(data.par);
+        if isfield(data.par,'visualizationPath')&&isfolder(data.par.visualizationPath),folder=data.par.visualizationPath;
+        elseif isfolder(fullfile(folder,'Visualization')),folder=fullfile(folder,'Visualization');end
+        setappdata(fig,'FUSIVolumeMaskPickerStart',folder);
+        picker=@uigetfile;if isappdata(fig,'FUSIVolumeMaskPicker'),picker=getappdata(fig,'FUSIVolumeMaskPicker');end
+        [name,path]=picker('*.mat','Load saved Mask Editor underlay / masks',fullfile(folder,'*.mat'));
+        if ~isequal(name,0),installSavedMasks(fullfile(path,name),mode);end
+    end
+    function installSavedMasks(file,mode)
+        if nargin<2,mode='both';end
+        stopPlayback();
+        try
+            candidate=fusiVolumeReadMaskBundle(data,file,mode);
+            data=candidate;
+            if strcmp(mode,'both')
+                reference.Value='Video underlay';underPreset.Value='Video / saved Mask Editor';
+                maskBox.Value=~isempty(data.brainMask);
+                if data.underlayProcessed
+                    autoBg.Value=false;cutoff.Value=0;vesselGamma.Value=1;vesselGain.Value=1;
+                end
+            end
+            overlayMaskBox.Value=~isempty(data.overlayMask);
+            invalidateModelCache();refresh();
+            if isappdata(fig,'FUSIVolumeMaskLastError'),rmappdata(fig,'FUSIVolumeMaskLastError');end
+            maskSource.Text=sprintf('Saved underlay: %s\nOverlay mask: %s',maskPath('maskUnderlayFile'),maskPath('maskOverlayFile'));
+            status.Text='Saved Mask Editor appearance and masks loaded.';
+        catch ME
+            setappdata(fig,'FUSIVolumeMaskLastError',ME);status.Text=['Mask load failed: ' ME.message];
+        end
+    end
+    function value=maskPath(field)
+        value='current Video view';if isfield(data,field),value=data.(field);end
+    end
+    function invalidateModelCache()
+        cachedOpt=[];cachedSnapshot=[];nativeFrame=[];anatomyKey=[];nativeAnatomy=[];
+        rgbaBackground=[];rgbaBackgroundKey=[];surfaceKey=[];stackDataKey=[];stackDataRows=[];autoProfile=[];
+    end
     function loadAtlasContext(~,~)
         stopPlayback();
+        kind='Standard file';
+        if isappdata(fig,'FUSIVolumeAtlasPicker'),kind='Standard file';
+        elseif isappdata(fig,'FUSIVolumeAtlasSourceChoice'),kind=getappdata(fig,'FUSIVolumeAtlasSourceChoice');
+        else
+            if isappdata(fig,'FUSIVolumeAtlasSourceDialog')
+                popup=getappdata(fig,'FUSIVolumeAtlasSourceDialog');
+                if isgraphics(popup),figure(popup);return;end
+            end
+            popup=fusiVolumeAtlasSourcePopup(fig,@loadAtlasSource);
+            setappdata(fig,'FUSIVolumeAtlasSourceDialog',popup);return;
+        end
+        loadAtlasSource(kind);
+    end
+    function loadAtlasSource(kind)
+        if ~isvalid(fig),return;end
+        if strcmp(kind,'Cancel'),return;end
+        if strcmp(kind,'LightSuite folder')
+            startFolder=fusiLightSuiteProjectStart('',fusiModelAnalysisFolder(data.par),data.par);
+            picker=@uigetdir;if isappdata(fig,'FUSIVolumeLightSuiteFolderPicker'),picker=getappdata(fig,'FUSIVolumeLightSuiteFolderPicker');end
+            folder=picker(startFolder,'Select the existing LightSuite project; no new registration');
+            if ~isequal(folder,0),installAtlasContext(folder);end
+            return;
+        end
         startFolder=fusiVolumeAtlasTransformFolder(data.par,atlasFile);
         setappdata(fig,'FUSIVolumeAtlasPickerStart',startFolder);
         picker=@uigetfile;if isappdata(fig,'FUSIVolumeAtlasPicker'),picker=getappdata(fig,'FUSIVolumeAtlasPicker');end
-        [file,folder]=picker('*.mat','Load reviewed 3D atlas Transformation.mat',fullfile(startFolder,'Transformation.mat'));
+        [file,folder]=picker('*.mat','Load reviewed Transformation.mat or LightSuite transform_params.mat',fullfile(startFolder,'Transformation.mat'));
         if isequal(file,0),return;end
         installAtlasContext(fullfile(folder,file));
     end
     function installAtlasContext(file)
         if ~isvalid(fig),return;end
         stopPlayback();
+        progress=[];cleanup=[];
         try
-            candidate=fusiVolumeAtlasContext(data,file,[],160,atlasContext);
+            if isappdata(fig,'FUSIVolumeAtlasLastError'),rmappdata(fig,'FUSIVolumeAtlasLastError');end
+            progress=fusiVolumeAtlasProgress(fig);cleanup=onCleanup(progress.close);
+            [lightSuite,selection]=fusiVolumeLightSuiteSelection(file);
+            if lightSuite
+                candidate=fusiVolumeLightSuiteContext(data,selection,160,atlasContext, ...
+                    progress.update);
+            else,candidate=fusiVolumeAtlasContext(data,file,[],160,atlasContext);end
+            progress.update(1,'Preparing the 3D atlas view...');progress.release();
             sameAtlasGrid=~isempty(atlasContext) && ...
                 isequal(candidate.spacingYXZmm,atlasContext.spacingYXZmm) && ...
                 isequal(size(candidate.reference),size(atlasContext.reference));
-            if isstruct(file),currentAtlasTransform=file;
+            if lightSuite
+                currentAtlasTransform=selection;atlasFile=candidate.provenance.transformFile;
+                atlasStage.Enable='on';atlasStage.Value='Affine + B-spline';
+                if strcmp(selection.registrationStage,'affine'),atlasStage.Value='Affine only';end
+                oldReference=atlasType.Value;atlasType.Items=candidate.referenceNames;
+                if ismember(oldReference,atlasType.Items),atlasType.Value=oldReference;else,atlasType.Value=atlasType.Items{1};end
+            elseif isstruct(file),currentAtlasTransform=file;atlasStage.Enable='off';atlasType.Items={'Histology','Vascular'};
             else
                 savedTransform=load(file,'Transf');currentAtlasTransform=savedTransform.Transf;
                 fusiAtlasTransformFolder(data.par,file,fileparts(file));atlasFile=file;
+                atlasStage.Enable='off';atlasType.Items={'Histology','Vascular'};
             end
             if isempty(atlasContext),nativeDisplayGeometry=struct('spacing',[dy.Value dx.Value dz.Value],'units',unit.Value);end
             atlasContext=candidate;cachedOpt=[];anatomyKey=[];nativeAnatomy=[];
@@ -1328,25 +1418,70 @@ refreshSequenceWidgets();refresh();alignCamera([],[]);
             % viewport while old/new camera events are still being queued.
             if ~sameAtlasGrid,geometry=[];initialCamera=[];newBackend('');end
             dy.Value=candidate.spacingYXZmm(1);dx.Value=candidate.spacingYXZmm(2);dz.Value=candidate.spacingYXZmm(3);unit.Value='mm';
-            if isstruct(file),atlasNote.Text='Unsaved alignment preview. Use SAVE TRANSFORM in the registration editor to keep it.';
+            if lightSuite,atlasNote.Text=sprintf('LightSuite: %s\n%s\nSaved fit reused. Atlas tissue outside acquired coverage has no measured PSC.',atlasStage.Value,selection.projectFolder);
+            elseif isstruct(file),atlasNote.Text='Unsaved alignment preview. Use SAVE TRANSFORM in the registration editor to keep it.';
             else,atlasNote.Text=sprintf('%s. Reference tissue outside acquired coverage is atlas anatomy.',file);end
             if candidate.provenance.reviewRequired,atlasNote.Text=[atlasNote.Text ' Automatic proposal: anatomical review is still required.'];end
             if ~sameAtlasGrid,atlasAlpha.Value=80;vessels.Value=false;end
             refresh();
+            if isappdata(fig,'FUSIVolumeLastError'),throw(getappdata(fig,'FUSIVolumeLastError'));end
             if ~sameAtlasGrid
                 waitRender();alignCamera([],[]);drawnow;
             end
             if candidate.provenance.reviewRequired,status.Text=[status.Text ' This automatic proposal still requires anatomical review.'];end
-        catch ME,status.Text=ME.message;end
+            if lightSuite
+                fusiVolumeAtlasLink('set',data.par,selection);
+                setappdata(fig,'FUSIVolumeAtlasSelection',selection);
+            else
+                fusiVolumeAtlasLink('clear',data.par);
+                if isappdata(fig,'FUSIVolumeAtlasSelection'),rmappdata(fig,'FUSIVolumeAtlasSelection');end
+            end
+        catch ME
+            setappdata(fig,'FUSIVolumeAtlasLastError',ME);status.Text=['Atlas load failed: ' ME.message];
+            atlasNote.Text=status.Text;
+        end
+        clear cleanup;
+    end
+    function atlasStageChanged(~,~)
+        if isempty(atlasContext)||~isfield(atlasContext.provenance,'kind')||~strcmp(atlasContext.provenance.kind,'LightSuite'),return;end
+        selection=currentAtlasTransform;selection.registrationStage='affine_bspline';
+        if strcmp(atlasStage.Value,'Affine only'),selection.registrationStage='affine';end
+        installAtlasContext(selection);
     end
     function clearAtlasContext(~,~)
         stopPlayback();atlasContext=[];atlasFile='';currentAtlasTransform=[];cachedOpt=[];anatomyKey=[];geometry=[];initialCamera=[];
+        atlasStage.Enable='off';fusiVolumeAtlasLink('clear',data.par);
+        if isappdata(fig,'FUSIVolumeAtlasSelection'),rmappdata(fig,'FUSIVolumeAtlasSelection');end
         dy.Value=nativeDisplayGeometry.spacing(1);dx.Value=nativeDisplayGeometry.spacing(2);dz.Value=nativeDisplayGeometry.spacing(3);unit.Value=nativeDisplayGeometry.units;
         atlasNote.Text='Native acquired field of view. No whole-brain atlas reference.';vessels.Value=true;viewChoice.Value='Coronal';refresh();alignCamera([],[]);
     end
     function adjustAtlasContext(~,~)
         stopPlayback();
+        if isappdata(fig,'FUSIVolumeRegistrationChoice'),choice=getappdata(fig,'FUSIVolumeRegistrationChoice');
+        else,choice=uiconfirm(fig,'Choose the registration workflow. Existing LightSuite projects can be opened and reused.', ...
+            'Register / adjust atlas','Options',{'Standard registration','LightSuite','Cancel'},'CancelOption',3);end
+        if strcmp(choice,'Cancel'),return;end
+        if strcmp(choice,'LightSuite')
+            try
+                folder=fusiLightSuiteProjectStart('',fusiModelAnalysisFolder(data.par),data.par);
+                if isstruct(currentAtlasTransform)&&isfield(currentAtlasTransform,'projectFolder'),folder=currentAtlasTransform.projectFolder;end
+                cfg=struct('outputFolder',folder);
+                if ~isfile(fullfile(folder,'deconfusion_lightsuite_session.mat')),cfg.outputFolder=fullfile(fusiModelAnalysisFolder(data.par),'Registration','LightSuite');end
+                seed=struct();
+                if ~data.inputIsPSC,seed.I=data.I;end
+                if isfield(data.par,'loadedFile'),cfg.sourceFile=data.par.loadedFile;end
+                window=fusiLightSuiteGUI(seed,data.par,cfg);
+                setappdata(window,'LightSuiteOutputsSavedCallback',@(project)installAtlasContext(project));
+                setappdata(fig,'FUSIVolumeLightSuiteWindow',window);
+                if isfile(fullfile(folder,'deconfusion_lightsuite_session.mat'))
+                    open=getappdata(window,'FUSILightSuiteOpenProject');open(folder);
+                end
+                status.Text='LightSuite opened. Open an existing project to reuse its fit. Saving its outputs updates this 3D view.';
+            catch ME,status.Text=ME.message;setappdata(fig,'FUSIVolumeAtlasLastError',ME);end
+            return;
+        end
         input=currentAtlasTransform;if isempty(input),input=atlasFile;end
+        if isstruct(currentAtlasTransform)&&isfield(currentAtlasTransform,'kind')&&strcmp(currentAtlasTransform.kind,'LightSuite'),input=[];end
         try,fusiVolumeEditAtlasRegistration(data,input,@installAtlasContext,@installAtlasContext);
         catch ME,status.Text=ME.message;end
     end
@@ -1478,6 +1613,12 @@ refreshSequenceWidgets();refresh();alignCamera([],[]);
     end
     function cleanupPlayback(~,~)
         if ~isempty(playTimer) && isvalid(playTimer),stop(playTimer);delete(playTimer);end
+        for tag={'VolumeAtlasSourcePopup','VolumeAtlasLoadProgress'}
+            windows=findall(0,'Tag',tag{1});
+            for j=1:numel(windows)
+                if isequal(getappdata(windows(j),'VolumeOwner'),fig),delete(windows(j));end
+            end
+        end
     end
     function waitRender()
         drawnow;pause(.12);drawnow; % Flush asynchronous legend and viewer updates before capture.

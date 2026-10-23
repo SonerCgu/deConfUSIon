@@ -9,6 +9,10 @@
 %   scmAutomaticDisplay
 %   scmAutomaticROISelections
 %   scmAutoSearchDialog
+%   scmAtlasRankingDialog
+%   scmAtlasRankingCandidates
+%   scmAtlasCounterpart
+%   scmAtlasRankingReview
 %   scmAwakeSearchWindow
 %   scmCandidateOrder
 %   scmCandidateRegionKey
@@ -18,12 +22,17 @@
 %   scmExportROIBundles
 %   scmExportSearchParameters
 %   scmExportSliceRange
+%   scmExportAtlasRanking
 %   scmPaintMask
 %   scmProbeSpacing
 %   scmPublishPpt
 %   scmReadMaskEditorBundle
 %   scmRebaseROIMapping
+%   scmRankAtlasRegions
+%   scmRankAtlasRoles
+%   scmRankAtlasScanSequence
 %   scmROI
+%   scmROIEnsembles
 %   scmROIWindowTag
 %   scmSearchCandidates
 %   scmSearchParameterSummary
@@ -32,6 +41,7 @@
 %   scmSelectScanCandidates
 %   scmCandidateExportTrace
 %   scmSearchSlices
+%   scmSearchSideMasks
 %   scmSearchWindows
 %   scmSharedDisplay
 %   scmSpatialCalibration

@@ -18,6 +18,22 @@ if ~isfield(opts,'logFcn'),           opts.logFcn = []; end
 % DECONF_OPTA_V1 : automatic / preselected component removal
 if ~isfield(opts,'autoSelect'),       opts.autoSelect = []; end
 if ~isfield(opts,'autoApply'),        opts.autoApply = false; end
+% An open Studio can retain an older assembled callback that only accepts a
+% single PC and silently loses vector selections. Resolve the active preset
+% here too, before deciding whether to open the component selector.
+workflowStep=getappdata(0,'deconf_std_workflow_step');
+if isstruct(workflowStep)&&isfield(workflowStep,'name')&&strcmpi(strtrim(workflowStep.name),'PCA / ICA')&& ...
+        isfield(workflowStep,'pcaAutoApply')&&isequal(workflowStep.pcaAutoApply,1)
+    assert(isfield(workflowStep,'pcaDropPC')&&isnumeric(workflowStep.pcaDropPC)&& ...
+        ~isempty(workflowStep.pcaDropPC)&&all(isfinite(workflowStep.pcaDropPC(:)))&& ...
+        all(workflowStep.pcaDropPC(:)>=1&workflowStep.pcaDropPC(:)==round(workflowStep.pcaDropPC(:))), ...
+        'deConfUSIon:PCAComponents','Automatic PCA needs valid component numbers; review the preset.');
+    opts.autoSelect=unique(double(workflowStep.pcaDropPC(:)'),'stable');
+    opts.autoApply=true;
+    if isfield(workflowStep,'pcaNcomp')&&isscalar(workflowStep.pcaNcomp)&&isfinite(workflowStep.pcaNcomp)
+        opts.nCompMax=max(1,round(double(workflowStep.pcaNcomp)));
+    end
+end
 if ~isfield(opts,'basisMethod'),      opts.basisMethod = 'auto'; end
 if ~isfield(opts,'onProgress'),       opts.onProgress = []; end
 if ~isfield(opts,'showProgress'),     opts.showProgress = ~opts.autoApply; end
@@ -50,9 +66,13 @@ end
 % DECONF_OPTA_V1 : headless path - drop fixed components over all slices
 autoSel = round(double(opts.autoSelect(:)'));
 autoSel = autoSel(isfinite(autoSel) & autoSel >= 1);
-if ~isempty(autoSel) && ~isempty(opts.autoApply) && any(logical(opts.autoApply))
+if ~isempty(opts.autoApply) && any(logical(opts.autoApply))
+    assert(~isempty(autoSel),'deConfUSIon:PCAComponents', ...
+        'Automatic PCA needs component numbers; the manual selector will not be opened.');
     st = computePCA(struct('mode','all','zIndex',1,'nSlices',Z0,'sliceSpecific',false));
-    selected = autoSel(autoSel <= st.K);
+    assert(all(autoSel<=st.K),'deConfUSIon:PCAComponents', ...
+        'Requested PCA components are unavailable: the data supports only %d components.',st.K);
+    selected = autoSel;
     applyFlag = ~isempty(selected);
     if ~isempty(opts.logFcn) && isa(opts.logFcn,'function_handle')
         try, opts.logFcn(sprintf('PCA auto-removal: PC%s over all slices.',sprintf(' %d',selected))); catch, end

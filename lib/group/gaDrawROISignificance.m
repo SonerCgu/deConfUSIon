@@ -4,9 +4,13 @@ delete(findall(ax,'Tag','GA_ROI_PLabel'));delete(findall(ax,'Tag','GA_ROI_PBrack
 if ~isfield(R,'stats')||~isfield(R.stats,'p')||~isscalar(R.stats.p),return;end
 if ~isfinite(R.stats.p),return;end
 p=R.stats.p;if p<0||p>1,return;end
-if p<.001,stars='***';elseif p<.01,stars='**';elseif p<.05,stars='*';else,stars='n.s.';end
+stars=gaSignificanceStars(p);
 showP=true;if isfield(S,'showPText'),showP=logical(S.showPText);end
 label=stars;if showP,label=[stars '   ' gaFormatPValue(p)];end
+% Keep the selected alternative visible in figures, including PNG/PPT exports.
+if isfield(R.stats,'tailLabel')&&~isempty(R.stats.tailLabel)
+    label=[label ' | ' R.stats.tailLabel];
+end
 pos=getpixelposition(ax,true);height=max(90,pos(4));
 gap=8/height; tick=6/height; top=12/height; textHeight=20/height;
 yl=ylim(ax);span=diff(yl);if ~isfinite(span)||span<=0,return;end

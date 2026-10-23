@@ -1,7 +1,8 @@
-function scmCandidateTableColors(tbl,colors,preserve)
+function scmCandidateTableColors(tbl,colors,preserve,data)
 % Repaint the legacy candidate table without changing its viewport or data.
 if nargin<3 || ~preserve
-    set(tbl,'BackgroundColor',colors);return;
+    if nargin>=4,set(tbl,'Data',data);end
+    set(tbl,'BackgroundColor',colors);paintEmptyViewport(tbl,[0 0 0]);return;
 end
 % R2023b's legacy table resets its viewport even for BackgroundColor edits.
 % Isolate its Java bridge here; no downloaded findjobj dependency is needed.
@@ -13,7 +14,10 @@ try
         fig=ancestor(tbl,'figure');
         peer=matlab.graphics.internal.getFigureJavaFrame(fig);
         pane=findPane(peer.getFigurePanelContainer);
-        if isempty(pane),return;end
+        if isempty(pane)
+            if nargin>=4,set(tbl,'Data',data);end
+            return;
+        end
         setappdata(tbl,'CandidateScrollPane',pane);
     end
     view=pane.getViewport;point=view.getViewPosition;jt=view.getView;
@@ -26,10 +30,12 @@ try
         end
     end
 catch
+    if nargin>=4,set(tbl,'Data',data);end
     return;
 end
 cb=get(tbl,'CellSelectionCallback');set(tbl,'CellSelectionCallback',[]);
 guard=onCleanup(@()restoreCallback(tbl,cb));
+if nargin>=4,set(tbl,'Data',data);end
 set(tbl,'BackgroundColor',colors);drawnow nocallbacks;
 jt=view.getView;
 for k=1:numel(widths)
@@ -41,6 +47,27 @@ for k=1:size(cells,1)
     javaMethodEDT('changeSelection',jt,int32(cells(k,1)),int32(cells(k,2)),k>1,false);
 end
 javaMethodEDT('setViewPosition',view,point);drawnow nocallbacks;
+end
+
+function paintEmptyViewport(tbl,rgb)
+% MATLAB's row colors leave a white Swing viewport below short tables.
+% Color that unused area too; do not replace Data, selection or renderers.
+try
+    drawnow nocallbacks;
+    pane=getappdata(tbl,'CandidateScrollPane');
+    if isempty(pane)
+        peer=matlab.graphics.internal.getFigureJavaFrame(ancestor(tbl,'figure'));
+        pane=findPane(peer.getFigurePanelContainer);
+        if isempty(pane),return;end
+        setappdata(tbl,'CandidateScrollPane',pane);
+    end
+    color=javaObject('java.awt.Color',single(rgb(1)),single(rgb(2)),single(rgb(3)));
+    pane.setBackground(color);pane.getViewport.setBackground(color);
+    jt=pane.getViewport.getView;jt.setBackground(color);jt.setFillsViewportHeight(true);
+    setappdata(tbl,'CandidateDarkViewportApplied',true);
+catch
+    % Future non-Swing table renderers retain MATLAB's row colors.
+end
 end
 
 function pane=findPane(component)

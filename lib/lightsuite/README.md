@@ -30,6 +30,32 @@ Python / Allen streamline resources and independent validation.
 
 ## 3D fUSI workflow
 
+An existing animal can be registered again with **Open existing project →
+Re-register (new version)**. The new run is saved inside the selected project as
+`Registration_yyyyMMdd_HHmmss_SSS`. **Edit copied landmarks** retains editable
+copies of the pairs; **Recheck orientation** starts at orientation confirmation
+without carrying pairs into a changed coordinate system. The anatomy and verified
+spacing are reused, and the previous fit and outputs are preserved. Fit, review
+and save the new version, then load that exact timestamped subfolder in SCM.
+If both affine and nonlinear views have the same tilt, inspect orientation and
+the affine alignment first. Correct uncertain pairs and distribute reliable
+vessel correspondences across all three dimensions; review unused anatomy too.
+
+**Continue automatically between steps** is enabled by default. Click
+**1 Prepare + start**, confirm orientation, then mark paired landmarks in the
+editor that opens. **Save pairs (S)** saves while you continue editing;
+the green **Save + continue to fit** saves, closes the editor, fits, and opens
+registration review. After inspecting the fit, **Accept + save all outputs**
+closes review and saves mapped anatomy, native regions, available atlas
+backgrounds and masks. Closing or rejecting review does not export. Disable
+automatic continuation to run the numbered steps individually.
+
+Numbered coloured buttons perform the workflow; blue **Help** buttons provide
+instructions. The active step is emphasized. Animal and scan appear in window
+titles and headers; activity indicators distinguish **BUSY** from **READY**.
+Important Command Window messages include a bold stage label, time, identity
+and output path. The final **SAVED** state identifies the project folder.
+
 1. The recording loaded in Studio is selected automatically, including its
    current in-memory processing result. Browse or edit **Recording** to choose
    a different file. Choose a **new dedicated output folder**. For ordinary MAT
@@ -44,13 +70,13 @@ Python / Allen streamline resources and independent validation.
    retained spacing agree. v7.3 header inspection never loads the movie. The status line
    names the metadata source. Unsupported headers still need measured spacing
    in **millimetres along each original array dimension**; units are never
-   inferred from numerical magnitude. **Prepare anatomy** has a cancellable
+   inferred from numerical magnitude. **1 Prepare + start** has a cancellable
    progress window for sampling, median calculation, atlas loading and saving.
 3. Confirm orientation using the atlas / sample preview. The signed permutation
    maps native dimensions onto **AP × DV × ML**. Closing this dialog cancels;
    it does not silently accept the default permutation. Probe-coordinate origin
    is preserved as provenance and is not interpreted as a CCF origin.
-4. Use **Place / edit landmarks** to open the dark paired-point workspace.
+4. Use **3 Edit landmarks** to open the dark paired-point workspace.
    Both images show full slices. Choose coronal/AP, horizontal/DV or
    sagittal/ML views; each image has its own slider, previous/next buttons and
    editable slice number. The mouse wheel changes the image under the cursor.
@@ -58,18 +84,67 @@ Python / Allen streamline resources and independent validation.
    Click a recognizable vessel bifurcation in the **left sample** first, then
    navigate and click the **same feature in the right atlas**. A yellow pending
    point becomes a numbered pair only after both clicks. Esc cancels the
-   pending point. The pair table jumps to existing points; delete removes the
-   selected pair. Zoom/pan are explicit inspection modes; return to **Mark
+   pending point. Right-click an image in marking mode to undo the last click:
+   undoing an atlas point keeps its sample pending for correction; another
+   right-click cancels that sample. **Delete selected pair** removes both
+   points in the selected row. Zoom/pan are explicit inspection modes; return to **Mark
    matching points** before annotating. **Mask Editor standard** is the default
    contrast, using the toolbox's existing equalized Doppler display function.
    Scrolling over either image panel (including its margins) changes only
    that panel. Contrast changes only the display.
-   **Save pairs** or `S` writes the upstream-compatible landmark file. An
+   **Load edited underlay...** opens this recording's **Visualization** folder.
+   Select a saved Mask Editor MAT bundle to use its edited anatomical pixels
+   for landmark placement. The image must match the native recording grid;
+   saved display flips are not reapplied, and the overlay/signal mask is not
+   used to hide vessels. The selection is remembered in `landmark_underlay.mat`
+   and carried into new registration versions. Fitting still uses the original
+   anatomical template; landmark coordinates and physical spacing stay native.
+   Marker edits reuse the displayed planes; changing one slice recomputes only
+   that panel. **UNSAVED CHANGES**, **PENDING POINT** and timestamped **SAVED**
+   badges distinguish editing state. Complete or cancel pending pairs before
+   saving. **Save pairs** or `S` writes the upstream-compatible landmark file. An
    existing landmark file is backed up before its first replacement. A fitted
    project opens read-only so its landmarks cannot silently invalidate a fit.
+
+Registration review offers **Original anatomy / Edited underlay**, independent
+**Sample contrast / Atlas contrast**, a true **Atlas opacity** blend, and presets
+to emphasize either image or show boundaries on anatomy. The mapped-anatomy
+review also has separate atlas/anatomy contrast controls. These controls affect
+the display only. Both registered atlas stages are sampled directly from the
+full reference, so nonlinear displacement cannot expose blank strips from an
+intermediate affine crop.
+
+In SCM, the LightSuite background selector also includes **Recorded anatomy**
+when the exported native mask bundle contains the original anatomical template.
+The dashed box marks the acquired field; reference tissue outside it has no
+measured functional signal. Changing the atlas display cannot recover data
+outside acquisition coverage. Atlas abbreviations such as `PAL-unassigned` are
+displayed as `PAL`; the full name (`Pallidum, unassigned`) and label ID remain
+available in the region list, without merging these voxels into named nuclei.
+
+SCM starts with **Show atlas outside acquired field** unchecked. This keeps
+the atlas and measured PSC on the same visible acquisition extent without
+stretching the registration. Check it to inspect the full atlas reference;
+the dashed box then separates measured voxels from reference-only tissue.
+Slice browsing, affine/B-spline switching and ROI values use the original
+native coordinates in both views.
+
+When the chosen LightSuite parent folder contains exported registration
+revisions, SCM asks which version to load and shows each fit's timestamp and
+landmark count. Selecting a revision folder or its region MAT file directly
+loads that exact version. An incomplete revision is not offered as an atlas.
+Registration review now reports saved landmark residuals and the AP/DV/ML
+span of the marked points alongside the inverse-consistency check. A small
+round-trip error alone does not establish anatomical accuracy; inspect large
+pair residuals and slices beyond the marked planes before accepting a fit.
+
    At least five noncoplanar pairs are required, spread over all three spatial
    directions. This is a minimum for fitting, not an accuracy guarantee. The
-   paper used many more landmarks. Unequal sample / atlas sets are rejected.
+   paper reports a median of **219 landmarks per mouse**, not a required
+   threshold. Add confident pairs in rounds, distributed across the acquired
+   volume, and check unused anatomy after fitting. Neither point count nor a
+   low landmark residual establishes anatomical accuracy. Unequal sample /
+   atlas sets are rejected.
 5. Fit the affine and B-spline chain. The default final B-spline spacing is
    **1.6 mm** and landmark weight **0.1**, following the fUS workflow.
    A cancellable progress window and Command Window percentages report the
@@ -106,6 +181,51 @@ Python / Allen streamline resources and independent validation.
 This method is **landmark-guided registration with automatic optimization**,
 not a completely unattended atlas fit. Registration and activation statistics
 are separate; a good image alignment does not validate a biological effect.
+
+### 3D Model and movies
+
+In the **3D Model GUI → Atlas → Load atlas transform**, choose a LightSuite
+folder, or select its `transform_params.mat`. Select the complete project
+containing the session and saved forward/inverse B-spline files. No fitting is
+performed. The model uses the published LightSuite reference and offers
+**Affine + B-spline / Affine only**. Functional frames remain limited to acquired
+coverage; camera-rotation and PSC time-series exports use the same mapping.
+
+The selected project/stage is remembered in the scan's
+`Registration/3DModel_Atlas.json`. Where the recording folder explicitly identifies
+its parent animal, `3DModel_LightSuiteAtlas.json` shares the choice with sibling
+scans of that animal. Opening the 3D Model starts with the supplied recording
+and does not search for or load a LightSuite project. Use **Load atlas transform**
+when you want to reuse a saved fit; grid and physical spacing are checked before
+applying it. **Native view** clears
+the choice for that scan. Exported movie/PNG settings include the project path,
+registration stage, saved-fit signature and acquisition coverage.
+
+**Register / adjust atlas → LightSuite** opens the LightSuite workspace. Existing
+projects can be resumed there, including timestamped revisions. Saving the
+outputs updates the originating 3D model automatically; other scans can load
+that same saved folder instead of repeating landmark placement and fitting.
+
+The 3D Model **Masks** tab can load a saved Mask Editor underlay and both masks,
+or replace only the PSC overlay mask. The brain mask and overlay mask have
+independent switches. Saved processed underlays retain their edited contrast
+and native slice orientation; the import checks the recording grid. The picker
+starts in the current recording's Visualization folder when available.
+
+Atlas source selection and loading use small modeless popups. Loading closes
+the temporary progress window and returns the existing model to the foreground.
+
+PNG and MP4 exports use the original **1080-pixel longest-edge** default.
+**View → Movie resolution** also offers 720, 1920 and the display size. Large
+exports render at the requested raster size even on smaller monitors; only
+the progress preview is reduced to fit the screen. Exports reuse the current
+display grid, transfer settings and camera; no additional atlas loading or
+high-detail remapping runs when export starts. Both the live preview and saved
+files retain the black scene background, including off-screen HD captures.
+Slice stacks already sample the full atlas slabs. MP4 encoding remains at
+maximum quality. This improves export detail without increasing the acquired
+ultrasound resolution or changing the PSC baseline. Settings JSON records the
+actual raster dimensions and atlas sampling used for the export.
 
 ### Script API
 
@@ -151,12 +271,53 @@ diagnosis and never replaces the saved inverse. These numerical checks are
 separate from anatomical accuracy; neither a passed check nor an attractive
 overlay establishes accurate anatomical registration.
 
-After accepting a fit, **Export native region labels** saves
-`LightSuite_Native_Regions.mat`. Load it as an atlas in SCM, Video or functional
+After accepting a fit, **SAVE / EXPORT BOTH ATLAS STAGES + MASKS** saves
+`LightSuite_Native_Regions.mat` (Affine + B-spline) and
+`LightSuite_Affine_Native_Regions.mat` (Affine only). Each has matching
+`_Native_Backgrounds.mat` and `_Native_Mask.mat` companions. Load either
+region file as an atlas in SCM, Video or functional
 connectivity on the **same native recording grid**. IDs are dense structure
 labels with a matching saved name table. Hemisphere maps are warped through the
 same affine and B-spline chain. Cropped, resampled or atlas-space recordings
 must not use this native bundle. It is not an affine `Transformation.mat`.
+
+The same export saves `LightSuite_Native_Backgrounds.mat` beside the region
+bundle. SCM and Video offer **Vascular**, **Histology** and **Regions** in the
+background selector. Continuous backgrounds use linear interpolation through
+the accepted affine and B-spline chain, followed by the original native axis
+order; choosing a background does not resample the functional recording.
+Region names and hemisphere masks remain available in all three modes.
+SCM's **Registration stage** selector switches the backgrounds, labels,
+boundaries and hemisphere lookup together. **EXPORT ATLAS** copies both
+stages and their companions into a new portable folder.
+Continuous atlas backgrounds retain available reference detail in a separate
+display texture, with linear display sampling and a stable intensity window
+across slices. Functional values and region IDs stay on their original grid.
+The full reference canvas extends beyond the recording rectangle, so tilted
+or shifted registrations do not crop the atlas at the acquisition edges.
+SCM preserves the native scan orientation by default. Optional **Upright atlas
+view** rotates the atlas, signal and ROI graphics together, using the saved
+affine orientation. This changes viewing only; ROI coordinates and measurements
+remain native. Regions and continuous backgrounds use the same expanded
+reference coordinates. Image and series exports retain the viewing choice.
+Histology uses the Allen CCF2020 average template (install dependencies with
+`-IncludeHistology` if it is missing). Its 10 µm array is block-averaged to the
+50 µm atlas grid using bounded memory before transformation.
+
+In **LOAD ATLAS**, choose **LightSuite folder** to open a LightSuite project
+directly, or **Normal folder** for the standard registration outputs.
+**Single file** remains available for individual saved underlays. The
+LightSuite folder picker starts at the last loaded project or this recording's
+`Registration/LightSuite` folder when available.
+
+Opening an older project in SCM or Video generates missing stages and
+backgrounds once from its accepted saved registration, without refitting.
+Keep the region and background files together when moving exported underlays.
+If only the old region file is available, open the complete LightSuite project
+and export again; backgrounds cannot be recovered from label IDs alone.
+In the LightSuite workspace, **Open existing project** starts in the selected
+animal/recording's LightSuite folder when present, otherwise its analysis
+folder.
 
 ## Serial histology and expression measurements
 

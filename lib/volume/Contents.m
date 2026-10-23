@@ -9,6 +9,12 @@
 %   fusiMapAtlasSlabs
 %   fusiScanSequence
 %   fusiVolumeAtlasContext
+%   fusiVolumeAtlasLink
+%   fusiVolumeAtlasProgress
+%   fusiVolumeAtlasSourcePopup
+%   fusiVolumeReadMaskBundle
+%   fusiVolumeLightSuiteContext
+%   fusiVolumeLightSuiteSelection
 %   fusiVolumeAtlasTransformFolder
 %   fusiVolumeAutoAppearance
 %   fusiVolumeBaseline

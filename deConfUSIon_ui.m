@@ -365,6 +365,8 @@ switch lower(topicKey)
     case 'mask'
         definition='A mask is a binary inclusion function that limits displayed maps, traces, and region summaries.';
         math='M(x)∈{0,1}; a masked mean is mean(S(x,t) for M(x)=1). Painting changes M only and never changes the raw acquisition.';
+        workflow='Select BRAIN / UNDERLAY or OVERLAY / SIGNAL, then Rectangular, Ellipse, or Anatomical. Overlay previews default to Follow slice size: each slice gets its own fitted size; resizing one preview adjusts the others proportionally. Turn it off for one fixed box. Underlay defaults to fixed geometry. Scroll to review, then Apply to all slices or the current slice. Smooth: All slices smooths each plane independently. SAVE UNDERLAY, OVERLAY or BOTH writes the result.';
+        checks='Rectangle/ellipse include weak signal inside their bounds; they are geometric selections. Anatomical follows the Doppler envelope. Empty slices remain empty, and existing brain-mask holes also restrict overlay generation and smoothing. Cancel leaves masks unchanged. Apply and Smooth edit masks in memory; SAVE writes them to disk.';
     case 'motion_correction'
         definition='Motion correction groups frame rejection, robust despiking, and scrubbing so each can create a named derived dataset.';
         math='Robust outliers use median/MAD Z scores; scrubbing can use DVARS, the RMS frame-to-frame change across voxels.';

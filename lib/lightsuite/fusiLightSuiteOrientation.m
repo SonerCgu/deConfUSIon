@@ -21,7 +21,7 @@ status=uicontrol(f,'Style','text','Units','normalized','Position',[.03 .055 .66 
     'String','','BackgroundColor',f.Color,'ForegroundColor',[1 .65 .3],'FontSize',11,'HorizontalAlignment','left');
 uicontrol(f,'Style','pushbutton','Units','normalized','Position',[.73 .04 .24 .07], ...
     'String','Confirm geometry','FontSize',13,'FontWeight','bold','Callback',@accept);
-fusiLightSuiteStyle(f);refresh();uiwait(f);if isgraphics(f),delete(f);end
+fusiLightSuiteStyle(f);fusiLightSuiteLabelWindow(f,session);refresh();uiwait(f);if isgraphics(f),delete(f);end
     function refresh(~,~)
         for j=1:3,map(j)=values(dd(j).Value);end
         if ~isequal(sort(abs(map)),1:3),status.String='Choose each input dimension once.';return;end

@@ -1,4 +1,4 @@
-function [slabs,cache]=fusiMapAtlasSlabs(S,atlas,g,M,centers,thicknessUm,reference,cache)
+function [slabs,cache]=fusiMapAtlasSlabs(S,atlas,g,M,centers,thicknessUm,reference,cache,queryMapper)
 % Sample only the requested full-resolution atlas slabs from a native frame.
 % Never allocate a full atlas-sized movie or invent PSC outside acquisition.
 av=double(atlas.VoxelSize(:)');n=max(1,round(thicknessUm/av(1)));
@@ -13,6 +13,10 @@ for k=1:numel(centers)
 end
 if isempty(cache)||~isequal(cache.key,key)
 [dv,lr,ap]=ndgrid(single(1:size(atlas.Histology,2)),single(1:size(atlas.Histology,3)),single(allAP));
+if nargin>=9&&isa(queryMapper,'function_handle')
+points=queryMapper([dv(:) ap(:) lr(:)]);q=cell(1,3);
+for axis=1:3,q{axis}=reshape(single(points(:,axis)),size(ap));end
+else
 points=[dv(:) ap(:) lr(:) ones(numel(ap),1,'single')]/single(M);
 prepared={reshape(points(:,2),size(ap)),reshape(points(:,1),size(ap)),reshape(points(:,3),size(ap))};
 shape=double(g.originalSize);q=cell(1,3);
@@ -20,6 +24,7 @@ for axis=1:3
     value=1+(prepared{axis}-1)*av(axis)/double(g.originalSpacingUm(g.permutation(axis)));
     if isfield(g,'flipAxes')&&ismember(axis,g.flipAxes),value=shape(g.permutation(axis))+1-value;end
     q{g.permutation(axis)}=value;
+end
 end
 q{3}=q{3}-S.slices(1)+1;
 brain=permute(fusiAtlasBrainMask(atlas,atlas.Regions(allAP,:,:)),[2 3 1]);

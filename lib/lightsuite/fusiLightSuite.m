@@ -17,6 +17,7 @@ switch lower(char(action))
     case 'orientation',varargout{1}=setOrientation(varargin{:});
     case 'geometry',varargout{1}=spacingFromMeta(fusiLightSuiteConfig(),varargin{1});
     case 'exportregions',varargout{1}=exportNativeRegions(varargin{:});
+    case 'exportunderlays',varargout{1}=exportNativeUnderlays(varargin{:});
     case 'revise',varargout{1}=newProjectFromFit(varargin{:});
     case 'validatefit',varargout{1}=validateFit(varargin{:});
     case 'inspectfit',varargout{1}=inspectFit(varargin{:});
@@ -31,65 +32,111 @@ reportExport(progressFcn,NaN,'Checking accepted fit and native geometry...');
 s=readSession(folder);assert(s.fitReviewed,'Review and accept the registration overlays before exporting region labels.');
 guard=fusiLightSuitePaths(s.config); %#ok<NASGU>
 validateFit(s,false);
-reportExport(progressFcn,NaN,'Mapping atlas region IDs onto the acquired native grid...');
-[~,labels]=transformFusiAnnotationVolume(s.opts);
-[~,~,regions]=resampleAnnotation(s.opts.annotation,s.opts.parcelinfo,'structure');
-tr=load(fullfile(s.opts.savepath,'transform_params.mat'));
+reportExport(progressFcn,NaN,'Mapping both atlas stages onto the acquired native grid...');
+[referenceLabels,~,regions]=resampleAnnotation(s.opts.annotation,s.opts.parcelinfo,'structure');
+sampler=fusiLightSuiteAtlasSampling(s,progressFcn);
 reportExport(progressFcn,NaN,'Mapping anatomical hemispheres onto the native grid...');
-p=s.opts.permute_sample_to_atlas;permutedNative=s.inputSize(abs(p));
 H=uint8(zeros(size(s.opts.annotation)));mid=size(H,3)/2;
 % Official Allen CCF2020 ML increases from anatomical left to right (PIR).
 H(:,:,1:floor(mid))=2;H(:,:,floor(mid)+1:end)=1;H(s.opts.annotation==0)=0;
-Haff=imwarp(H,imref3d(size(H)),tr.tform_affine_samp20um_to_atlas_10um_px.invert, ...
-    'nearest','OutputView',imref3d(size(labels)));
-H=transformAnnotationVolume(fullfile(s.opts.savepath,'bspline_atlas_to_samp_20um.txt'),Haff,s.opts.atlas_res);
-labels=imresize3(labels,permutedNative,'nearest');H=imresize3(H,permutedNative,'nearest');
-for k=1:3,if p(k)<0,labels=flip(labels,k);H=flip(H,k);end,end
-labels=ipermute(labels,abs(p));H=ipermute(H,abs(p));labels(H==0)=0;
 info=struct('name',{cellstr(regions.name)},'acr',{cellstr(regions.acronym)}, ...
     'rgb',[regions.R regions.G regions.B]/255,'groupingMode','Structure');
-[~,excluded]=fusiAtlasRegionCatalog(labels,info);
-bundle=struct('atlasRegionLabels3D',uint16(labels),'atlasInfoRegions',info, ...
-    'leftHemisphereMask',H==2,'rightHemisphereMask',H==1, ...
-    'lightSuiteNativeMeta',struct('kind','deConfUSIon_LightSuite_native_regions', ...
+[~,exportID]=fileparts(tempname);
+baseMeta=struct('kind','deConfUSIon_LightSuite_native_regions', ...
     'nativeSize',s.inputSize(1:3),'voxelSizeMm',s.opts.sample_res, ...
     'arrayOrder','same input array dimensions; no new orientation or crop', ...
     'atlasAxes','AP DV ML','reference',s.reference,'transformFile',fullfile(s.opts.savepath,'transform_params.mat'), ...
-    'sourceCommit',s.sourceCommit,'fitReviewed',true,'nearestLabels',true, ...
+    'sourceCommit',s.sourceCommit,'fitReviewed',true,'nearestLabels',true,'exportedAt',datestr(now,30), ...
+    'exportSchema',3,'exportID',exportID, ...
     'hemisphereConvention','official CCF2020 PIR: first ML half=left; second ML half=right', ...
-    'explanation','Nonlinear atlas labels sampled onto the exact native recording grid. Separate from affine Transformation.mat.'));
-save(fullfile(s.opts.savepath,'LightSuite_Native_Regions.mat'),'-struct','bundle','-v7.3');
-reportExport(progressFcn,NaN,'Saving anatomy and editable native tissue mask...');
-brainMask=labels>0&~ismember(labels,excluded);overlayMask=brainMask; %#ok<NASGU>
-brainImage=single(s.opts.sample);lightSuiteMaskMeta=bundle.lightSuiteNativeMeta; %#ok<NASGU>
-save(fullfile(s.opts.savepath,'LightSuite_Native_Mask.mat'), ...
-    'brainMask','overlayMask','brainImage','lightSuiteMaskMeta','-v7.3');
-reportExport(progressFcn,1,'Native labels and editable tissue mask saved.');
+    'explanation','Registered atlas sampled onto the exact original recording grid; no functional data are resampled.');
+stages={'affine_bspline','affine'};bundles=cell(1,2);
+for stageIndex=1:2
+    files=fusiLightSuiteNativeFiles(s.opts.savepath,stages{stageIndex});
+    [labels,displayLabels]=sampler.sample(referenceLabels,files.stage,'nearest');
+    hemisphere=sampler.sample(H,files.stage,'nearest',false);labels(hemisphere==0)=0;
+    q=baseMeta;q.registrationStage=files.stage;q.registrationStageName=files.name;
+    bundle=struct('atlasRegionLabels3D',uint16(labels),'atlasInfoRegions',info, ...
+        'leftHemisphereMask',hemisphere==2,'rightHemisphereMask',hemisphere==1,'lightSuiteNativeMeta',q, ...
+        'atlasDisplayRegionLabels3D',uint16(displayLabels),'lightSuiteDisplayGeometry',sampler.geometry);
+    fusiLightSuiteRegionInput(bundle,s.inputSize(1:3));
+    save(files.regions,'-struct','bundle','-v7.3');bundles{stageIndex}=bundle;
+    reportExport(progressFcn,NaN,['Saving editable native tissue mask: ' files.name '...']);
+    [~,excluded]=fusiAtlasRegionCatalog(labels,info);
+    brainMask=labels>0&~ismember(labels,excluded);overlayMask=brainMask; %#ok<NASGU>
+    brainImage=single(s.opts.sample);lightSuiteMaskMeta=q; %#ok<NASGU>
+    save(files.mask,'brainMask','overlayMask','brainImage','lightSuiteMaskMeta','-v7.3');
+end
+bundle=bundles{1};
+[backgrounds,affineBackgrounds]=fusiLightSuiteNativeBackgrounds(s,bundles{1}.lightSuiteNativeMeta, ...
+    progressFcn,bundles{2}.lightSuiteNativeMeta,sampler);
+files=fusiLightSuiteNativeFiles(s.opts.savepath);save(files.backgrounds,'-struct','backgrounds','-v7.3');
+files=fusiLightSuiteNativeFiles(s.opts.savepath,'affine');save(files.backgrounds,'-struct','affineBackgrounds','-v7.3');
+reportExport(progressFcn,1,'Both stages saved: native regions, atlas backgrounds and editable tissue masks.');
+fusiLightSuiteLog('SAVED',s,'AFFINE and AFFINE + B-SPLINE native atlases, backgrounds and masks.\nFolder: %s',s.opts.savepath);
+end
+
+function backgrounds=exportNativeUnderlays(folder,progressFcn,checkFit)
+if nargin<2,progressFcn=[];end
+if nargin<3,checkFit=true;end
+s=readSession(folder);assert(s.fitReviewed,'Accept the LightSuite registration before exporting backgrounds.');
+if checkFit,validateFit(s,false);end
+files=fusiLightSuiteNativeFiles(s.opts.savepath);affineFiles=fusiLightSuiteNativeFiles(s.opts.savepath,'affine');
+if ~isfile(files.regions)||~isfile(affineFiles.regions)
+    exportNativeRegions(s,progressFcn);backgrounds=load(files.backgrounds);return;
+end
+S=load(files.regions);A=load(affineFiles.regions);
+if ~isfield(S.lightSuiteNativeMeta,'exportSchema')||S.lightSuiteNativeMeta.exportSchema<3|| ...
+        ~isfield(A.lightSuiteNativeMeta,'exportSchema')||A.lightSuiteNativeMeta.exportSchema<3|| ...
+        ~isfield(S.lightSuiteNativeMeta,'exportID')||~isfield(A.lightSuiteNativeMeta,'exportID')|| ...
+        ~strcmp(S.lightSuiteNativeMeta.exportID,A.lightSuiteNativeMeta.exportID)
+    exportNativeRegions(s,progressFcn);backgrounds=load(files.backgrounds);return;
+end
+fusiLightSuiteRegionInput(S,s.inputSize(1:3));
+fusiLightSuiteRegionInput(A,s.inputSize(1:3));
+[backgrounds,affineBackgrounds]=fusiLightSuiteNativeBackgrounds(s,S.lightSuiteNativeMeta,progressFcn,A.lightSuiteNativeMeta);
+save(files.backgrounds,'-struct','backgrounds','-v7.3');
+save(affineFiles.backgrounds,'-struct','affineBackgrounds','-v7.3');
 end
 
 function reportExport(callback,fraction,message)
 if ~isempty(callback),callback(fraction,message);end
 end
 
-function s=newProjectFromFit(folder,destination)
+function s=newProjectFromFit(folder,destination,mode)
 % Preserve the old fit, while making its paired landmarks editable again.
-s=readSession(folder);cfg=s.config;cfg.outputFolder=char(destination);
+s=readSession(folder);original=s.opts.savepath;
+if nargin<3||isempty(mode),mode='landmarks';end
+assert(any(strcmp(mode,{'landmarks','orientation'})),'Choose landmarks or orientation revision mode.');
+if nargin<2||isempty(destination)
+    base=fullfile(original,['Registration_' char(datetime('now','Format','yyyyMMdd_HHmmss_SSS'))]);
+    destination=base;attempt=1;
+    while isfolder(destination)||isfile(destination),destination=sprintf('%s_%02d',base,attempt);attempt=attempt+1;end
+end
+cfg=s.config;cfg.outputFolder=char(destination);
 validatePreparationDestination(cfg);
 assert(~isfolder(destination)||isempty(setdiff({dir(destination).name},{'.','..'})), ...
     'Choose a new empty folder for the revision; existing outputs are preserved.');
 if ~isfolder(destination),mkdir(destination);end
-original=s.opts.savepath;s.opts.savepath=char(destination);s.config.outputFolder=char(destination);
+s.opts.savepath=char(destination);s.config.outputFolder=char(destination);
 s.fitReviewed=false;s.registrationComplete=false;s.created=datestr(now,30);
 s.revisedFrom=original;
-for name={'numericValidation','reviewed','landmarkSummary'}
+for name={'numericValidation','landmarkValidation','reviewed','landmarkSummary','inverseRebuilt'}
     if isfield(s,name{1}),s=rmfield(s,name{1});end
 end
 cp=fullfile(original,'control_points_minimal.mat');
-if isfile(cp)
+if strcmp(mode,'orientation')
+    % Landmarks belong to the old prepared orientation and cannot be reused
+    % after changing the signed permutation. Preserve them only in the parent.
+    s.orientationConfirmed=false;s.config.orientationConfirmed=false;
+elseif isfile(cp)
     [ok,message]=copyfile(cp,fullfile(destination,'control_points_minimal.mat'));
     assert(ok,'Cannot copy the paired landmarks: %s',message);
 end
+displayFile=fullfile(original,'landmark_underlay.mat');
+if isfile(displayFile),copyfile(displayFile,fullfile(destination,'landmark_underlay.mat'));end
 saveSession(s);
+fusiLightSuiteLog('PREPARED',s,'New registration version (%s).\nPrevious fit preserved in: %s\nNew project: %s',mode,original,destination);
 end
 
 function s=setOrientation(folder,permutation)
@@ -215,7 +262,7 @@ session=struct('schema','deConfUSIon-LightSuite-v1','workflow','fusi', ...
 reportPreparation(cfg,NaN,'Saving anatomy, geometry and registration project...');
 saveSession(session);
 reportPreparation(cfg,1,'Anatomy prepared. Confirm orientation next.');
-fprintf('Prepared %s from %d sampled frames; raw recording was not changed.\n',mat2str(size(template)),numel(frames));
+fusiLightSuiteLog('PREPARED',session,'Anatomy %s from %d sampled frames.\nProject: %s',mat2str(size(template)),numel(frames),folder);
 end
 
 function session=readSession(folder)
@@ -271,13 +318,13 @@ points=validatePoints(session);guard=fusiLightSuitePaths(session.config); %#ok<N
 check=fusiLightSuiteDependencies(session.config);assert(check.fusiReady,'Missing optional dependencies.');
 assert(~isfile(fullfile(session.opts.savepath,'transform_params.mat')), ...
     'deConfUSIon:LightSuiteFitExists','A transform already exists. Use a new project folder for a different fit; existing results are preserved.');
-progressGuard=fusiLightSuiteFitProgress('begin',progressFcn); %#ok<NASGU>
+progressGuard=fusiLightSuiteFitProgress('begin',progressFcn,session); %#ok<NASGU>
 multiobjRegistrationFusi(session.opts,session.config.landmarkWeight,false);
 fusiLightSuiteFitProgress('stage','4/4 Numerical transform checks and saving');
 session.numericValidation=validateFit(session,true);
 session.registrationComplete=true;session.landmarkSummary=points;session.fitReviewed=false;saveSession(session);
 fusiLightSuiteFitProgress('update',1,'Fit saved; review all diagnostic overlays.');
-fprintf('Fit completed. Review affine AND B-spline overlays before applying to measurements.\n');
+fusiLightSuiteLog('FIT SAVED',session,'Review the affine AND B-spline alignment before accepting.\nProject: %s',session.opts.savepath);
 end
 
 function result=applyRegistration(folder,data,saveFullVolumes)
@@ -311,7 +358,8 @@ s=readSession(folder);
 if nargin>1&&logical(accept)
     assert(isfile(fullfile(s.opts.savepath,'transform_params.mat')), ...
         'Run registration, then inspect the affine and nonlinear volumes in all three planes.');
-    s.numericValidation=validateFit(s,false);s.fitReviewed=true;s.reviewed=datestr(now,30);saveSession(s);
+    s.numericValidation=validateFit(s,false);s.landmarkValidation=fusiLightSuiteLandmarkResiduals(s);
+    s.fitReviewed=true;s.reviewed=datestr(now,30);saveSession(s);
 elseif nargin>1
     s.fitReviewed=false;
     if isfield(s,'reviewed'),s=rmfield(s,'reviewed');end
@@ -403,15 +451,17 @@ try
     report.validation=validateFit(folder,false);report.passed=true;
     r=report.validation.roundTrip;
     report.message=sprintf('Numerical check passed: max %.3g mm; p95 %.3g mm. Now inspect anatomical alignment in all three planes.',r.maxMm,r.p95Mm);
+    report.landmarks=fusiLightSuiteLandmarkResiduals(readSession(folder));
+    report.message=sprintf('%s\n%s',report.message,report.landmarks.message);
 catch ME
-    report.message=ME.message;report.identifier=ME.identifier;
+    report.passed=false;report.message=ME.message;report.identifier=ME.identifier;
 end
 end
 
 function session=repairInverse(folder,progressFcn)
 if nargin<2,progressFcn=[];end
 session=readSession(folder);guard=fusiLightSuitePaths(session.config); %#ok<NASGU>
-progressGuard=fusiLightSuiteFitProgress('begin',progressFcn); %#ok<NASGU>
+progressGuard=fusiLightSuiteFitProgress('begin',progressFcn,session); %#ok<NASGU>
 fusiLightSuiteFitProgress('stage','Rebuilding inverse; keeping the saved fit until checks pass');
 session.numericValidation=validateFit(session,true);
 session.registrationComplete=true;session.fitReviewed=false;
