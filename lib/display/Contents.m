@@ -11,6 +11,8 @@
 %   fusiDrawRegionBoundaries
 %   fusiDrawScaleBar
 %   fusiFiniteDisplayLimits
+%   fusiGeometricMaskDialog
+%   fusiGeometricMaskVolume
 %   fusiLiveSearch
 %   fusiMovieDisplayLimits
 %   fusiOverlayAppearance
@@ -23,5 +25,7 @@
 %   fusiRegionListDialog
 %   fusiResizeDisplayLayer
 %   fusiScanSequenceDialog
+%   fusiSmoothMaskVolume
+%   fusiSliceMaskBounds
 %   fusiStandardDopplerDisplay
 %   fusiVideoExportDialog

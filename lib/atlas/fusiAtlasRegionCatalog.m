@@ -8,7 +8,7 @@ ids=unique(abs(double(labels(:))));ids=ids(isfinite(ids)&ids>0&ids==round(ids));
 valid=abs(double(labels(:)));valid=valid(isfinite(valid)&valid>=1&valid<=numel(names)&valid==round(valid));
 counts=accumarray(valid,1,[numel(names) 1]);
 for id=1:numel(names)
- name=names{id};acr='';if id<=numel(acronyms),acr=acronyms{id};end
+ name=names{id};acr='';if id<=numel(acronyms),acr=fusiAtlasDisplayAcronym(acronyms{id});end
  % Do not confuse ventral brain subdivisions with ventricles.
  nonTissue=~isempty(regexpi(name,'\<ventricles?\>|\<ventricular (system|space|cavity)|cerebral aqueduct|choroid plexus','once')) || ...
      any(strcmpi(strtrim(name),{'background','outside','root','unlabeled','unlabelled'}));

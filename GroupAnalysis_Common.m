@@ -265,6 +265,7 @@ for r = 1:size(S.subj,1)
         S.subj{r,9} = 'Not used';
     end
 end
+S.subj=gaSyncAnimalPairIDs(S.subj);
 end
 
 function out = mergeUniqueStable(a,b)
@@ -712,6 +713,7 @@ st=R.stats;
 % values without implying that the new reporting fields were recorded.
 fallback=struct('effect',NaN,'effectLabel','Not recorded in legacy result', ...
     'confidenceLevel',NaN,'ci',[NaN NaN], ...
+    'tail','Not recorded in legacy result','alternative','Not recorded in legacy result', ...
     'multiplicity','Unadjusted p-value; multiplicity not recorded in legacy result', ...
     'warnings',{{}});
 fields=fieldnames(fallback);
@@ -720,6 +722,7 @@ for k=1:numel(fields)
 end
 df=st.df;if ~isscalar(df),df=mat2str(df);end
 C={'Item','Value';'Test',st.type;'Endpoint',R.metricName; ...
+    'Test tail',st.tail;'Alternative hypothesis',st.alternative; ...
     'P-value (full precision)',st.p;'P-value (display only)',gaFormatPValue(st.p); ...
     'Alpha',st.alpha;'t statistic',st.t;'F statistic',st.F;'Degrees of freedom',df; ...
     'Effect (original signal units)',st.effect;'Effect direction',st.effectLabel; ...
@@ -735,6 +738,11 @@ end
 if isfield(st,'pairing'),C(end+1,:)={'Complete pairs',st.pairing.nPairs};end
 if isfield(R,'metricSettings')&&isfield(R.metricSettings,'selection')
     C(end+1,:)={'Endpoint selection',R.metricSettings.selection};
+end
+% Excel converts numeric Inf to 65535. Preserve unbounded one-sided CIs.
+for k=2:size(C,1)
+    value=C{k,2};
+    if isnumeric(value)&&isscalar(value)&&isinf(value),C{k,2}=sprintf('%g',value);end
 end
 end
 
@@ -2125,6 +2133,7 @@ assert(isscalar(S.alpha)&&isfinite(S.alpha)&&S.alpha>0&&S.alpha<1, ...
     'GroupAnalysis:Alpha','Alpha must be between 0 and 1.');
 stats.effect=NaN;stats.effectLabel='';stats.ci=[NaN NaN];stats.confidenceLevel=1-S.alpha;
 stats.warnings={};
+stats.tail='none';stats.tailLabel='No test';stats.alternative='';
 stats.multiplicity='Unadjusted p-value for this endpoint; no correction across multiple analyses.';
 testType = strtrimSafe(S.testType);
 
@@ -2216,13 +2225,22 @@ elseif strcmpi(testType,'One-way ANOVA (groups)')
 else
     error('GroupAnalysis:TestType','Unknown statistical test: %s',testType);
 end
-stats.tail='two-sided';
-if strcmpi(testType,'One-way ANOVA (groups)'), stats.tail='upper (F)'; end
+stats.tail='upper (F)';stats.tailLabel='ANOVA';stats.alternative='At least one group mean differs';
 if ~contains(testType,'ANOVA')
+    tail='both';if isfield(S,'testTail'),tail=lower(strtrimSafe(S.testTail));end
+    assert(any(strcmp(tail,{'both','right','left'})),'GroupAnalysis:TestTail','Choose both, right or left for the t-test tail.');
+    choices=testTailChoices(gNames,S);index=find(strcmp(tail,{'both','right','left'}));
+    stats.tail=tail;if strcmp(tail,'both'),stats.tail='two-sided';end
+    stats.tailLabel=choices{index};parts=strsplit(stats.tailLabel,': ');stats.alternative=strjoin(parts(2:end),': ');
+    if strcmp(tail,'right'),stats.p=tcdf_local(-stats.t,stats.df);
+    elseif strcmp(tail,'left'),stats.p=tcdf_local(stats.t,stats.df);end
     if isscalar(stats.df)&&isfinite(stats.df)&&stats.df>0&&isfinite(effectSE)&&isfinite(stats.p)
-        beta=betaincinv(S.alpha,stats.df/2,.5);
-        critical=sqrt(stats.df*(1-beta)/beta);
-        stats.ci=stats.effect+[-1 1]*critical*effectSE;
+        probability=S.alpha/2;if ~strcmp(tail,'both'),probability=S.alpha;end
+        beta=betaincinv(2*min(probability,1-probability),stats.df/2,.5);
+        critical=sign(.5-probability)*sqrt(stats.df*(1-beta)/beta);
+        if strcmp(tail,'right'),stats.ci=[stats.effect-critical*effectSE Inf];
+        elseif strcmp(tail,'left'),stats.ci=[-Inf stats.effect+critical*effectSE];
+        else,stats.ci=stats.effect+[-1 1]*critical*effectSE;end
     end
     if ~isfinite(stats.p)
         stats.warnings{end+1}='P-value unavailable: at least two finite observations per tested group/pair set and a defined variance are required.';
@@ -2230,6 +2248,15 @@ if ~contains(testType,'ANOVA')
         stats.warnings{end+1}='Zero sample variance: this is a degenerate t-test; review rounded values and measurement precision.';
     end
 end
+end
+
+function choices=testTailChoices(grpCol,S)
+names=sortGroupNamesStableGA(uniqueStable(grpCol(:)),S);
+a='first group';b='second group';
+if ~isempty(names),a=names{1};end
+if numel(names)>=2,b=names{2};end
+if strcmpi(S.testType,'One-sample t-test (vs 0)'),a=[a ' mean'];b='0';end
+choices={['Two-tailed: ' a ' ~= ' b],['One-tailed: ' a ' > ' b],['One-tailed: ' a ' < ' b]};
 end
 
 function [t,p,df] = oneSampleT_vec(x)
@@ -2434,6 +2461,7 @@ end
 
 function [R, cache] = runROITimecourseAnalysis(S, subjActive, cache)
 
+subjActive=gaSyncAnimalPairIDs(subjActive);
 validateROIMetricSettings(S);
 grpCol = colAsStr(subjActive,3);
 grpCol(cellfun(@isempty,grpCol)) = {'GroupA'};
@@ -2699,6 +2727,9 @@ end
 
 txt = strrep(txt,'\','/');
 txtU = upper(txt);
+% Older recordings put reconstruction resolution before the animal number.
+tokResolution=regexpi(txtU,'(?:B6J|C57BL6J|C57|BL6J)[_ -]+(?:256|512|1024|2048)[_ -]+(\d{3,6})(?=$|[^A-Z0-9])','tokens','once');
+if ~isempty(tokResolution),meta.animalID=tokResolution{1};end
 
 % ---------------------------------------------------------
 % OLD STYLE 1: ANIMAL_S1_FUS_2
@@ -3010,6 +3041,11 @@ end
 
 function subj = guessSubjectID(txt)
 subj = '';
+try
+    [animal,identity]=gaAnimalIdentity(txt);
+    if ~isempty(animal) && ~identity.conflict,subj=animal;return;end
+catch
+end
 
 if nargin < 1 || isempty(txt)
     subj = ['S' datestr(now,'HHMMSS')];
@@ -3269,9 +3305,6 @@ for g=1:numel(gNames)
     ii=find(strcmpi(grp,gNames{g}) & isfinite(vals));
     pointX(ii)=g+linspace(-.12,.12,numel(ii));
 end
-if gaPrevField(S,'previewConnectAnimals',false)
-    connectAnimalPoints(ax,R.subjTable,vals,pointX,gNames,fg,gaPrevField(S,'previewPairColor',[]));
-end
 for g = 1:numel(gNames)
     idx = strcmpi(grp,gNames{g});
     v = vals(idx); v = v(isfinite(v));
@@ -3283,6 +3316,10 @@ for g = 1:numel(gNames)
     errorbar(ax,g,mu,se,'Color',fg,'LineWidth',1.5,'CapSize',12);
     xj = g + linspace(-0.12,0.12,numel(v));
     scatter(ax,xj,v,55,'MarkerFaceColor',col,'MarkerEdgeColor',fg,'LineWidth',0.8);
+end
+if gaPrevField(S,'previewConnectAnimals',false)
+    pairStyle=struct('lineWidth',gaPrevField(S,'previewPairLineWidth',1.2),'opacity',gaPrevField(S,'previewPairOpacity',1));
+    connectAnimalPoints(ax,R.subjTable,vals,pointX,gNames,fg,gaPrevField(S,'previewPairColor',[]),pairStyle);
 end
 
 set(ax,'XTick',1:numel(gNames),'XTickLabel',gaPrevDisplayNames(R));
@@ -3300,47 +3337,90 @@ colors=[NaN NaN NaN;.55 .55 .55;1 1 1;0 0 0;.20 .65 .90;0 .70 .65; ...
     .25 .75 .35;1 .55 .15;.90 .25 .25;.65 .45 .90;.95 .85 .20;NaN NaN NaN];
 end
 
-function [handles,pairedIDs,report] = connectAnimalPoints(ax,T,values,x,gNames,fg,lineColor)
-% Only unique, explicit Animal IDs are paired. Never guess from filenames,
-% merge similarly named animals, or average duplicate sessions/ROIs.
+function [handles,pairedIDs,report] = connectAnimalPoints(ax,T,values,x,gNames,fg,lineColor,style)
+% Connect unique observations with verified animal provenance. Ambiguous
+% identities and duplicate sessions/ROIs are never merged or averaged here.
 handles=gobjects(0); pairedIDs={};
-report=struct('pairedIDs',{{}},'duplicateIDs',{{}},'unmatchedIDs',{{}});
+report=struct('pairedIDs',{{}},'duplicateIDs',{{}},'unmatchedIDs',{{}}, ...
+    'missingRows',[],'conflictingRows',[],'sourceMismatchRows',[],'rowAnimalIDs',{{}}, ...
+    'identitySources',{{}},'identityNotes',{{}},'pairedRecordingKeys',{{}});
 setappdata(ax,'GA_ROI_PairingReport',report);
 values=double(values(:)); x=double(x(:));
 if ~iscell(T)||size(T,2)<3||size(T,1)~=numel(values), return; end
 ids=cell(size(values)); groups=zeros(size(values));
+recordings=cell(size(values));
+report.rowAnimalIDs=cell(size(values));report.identitySources=cell(size(values));report.identityNotes=cell(size(values));
 for i=1:numel(values)
-    ids{i}=lower(strtrim(char(string(T{i,2}))));
+    [animal,identity]=gaAnimalIdentity(T(i,:));
+    report.rowAnimalIDs{i}=animal;report.identitySources{i}=identity.source;report.identityNotes{i}=identity.reason;
+    ids{i}=identity.key;
+    recordings{i}=identity.recording;
+    if identity.sourceMismatch,report.sourceMismatchRows(end+1)=i;end %#ok<AGROW>
+    if identity.conflict
+        report.conflictingRows(end+1)=i;ids{i}=''; %#ok<AGROW>
+    elseif isempty(ids{i})
+        report.missingRows(end+1)=i; %#ok<AGROW>
+    end
     for g=1:numel(gNames)
         if strcmpi(strtrim(char(string(T{i,3}))),strtrim(gNames{g})), groups(i)=g; break; end
     end
 end
-names=unique(ids,'stable'); color=.55*fg+.45*get(ax,'Color');
+background=get(ax,'Color');
+if ~isnumeric(background),background=get(ancestor(ax,'figure'),'Color');end
+names=unique(ids,'stable'); color=.55*fg+.45*background;
 if nargin>=7 && isnumeric(lineColor) && numel(lineColor)==3 && ...
         all(isfinite(lineColor(:))) && all(lineColor(:)>=0 & lineColor(:)<=1)
     color=reshape(double(lineColor),1,3);
 end
+if nargin<8 || ~isstruct(style),style=struct();end
+width=gaPrevField(style,'lineWidth',1.2);opacity=gaPrevField(style,'opacity',1);
+if ~isnumeric(width) || ~isscalar(width) || ~isfinite(width),width=1.2;end
+if ~isnumeric(opacity) || ~isscalar(opacity) || ~isfinite(opacity),opacity=1;end
+width=max(.25,min(8,width));opacity=max(0,min(1,opacity));
+% Background blending reproduces the chosen opacity consistently in MATLAB
+% graphics and PNG export, including versions without RGBA line support.
+baseColor=color;color=opacity*color+(1-opacity)*background;
 for k=1:numel(names)
     if isempty(names{k}), continue; end
     rows=find(strcmp(ids,names{k}) & groups>0);
     gg=groups(rows);
+    partitions={rows};
     if numel(unique(gg))~=numel(gg)
-        report.duplicateIDs{end+1}=names{k}; %#ok<AGROW>
-        continue;
+        recordingKeys=cellfun(@(r)r.key,recordings(rows),'UniformOutput',false);
+        uniqueKeys=unique(recordingKeys,'stable');partitions={};
+        if any(cellfun(@isempty,recordingKeys)),report.duplicateIDs{end+1}=names{k};end %#ok<AGROW>
+        for j=1:numel(uniqueKeys)
+            if isempty(uniqueKeys{j}),continue;end
+            partitions{end+1}=rows(strcmp(recordingKeys,uniqueKeys{j})); %#ok<AGROW>
+        end
+        if isempty(partitions),report.duplicateIDs{end+1}=names{k};end %#ok<AGROW>
     end
-    rows=rows(isfinite(values(rows)) & isfinite(x(rows)));
-    if numel(rows)<2
-        report.unmatchedIDs{end+1}=names{k}; %#ok<AGROW>
-        continue;
+    for j=1:numel(partitions)
+        pairedRows=partitions{j};gg=groups(pairedRows);
+        if numel(unique(gg))~=numel(gg)
+            report.duplicateIDs{end+1}=names{k};continue; %#ok<AGROW>
+        end
+        pairedRows=pairedRows(isfinite(values(pairedRows)) & isfinite(x(pairedRows)));
+        if numel(pairedRows)<2
+            report.unmatchedIDs{end+1}=names{k};continue; %#ok<AGROW>
+        end
+        [~,order]=sort(groups(pairedRows));pairedRows=pairedRows(order);
+        recording=recordings{pairedRows(1)};
+        h=line(ax,x(pairedRows),values(pairedRows),'Color',color,'LineWidth',width, ...
+            'HandleVisibility','off','HitTest','off','Tag','GA_ROI_ANIMAL_PAIR', ...
+            'UserData',struct('animalID',names{k},'rows',pairedRows, ...
+                'recordingKey',recording.key,'scanID',recording.scanID, ...
+                'lineColor',baseColor,'lineOpacity',opacity,'lineWidth',width));
+        handles(end+1)=h;pairedIDs{end+1}=names{k}; %#ok<AGROW>
+        report.pairedRecordingKeys{end+1}=recording.key;
     end
-    [~,order]=sort(groups(rows)); rows=rows(order);
-    h=line(ax,x(rows),values(rows),'Color',color,'LineWidth',1.2, ...
-        'HandleVisibility','off','HitTest','off','Tag','GA_ROI_ANIMAL_PAIR', ...
-        'UserData',struct('animalID',names{k},'rows',rows));
-    handles(end+1)=h; pairedIDs{end+1}=names{k}; %#ok<AGROW>
 end
-if ~isempty(handles), uistack(handles,'bottom'); end
+if ~isempty(handles)
+    uistack(handles,'top');
+    points=findall(ax,'Type','scatter');if ~isempty(points),uistack(points,'top');end
+end
 report.pairedIDs=pairedIDs;
+report.duplicateIDs=unique(report.duplicateIDs,'stable');report.unmatchedIDs=unique(report.unmatchedIDs,'stable');
 setappdata(ax,'GA_ROI_PairingReport',report);
 end
 
@@ -3437,7 +3517,7 @@ end
 end
 
 function s = gaPrevStars(p)
-if p < 0.001, s='***'; elseif p < 0.01, s='**'; elseif p < 0.05, s='*'; else, s='n.s.'; end
+s=gaSignificanceStars(p);
 end
 % GA_ROI_PREVIEW_STANDALONE_END
 
@@ -3675,14 +3755,16 @@ end
 
 
 function [d,info] = pairedMetricDifferences(values,groups,T,names)
-% Explicit PairID takes priority; empty PairIDs fall back to Animal ID.
+% Repair legacy automatic IDs before matching; custom PairIDs take priority.
+[T,updatedRows]=gaSyncAnimalPairIDs(T);
 keys=cell(size(values));
 for i=1:numel(values)
     keys{i}=lower(strtrimSafe(T{i,5}));
     if isempty(keys{i}), keys{i}=lower(strtrimSafe(T{i,2})); end
 end
 ids=unique(keys,'stable'); d=[];
-info=struct('keys',{{}},'rows',zeros(0,2),'unmatchedKeys',{{}},'nPairs',0);
+info=struct('keys',{{}},'rows',zeros(0,2),'unmatchedKeys',{{}},'nPairs',0, ...
+    'updatedPairIDRows',updatedRows);
 for k=1:numel(ids)
     if isempty(ids{k}), continue; end
     a=find(strcmp(keys,ids{k}) & strcmpi(groups,names{1}));

@@ -230,6 +230,7 @@ S.showOverlay = true;
 S.overlayAlpha = 0.28;
 
 S.smoothSize = 8;
+S.autoMaskShape = [1+2*double(nZ==1), 2]; % rectangle/ellipse/anatomical, per target
 % A small default keeps a new editor usable on both 2-D and 54-slice matrix
 % probes. The user can enlarge it with the slider when outlining broad areas.
 S.brushR = max(4, min(12, round(min(nY,nX)/12)));
@@ -650,16 +651,30 @@ h.lblSmooth = makeText(pTools,[0.03 0.62 0.15 0.08],'Smooth',C.text,11,'normal',
 h.slSmooth = makeSlider(pTools,[0.20 0.65 0.60 0.08],0,100,S.smoothSize,@onSmoothSize);
 h.txtSmooth = makeText(pTools,[0.82 0.62 0.15 0.08],sprintf('%.0f',S.smoothSize),C.text,11,'normal','right');
 
-h.btnFillSlice = makeButton(pTools,[0.03 0.43 0.22 0.12],'Fill Slice',C.grayBtn,'w',@onFillSlice);
-h.btnFillAll = makeButton(pTools,[0.27 0.43 0.22 0.12],'Fill All',C.grayBtn,'w',@onFillAll);
-h.btnSmooth = makeButton(pTools,[0.51 0.43 0.22 0.12],'Smooth',C.grayBtn,'w',@onSmooth);
-h.btnClearSlice = makeButton(pTools,[0.75 0.43 0.22 0.12],'Clr Slice',C.grayBtn,'w',@onClearSlice);
+h.popSmoothScope = uicontrol('Style','popupmenu','Parent',pTools,'Units','normalized', ...
+    'Position',[0.03 0.53 0.94 0.07],'String',{'Smooth: All slices','Smooth: Current slice'}, ...
+    'Value',1+double(nZ==1),'BackgroundColor',C.panel2,'ForegroundColor','w', ...
+    'FontName',UI.fontName,'FontSize',11,'Tag','MaskSmoothScope', ...
+    'TooltipString','Smooth the active mask in each selected slice independently. Other mask targets remain unchanged.');
+if nZ==1,set(h.popSmoothScope,'Enable','off');end
+h.btnFillSlice = makeButton(pTools,[0.03 0.40 0.22 0.10],'Fill Slice',C.grayBtn,'w',@onFillSlice);
+h.btnFillAll = makeButton(pTools,[0.27 0.40 0.22 0.10],'Fill All',C.grayBtn,'w',@onFillAll);
+h.btnSmooth = makeButton(pTools,[0.51 0.40 0.22 0.10],'Smooth',C.grayBtn,'w',@onSmooth);
+set(h.btnSmooth,'Tag','MaskSmooth');
+h.btnClearSlice = makeButton(pTools,[0.75 0.40 0.22 0.10],'Clr Slice',C.grayBtn,'w',@onClearSlice);
 
-h.btnClearMask = makeButton(pTools,[0.03 0.24 0.94 0.11],'Clear Active Mask',C.red,'w',@onClearMask);
+h.btnClearMask = makeButton(pTools,[0.03 0.27 0.94 0.10],'Clear Active Mask',C.red,'w',@onClearMask);
 
-h.btnAutoMask  = makeButton(pTools,[0.03 0.09 0.45 0.12],'AUTO MASK',C.blue,'w',@onAutoMask);
-set(h.btnAutoMask,'TooltipString','For 3D data, use neighboring Doppler slices to propose a continuous brain mask. Sensitivity and edge shrink remain adjustable; review before saving.');
-h.btnCopyToAll = makeButton(pTools,[0.52 0.09 0.45 0.12],'Slice -> All',C.grayBtn,'w',@onCopySliceToAll);
+h.popAutoMaskShape = uicontrol('Style','popupmenu','Parent',pTools,'Units','normalized', ...
+    'Position',[0.03 0.15 0.94 0.09], ...
+    'String',{'Auto: Rectangular (3D probe)','Auto: Ellipse (rounded)','Auto: Anatomical (intensity)'}, ...
+    'Value',S.autoMaskShape(1),'BackgroundColor',C.panel2,'ForegroundColor','w', ...
+    'FontName',UI.fontName,'FontSize',11,'Tag','MaskAutoShape', ...
+    'Callback',@onAutoShapeChange, ...
+    'TooltipString','Rectangle or ellipse: adjustable geometry includes weak signal inside. Anatomical: follow the Doppler envelope. Shape is remembered separately for underlay and overlay.');
+h.btnAutoMask  = makeButton(pTools,[0.03 0.01 0.45 0.11],'AUTO MASK',C.blue,'w',@onAutoMask);
+set(h.btnAutoMask,'Tag','MaskAutoMask','TooltipString','Propose a mask using the selected auto shape. Rectangle and ellipse preview editable bounds before applying; save with SAVE UNDERLAY / OVERLAY / BOTH.');
+h.btnCopyToAll = makeButton(pTools,[0.52 0.01 0.45 0.11],'Slice -> All',C.grayBtn,'w',@onCopySliceToAll);
 if nZ <= 1
     set(h.btnCopyToAll,'Enable','off');
 end
@@ -991,6 +1006,7 @@ uiwait(fig);
     end
 
     function updateTargetUI()
+        set(h.popAutoMaskShape,'Value',S.autoMaskShape(S.editTarget));
         if S.editTarget == 1
             set(h.btnTargetBrain,'BackgroundColor',C.brain,'ForegroundColor','w');
             set(h.btnTargetOverlay,'BackgroundColor',C.grayBtn,'ForegroundColor',C.text);
@@ -1382,15 +1398,23 @@ end
     end
 
     function onSmooth(~,~)
-        z = S.z;
+        if get(h.popSmoothScope,'Value')==1,z=1:nZ;else,z=S.z;end
+        set(fig,'Pointer','watch');
+        smoothPointerGuard=onCleanup(@restoreAutoMaskPointer); %#ok<NASGU>
+        drawnow;
         if S.editTarget == 1
-            brainMaskVol(:,:,z) = smoothMaskSafe(brainMaskVol(:,:,z), S.smoothSize);
-            updateStatus('Smoothed brain mask in current slice.');
+            brainMaskVol=fusiSmoothMaskVolume(brainMaskVol,S.smoothSize,z);
+            updateStatus(sprintf('Smoothed brain mask in %d slice(s).',numel(z)));
         else
-            overlayMaskVol(:,:,z) = smoothMaskSafe(overlayMaskVol(:,:,z), S.smoothSize);
-            updateStatus('Smoothed overlay mask in current slice.');
+            restriction=[];if any(brainMaskVol(:)),restriction=brainMaskVol;end
+            overlayMaskVol=fusiSmoothMaskVolume(overlayMaskVol,S.smoothSize,z,restriction);
+            updateStatus(sprintf('Smoothed overlay mask in %d slice(s).',numel(z)));
         end
         renderNow();
+    end
+
+    function onAutoShapeChange(src,~)
+        S.autoMaskShape(S.editTarget)=get(src,'Value');
     end
 
     function onFillSlice(~,~)
@@ -1455,6 +1479,10 @@ end
     end
 
     function onAutoMask(~,~)
+        if get(h.popAutoMaskShape,'Value')<=2
+            onGeometricAutoMask();
+            return;
+        end
         if nZ > 1
             amScope = questdlg('3D proposal uses neighboring slices. Apply it to:', 'Auto mask', ...
                                'Current slice', 'All slices', 'All slices');
@@ -1555,6 +1583,62 @@ end
                                   '%d voxels set. Check every slice before saving.'], ...
                          amTgt, numel(amList), amSens, amErode, amCount));
         end
+        renderNow();
+    end
+
+    function onGeometricAutoMask()
+        stopPainting();
+        set(fig,'Pointer','watch');
+        amPointerGuard=onCleanup(@restoreAutoMaskPointer); %#ok<NASGU>
+        updateStatus('Proposing mask bounds from neighboring Doppler slices...');drawnow;
+        amShapes={'rectangle','ellipse'};amShape=amShapes{get(h.popAutoMaskShape,'Value')};
+        amRaw=Ucache.mean;
+        if S.underlayMode==5 && ~isempty(Ucache.external),amRaw=Ucache.external;end
+        if isempty(amRaw),amRaw=Ubase;end
+        amRestriction=[];amInset=0;amTgt='brain / underlay';
+        if S.editTarget==2
+            amTgt='overlay / signal';amInset=2;
+            if any(brainMaskVol(:)),amRestriction=brainMaskVol;end
+        end
+        if nZ>1 && exist('bwconncomp','file')==2
+            amCalPar=studio;if isfield(studio,'maskSpatialMetadata'),amCalPar=studio.maskSpatialMetadata;end
+            amCalPar.scmSizeYXZ=[nY nX nZ];amCal=scmSpatialCalibration(amCalPar);
+            [amSeed,amSeedReport]=fusiAutoMaskVolume3D(amRaw,.4,amCal.spacingUm,amRestriction);
+            amValid=amSeedReport.validSlices;
+        else
+            amSeed=false(nY,nX,nZ);amValid=false(1,nZ);
+            for amZ=1:nZ
+                amPlane=amRaw(:,:,amZ);amValues=amPlane(isfinite(amPlane));
+                amValid(amZ)=~isempty(amValues) && max(amValues)>min(amValues);
+                amSeed(:,:,amZ)=deConfUSIon_auto_mask_slice(autoMaskInput(amPlane),.4,[]);
+            end
+            amSeedReport=struct('method','Slice Doppler threshold','validSlices',amValid);
+        end
+        restoreAutoMaskPointer();
+        amOptions=struct('restriction',amRestriction,'validSlices',amValid,'slice',S.z, ...
+            'flipUD',S.flipUD_display,'aspect',get(ax,'DataAspectRatio'), ...
+            'inset',amInset,'target',amTgt,'label',datasetLabel,'shape',amShape, ...
+            'followSlices',S.editTarget==2 && nZ>1);
+        amSelection=fusiGeometricMaskDialog(amRaw,amSeed,amOptions);
+        if isempty(amSelection)
+            updateStatus('Auto mask preview cancelled.');return;
+        end
+        [amVolume,amReport]=fusiGeometricMaskVolume(amSeed,amSelection.boundsBySlice,amRestriction,amValid,amSelection.shape);
+        amList=amSelection.slices;
+        if S.editTarget==1,brainMaskVol(:,:,amList)=amVolume(:,:,amList);
+        else,overlayMaskVol(:,:,amList)=amVolume(:,:,amList);end
+        S.autoMaskShape(S.editTarget)=1+strcmp(amSelection.shape,'ellipse');
+        set(h.popAutoMaskShape,'Value',S.autoMaskShape(S.editTarget));
+        S.autoMaskProposal=struct('method',amReport.method,'shape',amSelection.shape,'sensitivity',.4, ...
+            'shrinkPixels',amSelection.inset,'bounds',amSelection.bounds, ...
+            'boundsBySlice',amSelection.boundsBySlice,'outerBoundsBySlice',amSelection.outerBoundsBySlice, ...
+            'followSlices',amSelection.followSlices,'sliceBoundsReport',amSelection.sliceBoundsReport, ...
+            'outerBounds',amSelection.outerBounds,'appliedSlices',amList,'target',amTgt, ...
+            'report',amReport,'seedReport',amSeedReport, ...
+            'source','Temporal mean Doppler; external anatomy when selected');
+        amSizing='shared size';if amSelection.followSlices,amSizing='size follows each slice';end
+        updateStatus(sprintf('%s %s mask: %s across %d slice(s). Editable; use SAVE to keep it.', ...
+            amSelection.shape,amTgt,amSizing,numel(amList)));
         renderNow();
     end
 
@@ -3583,25 +3667,6 @@ thr = max(0, min(1, double(S.vesselThresh)));
         end
 
         holes = bg & ~visited;
-    end
-
-    function M = smoothMaskSafe(M, rad)
-        M = logical(M);
-        rad = max(0, round(rad));
-        if rad == 0
-            return;
-        end
-        try
-            se = strel('disk', max(1,rad));
-            M = imopen(M,se);
-            M = imclose(M,se);
-            M = imfill(M,'holes');
-        catch
-            K = ones(2*rad+1);
-            K = K / sum(K(:));
-            Sx = conv2(double(M), K, 'same');
-            M = Sx > 0.5;
-        end
     end
 
     function E = edgeMask(M)

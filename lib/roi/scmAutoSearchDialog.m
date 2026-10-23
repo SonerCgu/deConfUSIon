@@ -1,12 +1,14 @@
 function opt=scmAutoSearchDialog(ctx)
 % Anatomy-only editor. Drawing never blocks callbacks or waits for extra clicks.
 opt=[]; nz=ctx.sizeYXZ(3); ny=ctx.sizeYXZ(1); nx=ctx.sizeYXZ(2); z=ctx.slice;
-accepted=false; armed=false; dragging=false; anchor=[]; rubber=[];
+accepted=false;protocolRequested=false;armed=false; dragging=false; anchor=[]; rubber=[];
 paintedMask=[]; painting=false; eraseStroke=false; lastPoint=[];strokeRadius=8;
 if isfield(ctx,'initialPaintMask')&&isequal(size(ctx.initialPaintMask),[ny nx])
     paintedMask=logical(ctx.initialPaintMask);
 end
-previousROIMode=1;rectangleTop={'0','0'};
+previousROIMode=1;
+roiCounts=[0 0];rankingCounts=[20 20];brushBeforeRanking=true;
+midlineXY=[];midlineArmed=false;midlineDragging=false;midlineAnchor=[];hMidline=[];
 hAnatomy=[];hShade=[];hRolePaint=[];hBrush=[];underlaySlice=NaN;baseIncluded=true(ny,nx);lastPaintDraw=tic;
 roleMap=zeros(ny,nx,'uint8');roleColors=[1 .62 .05;.05 .78 1;.30 .95 .45];
 anatomyX=[1 nx];anatomyY=[1 ny];
@@ -16,8 +18,10 @@ mouseButtonsAvailable=false;
 if ispc
     try,NET.addAssembly('System.Windows.Forms');mouseButtonsAvailable=true;catch,end
 end
+screen=get(0,'ScreenSize');windowSize=[min(1600,screen(3)-80) min(1000,screen(4)-100)];
 f=figure('Name','Automatic SCM | time and anatomical search regions','NumberTitle','off', ...
-    'MenuBar','none','ToolBar','none','Position',[80 60 1300 850],'Color','k','WindowStyle','modal','Pointer','crosshair');
+    'MenuBar','none','ToolBar','none','Position',[40 40 windowSize],'Color','k','WindowStyle','modal','Pointer','crosshair');
+movegui(f,'center');
 setappdata(f,'deConfUSIonNoMaximize',true);
 ax=axes('Parent',f,'Units','normalized','Position',[.47 .365 .50 .33],'Tag','SearchAnatomyAxes');
 pWhich=control('popupmenu',[.47 .94 .50 .045], ...
@@ -43,13 +47,13 @@ selectedAtlasRegions=catalog([]);
 pAtlas=control('popupmenu',[.47 .765 .335 .04],[{'Atlas: all labelled brain tissue'} {catalog.displayName}],@atlasRegionChanged);
 set(pAtlas,'Tag','SearchAtlasRegion','TooltipString','Choose one region here, or use Choose regions to tick several. Each region is searched separately.');
 btRegions=control('pushbutton',[.815 .765 .155 .04],'Choose regions...',@chooseAtlasRegions);set(btRegions,'Tag','SearchChooseAtlasRegions','FontSize',10);
-control('text',[.47 .717 .36 .03],'Minimum ROI in selected region (%)',[]);
+coverageLabel=control('text',[.47 .717 .36 .03],'Minimum ROI in selected region (%)',[]);
 eCoverage=control('edit',[.84 .715 .13 .04],'75',@preview);set(eCoverage,'Tag','SearchAtlasCoverage');
 set(eCoverage,'TooltipString','75-100%. Remaining pixels may be in neighbouring labelled brain tissue. Every pixel must avoid ventricles, fit the painted area and selected side, and have valid acquired samples. The uploaded SCM mask is ignored.');
 if ~hasAtlas
  set(pAtlas,'String',{'Atlas: load a registered Regions underlay first'},'Enable','off');set([eCoverage btRegions],'Enable','off');
 end
-control('text',[.47 .26 .29 .04],'Top per role / region (0 = all slices)',[]);
+topLabel=control('text',[.47 .26 .29 .04],'Top per role / region (0 = all slices)',[]);
 control('text',[.77 .295 .08 .025],'Target',[]);
 control('text',[.88 .295 .08 .025],'Control',[]);
 eTopTarget=control('edit',[.77 .255 .08 .04],'0',[]);set(eTopTarget,'Tag','SearchTopTarget');
@@ -76,7 +80,8 @@ if isfield(ctx,'scanLabels')&&~isempty(ctx.scanLabels)
          'Times are relative to each scan, not the stitched plot. The overlay selector does not change this choice.']);
 end
 eSize=editrow(.86,'',num2str(ctx.roiSize),'SearchROISize');
-pROIMode=control('popupmenu',[.025 .86 .235 .045],{'ROI: square pixels','ROI: X/Y micrometres','ROI: whole atlas region'},@roiModeChanged);
+pROIMode=control('popupmenu',[.025 .86 .235 .045], ...
+    {'ROI: square pixels','ROI: X/Y micrometres','ROI: whole atlas region per slice','Atlas: rank whole regions across slices'},@roiModeChanged);
 set(pROIMode,'Tag','SearchROIMode');
 eWidth=control('edit',[.27 .86 .075 .045],'1000',@preview);set(eWidth,'Tag','SearchROIWidthUm','TooltipString','X: horizontal width (um)','Visible','off');
 eHeight=control('edit',[.355 .86 .075 .045],'1000',@preview);set(eHeight,'Tag','SearchROIHeightUm','TooltipString','Y: vertical height (um)','Visible','off');
@@ -85,20 +90,36 @@ if ~isfield(ctx,'spacingUm'),ctx.spacingUm=[NaN NaN NaN];end
 if isfield(ctx,'sizeUm'),set(eWidth,'String',num2str(ctx.sizeUm(1)));set(eHeight,'String',num2str(ctx.sizeUm(2)));end
 if isfield(ctx,'sizeMode')&&strcmp(ctx.sizeMode,'um'),set(pROIMode,'Value',2);end
 set(eSize,'Callback',@preview);
-eTime=editrow(.79,'Search start/end (min per scan)',sprintf('%.9g %.9g',ctx.signalSec/60),'SearchTime');
+eTime=editrow(.79,'Search start/end (min per scan)',sprintf('%.12g %.12g',ctx.signalSec/60),'SearchTime');
 set(eTime,'TooltipString','Times start at zero in each selected scan. 7 14 searches minutes 7-14 separately in every selected scan, irrespective of stitched plot order. Shorter scans are skipped, not truncated.');
 label(.755,'7 14 = minutes 7-14 within EACH selected scan.');
 duration=0; if isfield(ctx,'plateauSec'), duration=ctx.plateauSec/60; end
-eDuration=editrow(.72,'Plateau duration (minutes)', num2str(duration),'SearchPlateau');
-label(.66,'0 = whole interval. E.g. 5 15 with duration 2 searches');
-label(.63,'every 2-minute window between 5 and 15 minutes.');
-eBounds=editrow(.56,'X start/end, Y start/end',sprintf('1 %d 1 %d',nx,ny),'SearchBounds');
+[eDuration,durationLabel]=editrow(.72,'Plateau duration (minutes)', num2str(duration),'SearchPlateau');
+durationHint1=label(.66,'0 = whole interval. E.g. 5 15 with duration 2 searches');
+durationHint2=label(.63,'every 2-minute window between 5 and 15 minutes.');
+pRankMetric=control('popupmenu',[.025 .72 .405 .045], ...
+    {'Rank: mean PSC over selected interval','Rank: peak of regional mean curve'},[]);
+set(pRankMetric,'Tag','SearchRankingMetric','Visible','off');
+pRankDirection=control('popupmenu',[.025 .65 .405 .045], ...
+    {'Largest increase','Largest decrease','Largest absolute change'},[]);
+set(pRankDirection,'Tag','SearchRankingDirection','Visible','off');
+rankingHelp=control('text',[.025 .425 .405 .19],sprintf(['Each atlas region is one volume ROI across your slices.\n' ...
+    'Choose image-left/right Target and Control below.\n' ...
+    'ROI size, brush and rectangle are not used.\n' ...
+    'Click table rows to show the region in SCM.\n' ...
+    'Roles remain editable in the review table.']),[]);
+set(rankingHelp,'Visible','off','HorizontalAlignment','left','FontSize',11);
+[eBounds,boundsLabel]=editrow(.56,'X start/end, Y start/end',sprintf('1 %d 1 %d',nx,ny),'SearchBounds');
 set(eBounds,'Callback',@preview);
-button(.49,'Draw rectangle: click and drag on image',@arm);
-button(.43,'Reset search rectangle to full image',@reset);
+btRectangle=button(.49,'Draw rectangle: click and drag on image',@arm);
+btReset=button(.43,'Reset search rectangle to full image',@reset);
 cbBoth=control('checkbox',[.025 .36 .41 .04],'Separate left/right target and control',@preview);
-set(cbBoth,'Value',1);
-eSplit=editrow(.30,'Left/right boundary (X)',num2str(floor(nx/2)),'SearchSplit'); set(eSplit,'Callback',@preview);
+set(cbBoth,'Value',1,'Tag','SearchSeparateSides');
+btMidline=control('pushbutton',[.025 .385 .195 .032],'Draw midline',@drawMidline);
+set(btMidline,'Tag','SearchDrawMidline','FontSize',10);
+btRemoveMidline=control('pushbutton',[.235 .385 .195 .032],'Remove / combine sides',@removeMidline);
+set(btRemoveMidline,'Tag','SearchRemoveMidline','FontSize',10);
+eSplit=editrow(.30,'Left/right boundary (X)',num2str(floor(nx/2)),'SearchSplit'); set(eSplit,'Callback',@numericMidline);
 label(.24,'Target side (as displayed in the image):');
 pRole=control('popupmenu',[.025 .19 .405 .045],{'LEFT = Target / RIGHT = Control','RIGHT = Target / LEFT = Control'},@preview);
 set(pRole,'Tag','SearchTargetSide');
@@ -112,7 +133,9 @@ pDisplay=control('popupmenu',[.025 .075 .405 .045], ...
 set(pDisplay,'Tag','SearchDisplayMode','Value',1,'TooltipString', ...
     'Shared limits support direct animal comparisons. Automatic contrast uses the same rule but different numbers; neither changes ROI measurements.');
 sharedDisplay=scmSharedDisplay();
-control('pushbutton',[.47 .12 .50 .04],'Remember current SCM limits for all animals',@rememberDisplay);
+control('pushbutton',[.47 .12 .31 .04],'Remember SCM display limits',@rememberDisplay);
+protocolButton=control('pushbutton',[.80 .12 .17 .04],'Load fixed protocol...',@loadProtocol);
+set(protocolButton,'Tag','SearchLoadFixedProtocol','FontSize',10);
 pWindow=control('popupmenu',[.025 .015 .405 .045], ...
     {'Different best window per ROI / slice','Same best window across scans / slices'},[]);
 set(pWindow,'Tag','SearchWindowMode','Value',1);
@@ -133,6 +156,29 @@ control('pushbutton',[.80 .015 .17 .05],'Cancel',@(~,~)delete(f));
 set(f,'WindowScrollWheelFcn',@scroll,'WindowButtonDownFcn',@mouseDown, ...
     'WindowButtonMotionFcn',@mouseMove,'WindowButtonUpFcn',@mouseUp,'WindowKeyPressFcn',@key, ...
     'Interruptible','off','BusyAction','queue');
+if isfield(ctx,'initialROIMode'),set(pROIMode,'Value',ctx.initialROIMode);end
+if isfield(ctx,'initialSides')
+    sides=ctx.initialSides;midlineXY=sides.midlineXY;eSplit.String=num2str(sides.splitX);
+    cbBoth.Value=sides.bilateral;pRole.Value=1+~sides.leftIsTarget;
+end
+if isfield(ctx,'initialSearchOptions')
+    initial=ctx.initialSearchOptions;eTime.String=sprintf('%.12g %.12g',initial.signalSec/60);
+    cbBoth.Value=initial.bilateral;eSplit.String=num2str(initial.splitX);pRole.Value=1+~initial.leftIsTarget;
+    if isfield(initial,'midlineXY'),midlineXY=initial.midlineXY;else,midlineXY=[];end
+    if isfield(initial,'sliceRange'),eFirst.String=num2str(initial.sliceRange(1));eLast.String=num2str(initial.sliceRange(2));cbAll.Value=1;end
+    if isfield(initial,'metric'),pRankMetric.Value=find(strcmp({'mean','peak'},initial.metric),1);end
+    if isfield(initial,'direction'),pRankDirection.Value=find(strcmp({'increase','decrease','absolute'},initial.direction),1);end
+    if isfield(initial,'topCount'),rankingCounts=initial.topCount;if isscalar(rankingCounts),rankingCounts=[rankingCounts rankingCounts];end,end
+    if isfield(initial,'minCoverage'),eCoverage.String=num2str(100*initial.minCoverage);end
+    if isfield(initial,'roiSelection')
+        pWhich.Value=find(strcmp({'Both','Target','Control'},initial.roiSelection),1);
+        cbTarget.Value=pWhich.Value~=3;cbControl.Value=pWhich.Value~=2;
+    end
+    if ~isempty(pScan)
+        if strcmp(initial.scanScope,'all'),pScan.Value=1;
+        elseif strcmp(initial.scanScope,'single'),pScan.Value=initial.scanIndex+1;end
+    end
+end
 roiModeChanged(); updateScanTiming(); drawnow nocallbacks;
 setappdata(f,'SCMSearchDialogReady',true); uiwait(f);
 if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
@@ -143,14 +189,17 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             'BackgroundColor',bg,'ForegroundColor','w','FontSize',12,'Callback',cb);
         setappdata(h,'PreserveColors',true);
     end
-    function label(y,str)
+    function h=label(y,str)
         h=control('text',[.025 y .425 .035],str,[]); set(h,'HorizontalAlignment','left');
     end
-    function h=editrow(y,str,value,tag)
-        h=control('text',[.025 y .235 .04],str,[]); set(h,'HorizontalAlignment','left');
+    function [h,caption]=editrow(y,str,value,tag)
+        caption=control('text',[.025 y .235 .04],str,[]); set(caption,'HorizontalAlignment','left');
         h=control('edit',[.27 y .16 .045],value,[]); set(h,'Tag',tag);
     end
-    function button(y,str,cb), control('pushbutton',[.025 y .405 .045],str,cb); end
+    function h=button(y,str,cb),h=control('pushbutton',[.025 y .405 .045],str,cb);end
+    function loadProtocol(~,~)
+        protocolRequested=true;accepted=true;uiresume(f);
+    end
     function updateScanTiming(varargin)
         durations=ctx.nT*ctx.TR/60;description='Acquisition';
         if isfield(ctx,'scanTiming')&&~isempty(ctx.scanTiming)
@@ -166,13 +215,14 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             'TooltipString','Scan-relative time: every scan starts at 0. In all-scan searches, recordings that cannot cover the complete requested interval are skipped and reported.');
     end
     function o=collect()
+        if protocolRequested,o=struct('analysisMode','protocol');return;end
         o=struct('size',str2double(get(eSize,'String')),'signalSec',60*sscanf(strrep(get(eTime,'String'),',',' '),'%f')', ...
             'plateauSec',60*str2double(get(eDuration,'String')),'sharedWindow',get(pWindow,'Value')==2, ...
             'boundsXY',sscanf(strrep(get(eBounds,'String'),',',' '),'%f')','bilateral',logical(get(cbBoth,'Value')), ...
             'splitX',str2double(get(eSplit,'String')),'leftIsTarget',get(pRole,'Value')==1, ...
             'allSlices',logical(get(cbAll,'Value')),'slice',z,'cleanDisplay',false, ...
             'sliceRange',[str2double(get(eFirst,'String')) str2double(get(eLast,'String'))]);
-        o.scanScope='original';o.scanIndex=[];
+        o.scanScope='original';o.scanIndex=[];o.midlineXY=midlineXY;
         if ~isempty(pScan)
             value=get(pScan,'Value');if value==1,o.scanScope='all';else,o.scanScope='single';o.scanIndex=value-1;end
         end
@@ -183,7 +233,15 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         o.topCount=[str2double(get(eTopTarget,'String')) str2double(get(eTopControl,'String'))];
         o.roiMode='rectangle';o.sizeMode='pixels';o.spacingUm=ctx.spacingUm;
         o.sizeUm=[str2double(get(eWidth,'String')) str2double(get(eHeight,'String'))];
-        if get(pROIMode,'Value')==3,o.roiMode='region';
+        ranking=get(pROIMode,'Value')==4;
+        if ranking
+            o.roiMode='atlasRanking';o.plateauSec=0;o.sharedWindow=false;
+            metrics={'mean','peak'};directions={'increase','decrease','absolute'};
+            o.metric=metrics{pRankMetric.Value};o.direction=directions{pRankDirection.Value};
+            o.baselineSec=ctx.baselineSec;o.baselineMode='local';
+            if isfield(ctx,'baselineMode'),o.baselineMode=ctx.baselineMode;end
+            o.boundsXY=[1 nx 1 ny];
+        elseif get(pROIMode,'Value')==3,o.roiMode='region';
         else
             if get(pROIMode,'Value')==2,o.sizeMode='um';end
             geometry=scmROI('size',o,ctx.spacingUm);o.sizeXY=geometry.sizeXY;
@@ -191,11 +249,12 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         if strcmp(o.roiSelection,'Target'),o.topCount(2)=0;elseif strcmp(o.roiSelection,'Control'),o.topCount(1)=0;end
         % One canonical XY restriction is used on every searched slice.
         % Retain the cells for older protocol readers and exported audits.
-        o.paintMask=paintedMask;o.paintMaskScope='shared-xy-all-slices';
-        o.paintMasks=repmat({paintedMask},1,nz);
+        o.paintMask=paintedMask;if ranking,o.paintMask=[];end
+        o.paintMaskScope='shared-xy-all-slices';o.paintMasks=repmat({o.paintMask},1,nz);
         if hasAtlas
             o.atlasLabels=ctx.atlasLabels;o.excludedAtlasIDs=excluded;
             o.minAtlasCoverage=str2double(get(eCoverage,'String'))/100;
+            if ranking,o.minCoverage=o.minAtlasCoverage;end
             if strcmp(o.roiMode,'region'),o.minAtlasCoverage=1;end
             o.atlasRegions=selectedAtlasRegions;o.atlasRegion=[];
             if numel(selectedAtlasRegions)==1,o.atlasRegion=selectedAtlasRegions;end
@@ -239,19 +298,52 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
     end
     function roiModeChanged(varargin)
         finishStroke(false);
-        physical=get(pROIMode,'Value')==2;whole=get(pROIMode,'Value')==3;
-        if whole&&~hasAtlas
+        physical=get(pROIMode,'Value')==2;whole=get(pROIMode,'Value')==3;ranking=get(pROIMode,'Value')==4;
+        if (whole||ranking)&&~hasAtlas
             set(pROIMode,'Value',previousROIMode);preview();
             set(status,'String','Whole-region mode needs saved atlas labels. Load an atlas registration in SCM, then reopen Automatic analysis.','ForegroundColor',[1 .65 .3]);return;
         end
-        if whole&&previousROIMode~=3,rectangleTop={get(eTopTarget,'String'),get(eTopControl,'String')};end
-        if ~whole&&previousROIMode==3,set(eTopTarget,'String',rectangleTop{1});set(eTopControl,'String',rectangleTop{2});end
+        if ranking&&previousROIMode~=4
+            brushBeforeRanking=logical(cbBrush.Value);
+            roiCounts=[str2double(eTopTarget.String) str2double(eTopControl.String)];
+            eTopTarget.String=num2str(rankingCounts(1));eTopControl.String=num2str(rankingCounts(2));
+        elseif ~ranking&&previousROIMode==4
+            rankingCounts=[str2double(eTopTarget.String) str2double(eTopControl.String)];
+            eTopTarget.String=num2str(roiCounts(1));eTopControl.String=num2str(roiCounts(2));
+            cbBrush.Value=brushBeforeRanking;
+        end
+        % ROI shape must not change how many slices are kept. Preserve the
+        % user's limits; the default 0 retains every eligible atlas slice.
         set(eSize,'Visible',onoff(~physical),'Enable',onoff(~whole));
         set([eWidth eHeight],'Visible',onoff(physical));
         set(eCoverage,'Enable',onoff(hasAtlas&&~whole));
-        if whole
-            set([eTopTarget eTopControl],'String','1');
+        if whole||ranking
             set(eSize,'Visible','off');
+        end
+        width=.235;if whole||ranking,width=.405;end
+        set(pROIMode,'Position',[.025 .86 width .045]);
+        set([eDuration durationLabel durationHint1 durationHint2 eBounds boundsLabel btRectangle btReset pWindow], ...
+            'Visible',onoff(~ranking));
+        set([pRankMetric pRankDirection rankingHelp],'Visible',onoff(ranking));
+        set([cbBrush eBrush btEmpty btFill],'Enable',onoff(~ranking));
+        set(pDisplay,'Enable',onoff(~ranking));
+        if ranking,cbBrush.Value=0;armed=false;hideBrushCursor();end
+        set([eTopTarget eTopControl],'Enable',onoff(nz>1||ranking));
+        if ranking
+            topLabel.String='Top regions per role (0 = all)';
+            coverageLabel.String='Minimum usable voxel coverage (%)';
+            eCoverage.TooltipString='Fixed finite baseline / signal voxels as a percentage of labelled voxels within each selected image side and slice range. No amplitude threshold.';
+            set([eTopTarget eTopControl],'TooltipString','Top whole-volume regions per Target / Control and source scan. 0 keeps all regions; counts are independent of the number of slices.');
+            status.String='Atlas volume ranking: orange Target, cyan Control. Image sides are explicit; the acquired anatomy stays unchanged.';
+        else
+            topLabel.String='Top per role / region (0 = all slices)';coverageLabel.String='Minimum ROI in selected region (%)';
+            eCoverage.TooltipString='75-100% of each ROI must lie in the selected region; remaining pixels must be labelled brain tissue.';
+            set([eTopTarget eTopControl],'TooltipString','Keep N per role and region, one candidate per slice; 0 keeps all slices.');
+        end
+        if ~isempty(pScan)
+            choices=get(pScan,'String');choices{1}='All attached scans - maximum';
+            if ranking,choices{1}='All attached scans - separate rankings';end
+            set(pScan,'String',choices);
         end
         previousROIMode=get(pROIMode,'Value');
         preview();
@@ -318,8 +410,11 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
             'TooltipString','Paint and erase on any slice. The same XY restriction is reused on every searched slice; atlas tissue and region boundaries can differ between slices.');
         try
             o=collect(); searched=scmSearchSlices(o,nz);
-            if strcmp(o.roiMode,'region')
-                set(sizeInfo,'String','Whole region per side/slice; each chosen region keeps its own maximum.');
+            if strcmp(o.roiMode,'atlasRanking')
+                set(sizeInfo,'String','Whole-volume atlas regions; independent ranking per side / scan.');
+                set(sliceText,'String',sprintf('Slice %d / %d | atlas regions ranked across selected slices',z,nz));
+            elseif strcmp(o.roiMode,'region')
+                set(sizeInfo,'String','Whole region per side/slice; top count 0 keeps all slices.');
             else
                 geometry=scmROI('size',o,ctx.spacingUm);
                 set(sizeInfo,'String',sprintf('Actual X/Y: %d x %d px | %.6g x %.6g um',geometry.sizeXY,geometry.sizeXYUm));
@@ -368,6 +463,14 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
                     'HitTest','off','PickableParts','none','Visible','off');
             end
             uistack(hBrush,'top');
+            if ~isempty(hMidline)&&isgraphics(hMidline),delete(hMidline);end
+            if o.bilateral
+                [~,~,xy]=scmSearchSideMasks(o,[ny nx]);
+                hMidline=line(ax,xy(:,1),xy(:,2),'Color',[1 1 .5],'LineWidth',2,'LineStyle','--', ...
+                    'Tag','SearchMidline','HitTest','off','PickableParts','none');
+            end
+            set(eSplit,'Enable',onoff(o.bilateral&&isempty(midlineXY)));
+            if isempty(midlineXY),btMidline.String='Draw midline';else,btMidline.String='Redraw midline';end
             xlim(ax,[.5 nx+.5]); ylim(ax,[.5 ny+.5]);
             paintStatus();
         catch ME
@@ -402,6 +505,10 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
     end
     function mouseDown(~,~)
         q=pointerInput();
+        if midlineArmed
+            if ~q.inside||~strcmp(q.kind,'normal')||~q.leftDown,return;end
+            midlineAnchor=q.xy;midlineDragging=true;set(go,'Enable','off');return;
+        end
         if get(cbBrush,'Value')
             if ~q.inside,return;end
             kind=q.kind;if ~any(strcmp(kind,{'normal','alt'})),return;end
@@ -422,6 +529,13 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
     end
     function mouseMove(~,~)
         q=pointerInput();
+        if midlineDragging
+            if ~q.leftDown,finishMidline(q);return;end
+            p=max([.5 .5],min([nx+.5 ny+.5],q.xy));
+            if ~isempty(hMidline)&&isgraphics(hMidline),delete(hMidline);end
+            hMidline=line(ax,[midlineAnchor(1) p(1)],[midlineAnchor(2) p(2)], ...
+                'Color','y','LineWidth',2,'Tag','SearchMidline','HitTest','off');drawnow limitrate nocallbacks;return;
+        end
         updateBrushCursor(q);
         if ~painting&&~dragging,return;end
         held=q.leftDown;if painting&&eraseStroke,held=q.rightDown;end
@@ -437,7 +551,28 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         set(rubber,'Position',[min(anchor,p) max([.01 .01],abs(p-anchor))]); drawnow limitrate nocallbacks;
     end
     function mouseUp(~,~)
+        if midlineDragging,finishMidline(pointerInput());return;end
         finishStroke(true);
+    end
+    function drawMidline(~,~)
+        finishStroke(false);armed=false;midlineArmed=true;midlineDragging=false;cbBrush.Value=0;cbBoth.Value=1;
+        set(f,'Pointer','crosshair');hideBrushCursor();
+        set(status,'String','Drag a midline from top toward bottom on the anatomy. It extends across every selected slice; Esc cancels.','ForegroundColor','w');
+    end
+    function finishMidline(q)
+        points=[midlineAnchor;max([.5 .5],min([nx+.5 ny+.5],q.xy))];midlineDragging=false;set(go,'Enable','on');
+        try
+            scmSearchSideMasks(struct('midlineXY',points),[ny nx]);
+            midlineXY=points;midlineArmed=false;cbBoth.Value=1;preview();
+        catch ME
+            preview();set(status,'String',ME.message,'ForegroundColor',[1 .55 .3]);
+        end
+    end
+    function removeMidline(~,~)
+        midlineXY=[];midlineArmed=false;midlineDragging=false;cbBoth.Value=0;set(go,'Enable','on');preview();
+    end
+    function numericMidline(~,~)
+        midlineXY=[];midlineArmed=false;midlineDragging=false;preview();
     end
     function finishStroke(includeEndpoint)
         if ~painting&&~dragging,return;end
@@ -468,6 +603,9 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         drawnow nocallbacks;
     end
     function key(~,event)
+        if strcmp(event.Key,'escape')&&(midlineArmed||midlineDragging)
+            midlineArmed=false;midlineDragging=false;set(go,'Enable','on');preview();return;
+        end
         if strcmp(event.Key,'escape'),finishStroke(false);armed=false;set(cbBrush,'Value',0);set(go,'Enable','on');set(f,'Pointer','arrow');hideBrushCursor();end
     end
     function reset(~,~)
@@ -495,7 +633,7 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
     end
     function updatePaintShade()
         if isempty(hShade)||~isgraphics(hShade),return;end
-        included=baseIncluded;if ~isempty(paintedMask),included=included&paintedMask;end
+        included=baseIncluded;if get(pROIMode,'Value')~=4&&~isempty(paintedMask),included=included&paintedMask;end
         set(hShade,'AlphaData',.55*double(~included));
         if isempty(hRolePaint)||~isgraphics(hRolePaint),return;end
         selected=roleMap;selected(~included)=0;
@@ -511,6 +649,9 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         set(hRolePaint,'AlphaData',alpha);
     end
     function paintStatus()
+        if get(pROIMode,'Value')==4
+            set(status,'String','Atlas volume ranking: orange Target, cyan Control. Set the image-side assignment below; edit roles and click results in the table.','ForegroundColor','w');return;
+        end
         included=baseIncluded;if ~isempty(paintedMask),included=included&paintedMask;end
         set(status,'String',sprintf('%d / %d eligible pixels selected on this slice. Left adds; right erases. Mask applies to ALL slices.', ...
             nnz(included),nnz(baseIncluded)),'ForegroundColor','w');
@@ -534,6 +675,23 @@ if isgraphics(f), if accepted, opt=collect(); end; delete(f); end
         try
             finishStroke(true);
             o=collect(); w=o.signalSec;
+            if strcmp(o.roiMode,'atlasRanking')
+                assert(hasAtlas,'Load a registered Regions atlas first.');
+                assert(numel(w)==2&&all(isfinite(w))&&w(1)>=0&&w(2)>w(1),'Enter increasing signal times in minutes.');
+                last=(ctx.nT-1)*ctx.TR;
+                if isfield(ctx,'scanTiming')
+                    durations=cellfun(@(d)(d.nFrames-1)*d.TR,ctx.scanTiming);
+                    if strcmp(o.scanScope,'all'),last=max(durations);
+                    elseif strcmp(o.scanScope,'single'),last=durations(o.scanIndex);end
+                end
+                assert(w(2)<=last+max(1e-9,ctx.TR*1e-6),'Signal interval exceeds the acquisition (last sample %.6g min).',last/60);
+                scmSearchSlices(o,nz);
+                assert(all(isfinite(o.topCount)&o.topCount>=0&o.topCount==round(o.topCount)), ...
+                    'Top region counts must be integers; 0 keeps all.');
+                assert(isfinite(o.minCoverage)&&o.minCoverage>=.75&&o.minCoverage<=1,'Usable coverage must be 75-100 percent.');
+                if o.bilateral,scmSearchSideMasks(o,[ny nx]);end
+                accepted=true;uiresume(f);return;
+            end
             whole=strcmp(o.roiMode,'region');
             if whole
                 assert(hasAtlas&&~isempty(o.atlasRegions),'Select one or several named atlas regions for whole-region analysis.');

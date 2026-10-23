@@ -42,10 +42,13 @@ elseif strcmp(mode,'mask')
    'mapping',mapping,'isAtlasWarped',true);B=scmReadMaskEditorBundle('align',B,ctx);
  else
   B.image=fusiScanSequence('mapVolume',B.image,target,anchor);
-  if ~isempty(B.includeMask),B.includeMask=fusiScanSequence('mapVolume',B.includeMask,target,anchor);end
+  for field={'brainMask','overlayMask'}
+   if ~isempty(B.(field{1})),B.(field{1})=fusiScanSequence('mapVolume',B.(field{1}),target,anchor);end
+  end
  end
  next.underlay=B.image;next.underlayProcessed=B.isProcessed;next.underlayLabel=maskFile;
- if ~isempty(B.includeMask),next.mask=B.includeMask;next.maskIsInclude=true;end
+ next.brainMask=B.brainMask;next.overlayMask=B.overlayMask;
+ next.maskUnderlayFile=maskFile;next.maskOverlayFile=maskFile;
 end
 next.par.scmSizeYXZ=size(next.PSC,1:3);
 nativeData=next;nativeData.I=power;nativeData.transformed=false;

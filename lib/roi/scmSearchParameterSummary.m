@@ -13,6 +13,9 @@ if isfield(c,'searchScanLabel')
 end
 shape=sprintf('%d x %d pixels (X x Y)',xy);
 if isfield(c,'roiMode')&&strcmp(c.roiMode,'region'),shape=sprintf('Whole selected region per slice (%d voxels in this candidate)',c.pixelCount);end
+if isfield(c,'roiMode')&&strcmp(c.roiMode,'atlasRanking')
+ shape=sprintf('Whole atlas volume region across slices %d-%d (%d fixed voxels); image sides assigned explicitly',min(c.activeSlices),max(c.activeSlices),c.pixelCount);
+end
 lines{end+1}=sprintf('ROI: %s',shape);
 if isfield(c,'sizeXYUm')&&all(isfinite(c.sizeXYUm))
  physical=sprintf('Physical bounding size (X x Y): %.6g x %.6g um',c.sizeXYUm);
@@ -57,7 +60,13 @@ if isfield(c,'atlasProvenance')
 end
 lines{end+1}=sprintf('Candidates: %d | Skipped slice/role searches: %d',numel(candidates),numel(skipped));
 if ~isempty(skipped),lines{end+1}=['Skipped: ' strjoin(skipped,', ')];end
-lines{end+1}='Selection: exploratory maximum of the ROI voxel mean, using exact percent rebasing per voxel. Selection is not outlier removal.';
+if isfield(c,'rankingValue')
+ lines{end+1}=sprintf('Ranking: %s / %s; signed change %.6g%%; usable voxel coverage %.6g%%. ROI size, brush and rectangles are ignored.', ...
+     c.searchParameters.rankingMetric,c.searchParameters.rankingDirection,c.rankingValue,c.coveragePercent);
+ lines{end+1}='Selection: exploratory ranking of fixed whole-volume regional means using exact per-voxel PSC rebasing; not a significance test.';
+else
+ lines{end+1}='Selection: exploratory maximum of the ROI voxel mean, using exact percent rebasing per voxel. Selection is not outlier removal.';
+end
 textOut=strjoin(lines,newline);
 end
 function v=choose(condition,a,b)

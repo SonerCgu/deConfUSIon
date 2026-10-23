@@ -4,27 +4,35 @@ if nargin<2,onDecision=[];end
 volumes=fusiLightSuiteReviewVolumes(session);
 shape=size(volumes.sample);index=max(1,round(shape/2));
 sampleLimits=limits(volumes.sample);atlasLimits=limits([volumes.atlas{1}(:);volumes.atlas{2}(:)]);
+editedLimits=[0 1];
+if ~isempty(volumes.sampleDisplay)&&~volumes.sampleDisplayMeta.processed,editedLimits=limits(volumes.sampleDisplay);end
 planeNames={'Coronal / AP','Horizontal (axial) / DV','Sagittal / ML'};
 stageNames={'AFFINE','AFFINE + B-SPLINE'};axisNames={'AP','DV','ML'};
 fig=figure('Name','deConfUSIon | Interactive LightSuite registration review', ...
     'NumberTitle','off','Color',[.035 .045 .045],'MenuBar','none','ToolBar','figure', ...
     'Position',[65 65 1320 890],'WindowScrollWheelFcn',@scroll,'WindowKeyPressFcn',@key);
 guard=fusiLightSuitePaths(session.config);setappdata(fig,'LightSuitePathGuard',guard);
-label([.025 .925 .95 .055],['Compare the SAME slice: sample in gray, registered vascular atlas in cyan. ' ...
+label([.025 .918 .95 .03],['Compare the SAME slice: sample in gray, registered vascular atlas in cyan. ' ...
     'Solid colored lines are atlas region boundaries, not landmarks.']);
 view=control('popupmenu',[.025 .86 .22 .045], ...
     [planeNames {'All three planes'}],@(~,~)render(),'LightSuiteReviewPlane');
 mode=control('popupmenu',[.26 .86 .22 .045], ...
     {'Vessel overlay','Boundary overlay','Checkerboard','Sample only','Atlas only'},@(~,~)render(),'LightSuiteReviewMode');
-boundaries=control('checkbox',[.50 .86 .15 .045],'Region boundaries',@(~,~)render(),'LightSuiteReviewBoundaries');boundaries.Value=1;
+boundaries=control('checkbox',[.50 .86 .15 .045],'Region boundaries',@(~,~)render(),'LightSuiteReviewBoundaries');boundaries.Value=0;
 colors=control('popupmenu',[.66 .86 .13 .045],{'Yellow','White','Magenta','Cyan'},@(~,~)render(),'LightSuiteReviewColor');
-width=control('popupmenu',[.80 .86 .08 .045],{'1 px','2 px','3 px'},@(~,~)render(),'LightSuiteReviewWidth');width.Value=2;
+width=control('popupmenu',[.80 .86 .08 .045],{'1 px','2 px','3 px'},@(~,~)render(),'LightSuiteReviewWidth');width.Value=1;
 control('pushbutton',[.89 .86 .085 .045],'Help',@helpReview,'LightSuiteReviewHelp');
 label([.025 .80 .13 .035],'Atlas opacity');
 opacity=slider([.15 .812 .22 .023],0,1,.55,@(~,~)render(),'LightSuiteReviewOpacity');
 label([.41 .80 .15 .035],'Sample contrast');
 contrast=slider([.56 .812 .20 .023],.4,2.5,1,@(~,~)render(),'LightSuiteReviewContrast');
 control('pushbutton',[.80 .79 .175 .045],'Reset display / zoom',@resetDisplay,'LightSuiteReviewReset');
+label([.025 .752 .13 .03],'Atlas contrast');
+atlasContrast=slider([.15 .762 .22 .02],.4,3,1,@(~,~)render(),'LightSuiteReviewAtlasContrast');
+emphasis=control('popupmenu',[.41 .75 .35 .035], ...
+    {'Balanced overlay','Emphasize acquired anatomy','Emphasize atlas','Boundaries on anatomy'},@setEmphasis,'LightSuiteReviewEmphasis');
+source=control('popupmenu',[.80 .75 .175 .035],{'Original anatomy','Edited underlay'},@(~,~)render(),'LightSuiteReviewAnatomySource');
+if isempty(volumes.sampleDisplay),source.Enable='off';else,source.Value=2;end
 ax=gobjects(2,3);images=gobjects(2,3);sliceSliders=gobjects(1,3);sliceNumbers=gobjects(1,3);sliceLabels=gobjects(1,3);
 for rowIndex=1:2
     for planeIndex=1:3
@@ -50,7 +58,7 @@ rebuild=control('pushbutton',[.31 .025 .25 .055],'Rebuild inverse + recheck',@(~
 reject=control('pushbutton',[.575 .025 .14 .055],'Do not accept',@(~,~)perform('reject'),'LightSuiteReviewReject');
 recheck=control('pushbutton',[.73 .025 .12 .055],'Recheck',@(~,~)check,'LightSuiteReviewRecheck');
 control('pushbutton',[.865 .025 .11 .055],'Close',@(~,~)delete(fig),'LightSuiteReviewClose');
-fusiLightSuiteStyle(fig);render();check();
+fusiLightSuiteStyle(fig);fusiLightSuiteLabelWindow(fig,session,[.025 .963 .95 .028]);render();check();
 
     function h=control(style,pos,text,callback,tag)
         h=uicontrol(fig,'Style',style,'Units','normalized','Position',pos,'String',text, ...
@@ -69,7 +77,17 @@ fusiLightSuiteStyle(fig);render();check();
         render();
     end
     function resetDisplay(~,~)
-        opacity.Value=.55;contrast.Value=1;mode.Value=1;boundaries.Value=1;width.Value=2;render();
+        opacity.Value=.55;contrast.Value=1;atlasContrast.Value=1;emphasis.Value=1;mode.Value=1;boundaries.Value=0;width.Value=1;render();
+    end
+    function setEmphasis(~,~)
+        mode.Value=1;boundaries.Value=0;contrast.Value=1;atlasContrast.Value=1;
+        switch emphasis.Value
+            case 1,opacity.Value=.5;
+            case 2,opacity.Value=.25;contrast.Value=1.3;
+            case 3,opacity.Value=.8;atlasContrast.Value=1.5;
+            case 4,mode.Value=2;boundaries.Value=1;
+        end
+        render();
     end
     function scroll(~,event)
         cursor=get(fig,'CurrentPoint');bounds=getpixelposition(fig);xy=cursor./bounds(3:4);
@@ -97,15 +115,18 @@ fusiLightSuiteStyle(fig);render();check();
             for stage=1:2
                 axis(ax(stage,dim),'off');ax(stage,dim).Visible='off';images(stage,dim).Visible=onoff(active);
                 if ~active,ax(stage,dim).Title.Visible='off';continue;end
-                if allPlanes,pos=[.035+(dim-1)*.325 .55-(stage-1)*.255 .285 .205];
-                else,pos=[.04+(stage-1)*.49 .32 .43 .42];end
+                if allPlanes,pos=[.035+(dim-1)*.325 .535-(stage-1)*.245 .285 .19];
+                else,pos=[.04+(stage-1)*.49 .315 .43 .40];end
                 ax(stage,dim).Position=pos;ax(stage,dim).Visible='on';
                 S=normalize(slice(volumes.sample,dim),sampleLimits,contrast.Value);
-                A=normalize(slice(volumes.atlas{stage},dim),atlasLimits,1);
+                if source.Value==2&&~isempty(volumes.sampleDisplay)
+                    S=normalize(slice(volumes.sampleDisplay,dim),editedLimits,contrast.Value);
+                end
+                A=normalize(slice(volumes.atlas{stage},dim),atlasLimits,atlasContrast.Value);
                 L=slice(volumes.labels{stage},dim);
                 gray=repmat(S,1,1,3);cyan=cat(3,.10*A,A,.90*A);
                 switch mode.Value
-                    case 1,alpha=opacity.Value*sqrt(A);rgb=gray.*(1-alpha)+cyan.*alpha;
+                    case 1,alpha=opacity.Value;rgb=gray.*(1-alpha)+cyan.*alpha;
                     case 2,rgb=gray;
                     case 3
                         [r,c]=ndgrid(1:size(S,1),1:size(S,2));tile=mod(floor((r-1)/20)+floor((c-1)/20),2)==0;
@@ -145,6 +166,9 @@ fusiLightSuiteStyle(fig);render();check();
         setappdata(fig,'LightSuiteReviewValidation',report);
         if report.passed
             accept.Enable='on';status.ForegroundColor=[.6 1 .7];status.String=report.message;
+            if isfield(report,'landmarks')&&isfield(report.landmarks,'reviewSuggested')&&report.landmarks.reviewSuggested
+                status.ForegroundColor=[1 .8 .45];
+            end
         else
             status.ForegroundColor=[1 .8 .45];status.String=[report.message ' Rebuild the inverse and recheck. If this still fails, revise landmarks / geometry and refit in a new project.'];
         end
@@ -166,7 +190,10 @@ fusiLightSuiteStyle(fig);render();check();
                     session=fusiLightSuite('repairinverse',session,@progress);
                     message='Inverse rebuilt and passed the unchanged numerical limits. Inspect the anatomy before accepting.';
             end
-            if isa(onDecision,'function_handle'),onDecision(session,message);end
+            if isa(onDecision,'function_handle')
+                if nargin(onDecision)==2,onDecision(session,message);
+                else,onDecision(session,message,action);end
+            end
             if ~isgraphics(fig),return;end
             if strcmp(action,'repair'),check();status.String=[message ' ' status.String];
             else,status.String=message;accept.Enable='off';end

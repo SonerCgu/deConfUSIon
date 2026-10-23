@@ -4,6 +4,13 @@ fprintf(fid,'# AtlasExcludedRegionIDs: %s\n# AtlasVentriclesExcluded: 1\n',strtr
 if isfield(c,'searchParameters')&&isfield(c.searchParameters,'uploadedMaskApplied')
  fprintf(fid,'# AtlasUploadedSCMMaskIgnored: %d\n',~c.searchParameters.uploadedMaskApplied);
 end
+if isfield(c,'rankingValue')
+ fprintf(fid,'# AtlasVolumeRanking: %s / %s\n# AtlasRankedChange_percent: %.12g\n# AtlasUsableVoxelCoverage_percent: %.12g\n', ...
+     c.searchParameters.rankingMetric,c.searchParameters.rankingDirection,c.rankingValue,c.coveragePercent);
+ fprintf(fid,'# AtlasVolumeSlices: %s\n# AtlasVolumeVoxelCount: %d\n',mat2str(c.activeSlices),c.pixelCount);
+ fprintf(fid,'# AtlasMinimumUsableVoxelCoverage_percent: %.12g\n# AtlasOriginalImageSide: %s\n',100*c.minimumUsableCoverageFraction,c.originalImageSide);
+ if isfield(c,'midlineXY'),fprintf(fid,'# AtlasDrawnMidlineXY: %s\n',mat2str(c.midlineXY));end
+end
 if isfield(c,'atlasRegion')&&~isempty(c.atlasRegion)
  fprintf(fid,'# AtlasRegion: %s | %s | ID %d\n',c.atlasRegion.acronym,c.atlasRegion.name,c.atlasRegion.id);
  fprintf(fid,'# AtlasMinimumROICoverage_percent: %.12g\n',100*c.minimumAtlasCoverageFraction);

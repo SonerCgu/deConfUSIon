@@ -41,14 +41,13 @@ if ~opt.bilateral
     if ~strcmp(selection,'Both'), regions.role=selection; end
     return;
 end
-assert(isscalar(opt.splitX)&&isfinite(opt.splitX)&&opt.splitX>=1&&opt.splitX<nx, ...
-    'deConfUSIon:SearchBounds','Split X must lie between the first and last image columns.');
+[left,right]=scmSearchSideMasks(opt,[ny nx]);
 names={'Image-left','Image-right'}; roles={'Target','Control'};
 if ~opt.leftIsTarget, roles=fliplr(roles); end
 for k=1:2
     p=opt.polygons{z,k};
     if isempty(p)
-        if k==1, m=X<=opt.splitX; else, m=X>opt.splitX; end
+        if k==1,m=left;else,m=right;end
     else
         assert(size(p,2)==2&&size(p,1)>=3&&all(isfinite(p(:))), ...
             'deConfUSIon:SearchBounds','A region needs at least three finite polygon vertices.');

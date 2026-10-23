@@ -5418,6 +5418,7 @@ function refreshRegistered2DUnderlays()
 end
 function result=underlayData()
     result=struct('PSC',PSC,'underlay',bgDefaultFull,'isAtlasWarped',state.isAtlasWarped,'regionLabels',state.regionLabelUnderlay, ...
+        'atlasRegionSearch',state.regionContext3D, ...
         'regionInfo',state.regionInfo,'transformFile',state.atlasTransformFile,'mapping',state.currentROIMapping, ...
         'imageGeometry',struct('xlim',ax.XLim,'ylim',ax.YLim,'aspect',ax.DataAspectRatio, ...
         'underlayX',img.XData,'underlayY',img.YData,'underlayTextureSize',size(img.CData,[1 2])));
@@ -5427,6 +5428,9 @@ function atlasUnderlayChoiceCB(~,~)
     if ~isempty(entries)
         entry=entries{get(popAtlasChoice,'Value')};
         bgDefaultFull=entry.data;applyUnderlayMeta(entry.meta,bgDefaultFull);
+        if isfield(entry.meta,'lightSuiteNativeGrid')&&entry.meta.lightSuiteNativeGrid
+            state.regionContext3D=getappdata(popAtlasChoice,'AtlasRegionContext2D');
+        end
         underSrc=1;underSrcLabel='Default(bg)';set(popUSrc,'Value',1);
         setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',entries);set(popAtlasChoice,'Enable','on');render();return;
     end
@@ -5504,12 +5508,14 @@ function applyStepMotorUnderlayBundleVideo(bundle)
     statusLine=sprintf('Saved atlas session: %d/%d planes | %s. Alignment is available to all loaded scans.',numel(bundle.sourceSliceIndices),bundle.sourceNSlices,bundle.names{bundle.selected});render();
 end
 function loadAtlasUnderlayFolderCB(~,~,selected)
+    sourceKind='';
     if nargin<3
         lastFile='';if isfield(state,'lastUnderlayFile'),lastFile=state.lastUnderlayFile;end
         dialogs=struct();if isappdata(fig,'FUSIAtlasPickerDialogs'),dialogs=getappdata(fig,'FUSIAtlasPickerDialogs');end
         [selected,options]=fusiChooseAtlasSource(par,getDatasetRootForVideoSelectors(),state.atlasTransformFile,lastFile,dialogs);
         setappdata(fig,'FUSIUnderlayPickerOptions',options);
         if isempty(selected),return;end
+        sourceKind=options.sourceKind;
     end
     if isfile(selected)
         contents=whos('-file',selected);fields={contents.name};
@@ -5520,7 +5526,7 @@ function loadAtlasUnderlayFolderCB(~,~,selected)
     end
     folder=char(selected);
     nativeRegions=fullfile(folder,'LightSuite_Native_Regions.mat');
-    if isfile(nativeRegions),loadNewUnderlayCB([],[],nativeRegions);return;end
+    if ~strcmp(sourceKind,'Normal folder')&&isfile(nativeRegions),loadNewUnderlayCB([],[],nativeRegions);return;end
     options=fusiUnderlayPickerOptions(struct('underlayStartPath',folder),folder,'','');
     folder=options.startPath;
     for pattern={'Histology.mat','AtlasUnderlay_histology*.mat','Vascular.mat','AtlasUnderlay_vascular*.mat','Regions*.mat','AtlasUnderlay_regions*.mat'}
@@ -5557,6 +5563,16 @@ function loadNewUnderlayCB(~,~,selectedFile)
             warpFunctionalToAtlasStepMotorFolder(fullf);state.lastUnderlayFile=fullf;return;
         end
         [Uraw, meta] = readUnderlayFile(fullf);
+        if isfield(meta,'nativeUnderlayLibrary')
+            library=meta.nativeUnderlayLibrary;
+            setappdata(popAtlasChoice,'AtlasUnderlayEntries2D',library.entries);
+            setappdata(popAtlasChoice,'AtlasRegionContext2D',library.context);
+            setappdata(popAtlasChoice,'AtlasUnderlayFiles',{});
+            set(popAtlasChoice,'String',library.names,'Value',library.selected,'Enable','on');
+            state.lastUnderlayFile=fullf;atlasUnderlayChoiceCB([],[]);
+            origBgDefaultFull=bgDefaultFull;origUnderlayProcessed=false;
+            statusLine=['Loaded LightSuite native atlas: ' fullf];render();return;
+        end
         if isfield(meta,'registrationBundle3D') && meta.registrationBundle3D
             [Uraw,meta]=fusiAtlasRegroupUnderlay3D(Uraw,meta,groupingOverride);
             assert(isequal(double(meta.transform.scanGeometry.originalSize),double(size(origPSC,[1 2 3]))), ...
@@ -6149,6 +6165,11 @@ function [U, meta] = readUnderlayFile(f)
         case '.mat'
             [matched,U,meta]=fusiCachedAtlasUnderlay3D(f);if matched,return;end
             S = load(f);
+            if isfield(S,'lightSuiteNativeMeta')
+                assert(~state.isAtlasWarped && ~state.isStepMotorAtlasWarped, ...
+                    'deConfUSIon:LightSuiteNativeGrid','Open the native recording view before loading LightSuite backgrounds.');
+                [U,meta]=fusiLightSuiteUnderlayLibrary(S,f,[ny nx nZ]);return;
+            end
             [U, meta] = extractUnderlayFromMatStruct(S);
 
         case '.nii'

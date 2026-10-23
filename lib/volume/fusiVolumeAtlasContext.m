@@ -2,9 +2,12 @@ function context=fusiVolumeAtlasContext(data,transformFile,atlas,maxDimension,pr
 % Lazy native -> atlas display mapper. Never materialize an atlas-sized 4D.
 if nargin<5,previous=[];end
 if nargin<4,maxDimension=160;end
+[isLightSuite,selection]=fusiVolumeLightSuiteSelection(transformFile);
+if isLightSuite,context=fusiVolumeLightSuiteContext(data,selection,maxDimension,previous);return;end
 cache=[];
 if (nargin<3 || isempty(atlas)) && isstruct(previous) && isfield(previous,'referenceCache') && ...
-        previous.referenceCache.maxDimension==maxDimension
+        previous.referenceCache.maxDimension==maxDimension&& ...
+        (~isfield(previous.referenceCache,'kind')||strcmp(previous.referenceCache.kind,'standard'))
     cache=previous.referenceCache;atlas=cache.atlas;path=cache.path;
 elseif nargin<3 || isempty(atlas)
     path=which('allen_brain_atlas.mat');

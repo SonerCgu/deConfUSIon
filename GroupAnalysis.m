@@ -311,6 +311,8 @@ S.previewConnectAnimals = false;
 S.previewPairColor = []; % Empty selects contrast appropriate for Dark/Light.
 S.previewPairColorChoice = 1;
 S.previewPairCustomColor = [.55 .55 .55];
+S.previewPairLineWidth = 1.2;
+S.previewPairOpacity = 1;
 
 S.previewStyle    = 'Dark';
 S.previewShowGrid = false;
@@ -318,6 +320,7 @@ S.tc_previewSmooth = false;
 S.tc_previewSmoothWinSec = 60;
 
 S.testType  = 'Two-sample t-test (Student, equal var)';
+S.testTail  = 'both';
 S.alpha     = 0.05;
 S.annotMode = 'Bottom only';
 S.showPText = true;
@@ -1057,42 +1060,53 @@ pStats = uipanel(pSTATSBG,'Units','normalized','Position',[0.02 0.54 0.96 0.44],
     'Title','Metric statistics','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
 
 uicontrol(pStats,'Style','text','String','Test:', ...
-    'Units','normalized','Position',[0.02 0.72 0.12 0.20], ...
+    'Units','normalized','Position',[0.02 0.82 0.12 0.13], ...
     'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
 
 S.hTest = uicontrol(pStats,'Style','popupmenu', ...
     'String',{'None','One-sample t-test (vs 0)','Two-sample t-test (Student, equal var)','Two-sample t-test (Welch)','One-way ANOVA (groups)','Paired t-test (matched PairID / animal)'}, ...
-    'Units','normalized','Position',[0.14 0.74 0.50 0.20], ...
+    'Units','normalized','Position',[0.14 0.82 0.50 0.14], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStatsChanged, ...
     'Value',3);
 
-set(S.hTest,'TooltipString',['Student is the default (independent animals, equal variance). All t-tests are two-sided. Welch allows unequal variance. ' ...
+set(S.hTest,'TooltipString',['Student assumes independent animals and equal variance. Welch allows unequal variance. Select the alternative in Direction. ' ...
     'Paired uses matching PairID (or Animal ID). Aggregate repeated ROIs/sessions per animal before testing.']);
 
 uicontrol(pStats,'Style','text','String','Alpha:', ...
-    'Units','normalized','Position',[0.66 0.72 0.10 0.20], ...
+    'Units','normalized','Position',[0.66 0.82 0.10 0.13], ...
     'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
 
 S.hAlpha = uicontrol(pStats,'Style','edit','String',num2str(S.alpha), ...
-    'Units','normalized','Position',[0.75 0.74 0.10 0.20], ...
+    'Units','normalized','Position',[0.75 0.82 0.10 0.14], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStatsChanged);
 
+uicontrol(pStats,'Style','text','String','Direction:', ...
+    'Units','normalized','Position',[0.02 0.65 0.12 0.13], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
+S.hTestTail=uicontrol(pStats,'Style','popupmenu', ...
+    'String',{'Two-tailed: first group ~= second group','One-tailed: first group > second group','One-tailed: first group < second group'}, ...
+    'Units','normalized','Position',[0.14 0.65 0.71 0.14], ...
+    'BackgroundColor',C.editBg,'ForegroundColor','w','Value',1, ...
+    'Callback',@onStatsChanged,'Tag','GA_TestTail', ...
+    'TooltipString',['Choose the directional hypothesis before inspecting results. Directions use the actual groups shown here, ' ...
+        'in the same order as the plotted comparison. One-sample directions compare the mean with zero. ANOVA uses its F upper tail.']);
+
 uicontrol(pStats,'Style','text','String','Annotate:', ...
-    'Units','normalized','Position',[0.02 0.52 0.12 0.14], ...
+    'Units','normalized','Position',[0.02 0.49 0.12 0.13], ...
     'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold');
 
 S.hAnnotMode = uicontrol(pStats,'Style','popupmenu', ...
     'String',{'None','Bottom only','Both'}, ...
-    'Units','normalized','Position',[0.14 0.54 0.25 0.16], ...
+    'Units','normalized','Position',[0.14 0.49 0.25 0.14], ...
     'BackgroundColor',C.editBg,'ForegroundColor','w','Callback',@onStatsChanged, ...
     'Value',2);
 
 S.hShowPText = uicontrol(pStats,'Style','checkbox','String','Show p-value text', ...
-    'Units','normalized','Position',[0.42 0.54 0.25 0.16], ...
+    'Units','normalized','Position',[0.42 0.49 0.25 0.14], ...
     'Value',double(S.showPText), ...
     'BackgroundColor',bg2,'ForegroundColor','w','Callback',@onStatsChanged);
 
-pOut = uipanel(pStats,'Units','normalized','Position',[0.02 0.02 0.96 0.46], ...
+pOut = uipanel(pStats,'Units','normalized','Position',[0.02 0.02 0.96 0.43], ...
     'Title','Outlier screening (within Group x Condition)','BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
 
 S.hOutMethod = uicontrol(pOut,'Style','popupmenu','String',{'None','MAD robust z-score','IQR rule','SD z-score (exploratory)'}, ...
@@ -1211,7 +1225,7 @@ try
         'Units','normalized','Position',[0.020 0.330 0.210 0.110], ...
         'Value',0,'BackgroundColor',bg2,'ForegroundColor','w','FontSize',10, ...
         'Callback',@onSmoothChanged,'Tag','GA_RPV_CONNECT_ANIMALS', ...
-        'TooltipString','Links matching Animal IDs across groups. Case/outer spaces are ignored; ambiguous duplicate IDs are skipped. Display only: statistics are unchanged.');
+        'TooltipString','Uses the table Animal ID, including manual corrections. Repeated animals connect within the same source scan/session/date. Unresolved duplicates are skipped; source-label differences are reported. Display only; statistics are unchanged.');
     uicontrol(S.hPrevTop,'Style','text','String','Line color', ...
         'Units','normalized','Position',[0.235 0.330 0.080 0.110], ...
         'BackgroundColor',bg2,'ForegroundColor','w','FontSize',10,'Tag','GA_RPV_DYNAMIC');
@@ -1300,7 +1314,33 @@ S.hPrevChooseAnimals=mkBtn(S.hPrevROIControls,'Choose animals...',[.66 .12 .20 .
 S.hPrevAnimalSelection=uicontrol(S.hPrevROIControls,'Style','text','String','All animals', ...
     'Units','normalized','Position',[.87 .15 .12 .7],'BackgroundColor',bg2, ...
     'ForegroundColor','w','FontSize',10,'HorizontalAlignment','left');
-set(S.ax1,'Position',[.095 .40 .850 .245]);
+S.hPrevPairControls=uipanel(S.hPrevBG,'Units','normalized','Position',[.02 .605 .96 .045], ...
+    'BackgroundColor',bg2,'BorderType','none');
+set(S.hPrevConnectAnimals,'Parent',S.hPrevPairControls,'Position',[.01 .14 .205 .72]);
+pairColorLabel=findobj(S.hPrevTop,'Style','text','String','Line color');
+set(pairColorLabel,'Parent',S.hPrevPairControls,'Position',[.22 .14 .07 .72]);
+set(S.hPrevPairColor,'Parent',S.hPrevPairControls,'Position',[.29 .14 .16 .72]);
+uicontrol(S.hPrevPairControls,'Style','text','String','Width (pt)', ...
+    'Units','normalized','Position',[.47 .14 .08 .72],'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'FontSize',10,'HorizontalAlignment','left');
+S.hPrevPairWidth=uicontrol(S.hPrevPairControls,'Style','edit','String','1.2', ...
+    'Units','normalized','Position',[.55 .14 .055 .72],'BackgroundColor',C.editBg,'ForegroundColor','w', ...
+    'FontSize',10,'Callback',@onPairLineStyleChanged,'Tag','GA_RPV_PAIR_WIDTH', ...
+    'TooltipString','Connecting-line width, 0.25 to 8 points. Applies to preview and PNG exports.');
+uicontrol(S.hPrevPairControls,'Style','text','String','Opacity', ...
+    'Units','normalized','Position',[.63 .14 .075 .72],'BackgroundColor',bg2,'ForegroundColor','w', ...
+    'FontSize',10,'HorizontalAlignment','left');
+S.hPrevPairOpacity=uicontrol(S.hPrevPairControls,'Style','slider','Min',0,'Max',1,'Value',1, ...
+    'Units','normalized','Position',[.71 .29 .17 .40],'BackgroundColor',C.editBg, ...
+    'Callback',@onPairLineStyleChanged,'Tag','GA_RPV_PAIR_OPACITY', ...
+    'TooltipString','Connecting-line opacity, from invisible to full color. Applies to preview and PNG exports.');
+S.hPrevPairOpacityValue=uicontrol(S.hPrevPairControls,'Style','text','String','100%', ...
+    'Units','normalized','Position',[.90 .14 .075 .72],'BackgroundColor',bg2,'ForegroundColor','w','FontSize',10);
+set(findobj(S.hPrevTop,'Style','text','String','X tick step (min)'),'Position',[.02 .330 .145 .110]);
+set(S.hPrevXStep,'Position',[.17 .325 .06 .12]);
+set(S.hPrevXAll,'Position',[.24 .325 .14 .12]);
+set(S.hPrevAnimalLabels,'Position',[.40 .330 .13 .11]);
+set(S.ax1,'Position',[.095 .365 .850 .220]);
 
 %%% =====================================================================
 %%% INITIALIZE
@@ -1439,6 +1479,13 @@ gaInstallEditSelection(hFig);
         S0 = ensureFCRowFilesSizeGA_TARGETED(S0);
         guidata(hFig,S0);
         refreshTable();
+        if ~isempty(evt) && numel(evt.Indices)==2 && evt.Indices(2)==2
+            % Cached results contain the old subject and pair identities.
+            S0.lastROI=struct();guidata(hFig,S0);
+            if S0.previewConnectAnimals || contains(S0.testType,'Paired t-test')
+                updatePreview();
+            end
+        end
     end
 
     function onApplyAllToggle(src,~)
@@ -1920,6 +1967,13 @@ gaInstallEditSelection(hFig);
         try, S0 = readPreviewAxisControlsLocal(S0); catch, end
         guidata(hFig,S0);
         updatePreview();
+    end
+
+    function onPairLineStyleChanged(~,~)
+        S0=readPreviewAxisControlsLocal(guidata(hFig));
+        set(S0.hPrevPairWidth,'String',sprintf('%.3g',S0.previewPairLineWidth));
+        set(S0.hPrevPairOpacityValue,'String',sprintf('%.0f%%',100*S0.previewPairOpacity));
+        guidata(hFig,S0);updatePreview();
     end
 
     function onMapDisplayChanged(~,~)
@@ -2435,7 +2489,7 @@ drawnow;
 
     function onStatsChanged(~,~)
         S0 = guidata(hFig);
-        previousTest=S0.testType;previousAlpha=S0.alpha;
+        previousTest=S0.testType;previousAlpha=S0.alpha;previousTail=S0.testTail;
         try
             items = get(S0.hTest,'String');
             S0.testType = items{get(S0.hTest,'Value')};
@@ -2451,7 +2505,8 @@ drawnow;
         catch
         end
         try, S0.showPText = logical(get(S0.hShowPText,'Value')); catch, end
-        if ~strcmp(previousTest,S0.testType) || ~isequal(previousAlpha,S0.alpha)
+        S0=readStatsSettingsFromUI(S0);
+        if ~strcmp(previousTest,S0.testType) || ~isequal(previousAlpha,S0.alpha) || ~strcmp(previousTail,S0.testTail)
             S0.lastROI=struct(); % Export must not reuse a result from the previous test.
         end
         guidata(hFig,S0);
@@ -2578,8 +2633,8 @@ S0.activeTab = 'PREV';
             updateManualTabs();
             updatePreview();
             if isempty(R.missingMetricSubjects)
-                message=['ROI analysis complete. ' R.stats.type ' | ' R.stats.pReport];
-                if all(isfinite(R.stats.ci))
+                message=['ROI analysis complete. ' R.stats.type ' | ' R.stats.tailLabel ' | ' R.stats.pReport];
+                if all(~isnan(R.stats.ci))
                     message=[message sprintf(' | %s: %.3g (%.0f%% CI %.3g to %.3g)', ...
                         R.stats.effectLabel,R.stats.effect,100*R.stats.confidenceLevel,R.stats.ci)];
                 end
@@ -2702,6 +2757,7 @@ S0.activeTab = 'PREV';
 
         S0.groupList = mergeUniqueStable(S0.groupList,uniqueStable(colAsStr(S0.subj,3)));
         S0.condList  = mergeUniqueStable(S0.condList, uniqueStable(colAsStr(S0.subj,4)));
+        S0 = readStatsSettingsFromUI(S0);
 
         colFmt = {'logical','char','char','char',S0.groupList,S0.condList,'char','char','char','char'};
         dispData = makeUITableDisplayData(S0.subj,S0.tableMinRows,S0.fcRowFiles);
@@ -2867,18 +2923,27 @@ try, S0 = readPlotScaleSettingsFromUI(S0); catch, end
                 message='ROI preview plotted.';
                 if S0.previewConnectAnimals && isappdata(S0.ax2,'GA_ROI_PairingReport')
                     pairing=getappdata(S0.ax2,'GA_ROI_PairingReport');
-                    message=sprintf('ROI preview: %d animal pairs.',numel(pairing.pairedIDs));
+                    message=sprintf('ROI preview: %d recording pairs, %d animal(s).',numel(pairing.pairedIDs),numel(unique(pairing.pairedIDs)));
                     if ~isempty(pairing.duplicateIDs)
-                        message=[message ' Duplicate Animal IDs within a group: ' strjoin(pairing.duplicateIDs,', ') '.'];
+                        message=[message ' Ambiguous duplicate observations in one recording: ' strjoin(pairing.duplicateIDs,', ') '.'];
                     end
                     if ~isempty(pairing.unmatchedIDs)
                         message=[message ' No finite partner: ' strjoin(pairing.unmatchedIDs,', ') '.'];
+                    end
+                    if isfield(pairing,'conflictingRows') && ~isempty(pairing.conflictingRows)
+                        message=[message ' Conflicting animal identity in row(s): ' num2str(pairing.conflictingRows(:)') '. Check Animal ID and ROI source.'];
+                    end
+                    if isfield(pairing,'missingRows') && ~isempty(pairing.missingRows)
+                        message=[message ' Missing animal identity in row(s): ' num2str(pairing.missingRows(:)') '.'];
+                    end
+                    if isfield(pairing,'sourceMismatchRows') && ~isempty(pairing.sourceMismatchRows)
+                        message=[message ' Using corrected table Animal ID over source labels in row(s): ' num2str(pairing.sourceMismatchRows(:)') '.'];
                     end
                 end
                 setStatusText(message);
                 previewResult=getappdata(S0.ax2,'GroupROIResult');
                 if isstruct(previewResult)&&isfield(previewResult,'stats')&&isfield(previewResult.stats,'warnings')&&~isempty(previewResult.stats.warnings)
-                    setStatusText(strjoin(previewResult.stats.warnings,' '));
+                    setStatusText([message ' ' strjoin(previewResult.stats.warnings,' ')]);
                 end
             catch
             end
@@ -3193,7 +3258,7 @@ drawnow;
     function setStatusText(txt)
         S0 = guidata(hFig);
         try
-            set(S0.hStatus,'String',txt);
+            set(S0.hStatus,'String',txt,'TooltipString',txt);
         catch
         end
         try
@@ -3529,10 +3594,8 @@ for r = 1:size(S.subj,1)
     if isempty(strtrimSafe(S.subj{r,4}))
         S.subj{r,4} = S.defaultCond;
     end
-    if isempty(strtrimSafe(S.subj{r,5})) && logicalCellValue(S.subj{r,1})
-        S.subj{r,5} = S.subj{r,2};
-    end
 end
+S.subj=gaSyncAnimalPairIDs(S.subj);
 end
 
 function S = ensureRowPacapSideSize(S)
@@ -3624,12 +3687,14 @@ if size(subj,1) < n
 elseif size(subj,1) > n
     subj = subj(1:n,:);
 end
+previousAnimals=subj(:,2);
 for i = 1:n
     subj{i,1} = logicalCellValue(V{i,1});
     subj{i,2} = strtrimSafe(V{i,2});
     subj{i,3} = strtrimSafe(V{i,5});
     subj{i,4} = strtrimSafe(V{i,6});
 end
+subj=gaSyncAnimalPairIDs(subj,previousAnimals);
 end
 
 function V = stripUITablePlaceholders(V)
@@ -3922,6 +3987,8 @@ try, items=get(S.hPrevErrorBand,'String'); S.tc_errorBand=items{get(S.hPrevError
 try, items=get(S.hPrevTCView,'String'); S.tc_timecourseView=items{get(S.hPrevTCView,'Value')}; catch, end
 try, choices=get(S.hPrevAnimalCondition,'UserData'); S.tc_animalCondition=choices{get(S.hPrevAnimalCondition,'Value')}; catch, end
 try, S.previewConnectAnimals=logical(get(S.hPrevConnectAnimals,'Value')); catch, end
+try, S.previewPairLineWidth=max(.25,min(8,safeNum(get(S.hPrevPairWidth,'String'),1.2))); catch, end
+try, S.previewPairOpacity=max(0,min(1,get(S.hPrevPairOpacity,'Value'))); catch, end
 % Reads ROI-tab Y controls first, then optional compact Preview-tab overrides.
 try, S.plotTop.auto      = logical(get(S.hTopAuto,'Value')); catch, end
 try, S.plotTop.forceZero = logical(get(S.hTopZero,'Value')); catch, end
@@ -4041,6 +4108,14 @@ try
     S.testType = items{get(S.hTest,'Value')};
 catch
 end
+try
+    tails={'both','right','left'};S.testTail=tails{get(S.hTestTail,'Value')};
+    rows=findActiveROIRowsLocal(S.subj);
+    labels=GroupAnalysis_Common('testTailChoices',S.subj(rows,3),S);
+    enabled='on';if strcmpi(S.testType,'None')||contains(S.testType,'ANOVA'),enabled='off';end
+    set(S.hTestTail,'String',labels,'Enable',enabled);
+catch
+end
 try, S.alpha = safeNum(get(S.hAlpha,'String'),S.alpha); catch, end
 try
     items = get(S.hAnnotMode,'String');
@@ -4116,6 +4191,12 @@ end
 try, set(S.hPrevBG,'BackgroundColor',bgMain); catch, end
 try, set(S.hPrevTop,'BackgroundColor',bgTop,'ForegroundColor',fg); catch, end
 try, set(S.hPrevROIControls,'BackgroundColor',bgTop); catch, end
+try
+    set(S.hPrevPairControls,'BackgroundColor',bgTop);
+    set(findall(S.hPrevPairControls,'Style','text'),'BackgroundColor',bgTop,'ForegroundColor',fg);
+    set(S.hPrevPairOpacity,'BackgroundColor',editBg);
+catch
+end
 try, set(S.ax1,'Color',bgMain,'XColor',fg,'YColor',fg); catch, end
 try, set(S.ax2,'Color',bgMain,'XColor',fg,'YColor',fg); catch, end
 
@@ -4141,7 +4222,7 @@ for kk = 1:numel(texts)
     end
 end
 
-edits = {'hPrevStyle','hSmoothWin','hPrevColorA','hPrevColorB','hPrevPairColor','hPrevErrorBand','hPrevTCView','hPrevAnimalCondition'};
+edits = {'hPrevStyle','hSmoothWin','hPrevColorA','hPrevColorB','hPrevPairColor','hPrevPairWidth','hPrevErrorBand','hPrevTCView','hPrevAnimalCondition'};
 for kk = 1:numel(edits)
     try
         h = S.(edits{kk});
@@ -4367,6 +4448,11 @@ end
 function subj = guessSubjectID(txt)
 subj = '';
 try
+    [animal,identity]=gaAnimalIdentity(txt);
+    if ~isempty(animal) && ~identity.conflict,subj=animal;return;end
+catch
+end
+try
     m = parseMetaSingleText(txt);
     if ~strcmpi(m.animalID,'N/A')
         subj = m.animalID;
@@ -4428,6 +4514,9 @@ function meta = parseMetaSingleTextUncached(txt)
 meta = struct('animalID','N/A','session','N/A','scanID','N/A');
 txt = strrep(strtrimSafe(txt),'\','/');
 txtU = upper(txt);
+% Older recordings put reconstruction resolution before the animal number.
+tokResolution=regexpi(txtU,'(?:B6J|C57BL6J|C57|BL6J)[_ -]+(?:256|512|1024|2048)[_ -]+(\d{3,6})(?=$|[^A-Z0-9])','tokens','once');
+if ~isempty(tokResolution),meta.animalID=tokResolution{1};end
 
 % Classic animal/session/scan pattern.
 tok = regexpi(txtU,'([A-Z]{1,8}\d{6}[A-Z]?)_(S\d+)_(FUS_\d+)','tokens','once');
@@ -4771,7 +4860,8 @@ for g=1:numel(gNames)
     for k=1:numel(ii), pointX(ii(k))=g+ga_jitter(ii(k),.22); end
 end
 if gaPrevField(S,'previewConnectAnimals',false)
-    GroupAnalysis_Common('connectAnimalPoints',ax,T,metricVals,pointX,gNames,fgCol,gaPrevField(S,'previewPairColor',[]));
+    pairStyle=struct('lineWidth',gaPrevField(S,'previewPairLineWidth',1.2),'opacity',gaPrevField(S,'previewPairOpacity',1));
+    GroupAnalysis_Common('connectAnimalPoints',ax,T,metricVals,pointX,gNames,fgCol,gaPrevField(S,'previewPairColor',[]),pairStyle);
 end
 allY = [];
 for g = 1:numel(gNames)
@@ -5195,17 +5285,7 @@ p(x < 0) = 0.5*ib(x < 0);
 end
 
 function s = ga_stars(p)
-if ~isfinite(p)
-    s = 'p=?';
-elseif p < 0.001
-    s = '***';
-elseif p < 0.01
-    s = '**';
-elseif p < 0.05
-    s = '*';
-else
-    s = 'n.s.';
-end
+s=gaSignificanceStars(p);
 end
 
 function j = ga_jitter(k,amp)
@@ -5377,7 +5457,7 @@ end
 end
 
 function s = gaPrevStars(p)
-if p < 0.001, s='***'; elseif p < 0.01, s='**'; elseif p < 0.05, s='*'; else, s='n.s.'; end
+s=gaSignificanceStars(p);
 end
 % GA_ROI_PREVIEW_STANDALONE_END
 
@@ -6136,17 +6216,7 @@ gaDrawROISignificance(ax,R,S,fgCol);
 end
 
 function s = ga_sig_stars_local(p)
-if ~isfinite(p)
-    s = 'p=?';
-elseif p < 0.001
-    s = '***';
-elseif p < 0.01
-    s = '**';
-elseif p < 0.05
-    s = '*';
-else
-    s = 'n.s.';
-end
+s=gaSignificanceStars(p);
 end
 
 % BEGIN_GA_SCM_TIMESERIES_EXPORT_HELPERS_V2

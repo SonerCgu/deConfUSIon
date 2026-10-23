@@ -17,7 +17,7 @@ end
 isVolume=~isempty(state.viewer) && isvalid(state.viewer);
 movieFig=figure('Visible','off','Color','k','MenuBar','none','ToolBar','none', ...
     'NumberTitle','off','Name','3D movie export','Units','pixels', ...
-    'Position',[40 40 sceneSize+[0 stripHeight]],'Renderer','opengl','Resize','off');
+    'Position',[40 40 sceneSize+[0 stripHeight]],'Renderer','opengl','Resize','off','InvertHardcopy','off');
 complete=false;guard=onCleanup(@closeOnFailure);
 previewFig=movieFig;previewImage=[];previewAx=[];previewClock=tic;lastPreview=-Inf;
 if isVolume,body=state.viewer.Parent;else,body=state.axes;end

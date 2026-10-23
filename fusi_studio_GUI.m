@@ -4106,7 +4106,7 @@ end
 % DECONF_OPTA_V1 : standardized Option A auto component removal
 try
     if exist('stdStep','var') && isstruct(stdStep) && isfield(stdStep,'name') && strcmpi(strtrim(stdStep.name),'PCA / ICA')
-        if isfield(stdStep,'pcaDropPC') && isfinite(double(stdStep.pcaDropPC))
+        if isfield(stdStep,'pcaDropPC') && ~isempty(stdStep.pcaDropPC) && all(isfinite(double(stdStep.pcaDropPC(:))))
             opts.autoSelect = max(1,round(double(stdStep.pcaDropPC)));
         end
         if isfield(stdStep,'pcaAutoApply') && isfinite(double(stdStep.pcaAutoApply))

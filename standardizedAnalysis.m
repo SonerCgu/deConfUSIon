@@ -1,8 +1,8 @@
 function out = standardizedAnalysis(studioFig)
-% Programmatic preset query: steps = standardizedAnalysis('A') through ('H').
+% Programmatic preset query: steps = standardizedAnalysis('A') through ('J').
 deConfUSIon_setup();
 out=[];
-if nargin>0 && ischar(studioFig) && numel(studioFig)==1 && any(upper(studioFig)=='ABCDEFGH')
+if nargin>0 && ischar(studioFig) && numel(studioFig)==1 && any(upper(studioFig)=='ABCDEFGHIJ')
     out=presetSteps(upper(studioFig)); return;
 end
 % standardizedAnalysis.m - deConfUSIon standardized workflow manager
@@ -124,7 +124,8 @@ S.presetPopup=uicontrol(fig,'Style','popupmenu', ...
     'Units','normalized','Position',[0.735 0.900 0.250 0.043], ...
     'String',{'A | Standard A fast','B | Standard B slow','C | 2D awake', ...
     'D | 2D anesthesized','E | 3D awake','F | 3D anesthesized','G | Motor anesthesized', ...
-    'H | Awake fast injections'}, ...
+    'H | Awake fast injections','I | Low-pass / Reject / Imreg50', ...
+    'J | Reject / PC1-5 / Imreg50 / SCM'}, ...
     'Value',1,'Tag','deConfUSIonWorkflowPreset','Callback',@onPresetChanged);
 uicontrol(fig,'Style','pushbutton','String','Help', ...
     'Units','normalized','Position',[0.867 0.845 0.118 0.040], ...
@@ -386,8 +387,9 @@ function editParam(src,~,fieldName)
 fig = ancestor(src,'figure');
 S = guidata(fig);
 r = S.selectedRow;
-v = str2double(get(src,'String'));
-if ~isfinite(v)
+if strcmp(fieldName,'pcaDropPC'),v=parsePCSelection(get(src,'String'));
+else,v=str2double(get(src,'String'));end
+if isempty(v)||any(~isfinite(v(:)))
     set(src,'String',num2str(S.steps(r).(fieldName)));
     return;
 end
@@ -396,6 +398,20 @@ S.steps(r).(fieldName) = sanitizeValue(fieldName,v);
 guidata(fig,S);
 refreshSelectedPanel(fig);
 refreshRows(fig);
+end
+
+function v=parsePCSelection(value)
+% Accept component numbers and inclusive ranges without evaluating input.
+v=NaN;
+span=regexp(value,'^\s*(\d+)\s*:\s*(\d+)\s*$','tokens','once');
+if ~isempty(span)
+    bounds=cellfun(@str2double,span);
+    if any(bounds<1|bounds>200)||bounds(2)<bounds(1),return;end
+    v=bounds(1):bounds(2);
+elseif ~isempty(regexp(value,'^\s*\d+(?:[\s,]+\d+)*\s*$','once'))
+    v=sscanf(strrep(value,',',' '),'%f')';
+    if any(v<1|v>200),v=NaN;end
+end
 end
 
 function editFilterFamily(src,~)
@@ -486,7 +502,8 @@ end
 if ~isempty(fig) && ishghandle(fig)
     S = guidata(fig);
     setStudioReady(S.studioFig,true);
-    setStatus(fig,'Workflow finished.',[0.80 0.95 0.85]);
+    % The selected workflow is complete; release its setup window.
+    delete(fig);
 end
 end
 function onRunSelectedStep(src,~)
@@ -560,8 +577,8 @@ if strcmp(choice,'Save')
 elseif strcmp(choice,'Load')
     if exist(presetFile,'file')
         X = load(presetFile);
-        if isfield(X,'presetKey')&&ischar(X.presetKey)&&isscalar(X.presetKey)&&any(X.presetKey=='ABCDEFGH')
-            S.presetKey=X.presetKey;set(S.presetPopup,'Value',find('ABCDEFGH'==S.presetKey,1));
+        if isfield(X,'presetKey')&&ischar(X.presetKey)&&isscalar(X.presetKey)&&any(X.presetKey=='ABCDEFGHIJ')
+            S.presetKey=X.presetKey;set(S.presetPopup,'Value',find('ABCDEFGHIJ'==S.presetKey,1));
         end
         if isfield(X,'steps')
             S.steps = normalizeLoadedSteps(X.steps);
@@ -743,7 +760,7 @@ labels.pcaNcomp = 'PCA max components';
 labels.icaNcomp = 'ICA max components';
 labels.sig1 = 'Signal start (s)'; % DECONF_OPTA_V1
 labels.sig2 = 'Signal end (s)'; % DECONF_OPTA_V1
-labels.pcaDropPC = 'PCA drop component #'; % DECONF_OPTA_V1
+labels.pcaDropPC = 'PCA drop PCs (e.g. 1:5)'; % DECONF_OPTA_V1
 labels.pcaAutoApply = 'PCA auto-apply 1=yes 0=GUI'; % DECONF_OPTA_V1
 end
 
@@ -778,7 +795,7 @@ switch fieldName
     case 'icaNcomp'
         v = round(max(1,min(100,v)));
     case 'pcaDropPC' % DECONF_OPTA_V1
-        v = round(max(1,min(200,v)));
+        v = unique(round(max(1,min(200,v))),'stable');
     case 'pcaAutoApply' % DECONF_OPTA_V1
         v = round(max(0,min(1,v)));
     otherwise
@@ -1100,7 +1117,7 @@ if ~isempty(scmIdx)
 end
 end
 function onPresetChanged(src,~)
-fig=ancestor(src,'figure'); S=guidata(fig); keys='ABCDEFGH';
+fig=ancestor(src,'figure'); S=guidata(fig); keys='ABCDEFGHIJ';
 S.presetKey=keys(get(src,'Value')); S.steps=presetSteps(S.presetKey); S.selectedRow=1;
 guidata(fig,S); refreshRows(fig); refreshSelectedPanel(fig);
 setStatus(fig,['Preset ' S.presetKey ': review the checked steps and acquisition-specific timing.'],[.55 .86 .82]);
@@ -1124,7 +1141,8 @@ switch key
     case 'E', names={'PCA / ICA','Imregdemons','Mask Editor','Time-Course Viewer','SCM GUI'};
     case 'F', names={'Full QC','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
     case 'G', names={'Motor','Full QC','Imregdemons','Time-Course Viewer','SCM GUI','Mask Editor','Registration to Atlas','Segmentation','Functional Connectivity'};
-    case 'H', names={'Frame Rejection','PCA / ICA','Imregdemons','SCM GUI'};
+    case {'H','J'}, names={'Frame Rejection','PCA / ICA','Imregdemons','SCM GUI'};
+    case 'I', names={'Filtering','Frame Rejection','Imregdemons'};
 end
 for k=1:numel(steps), steps(k).run=any(strcmp(steps(k).name,names)); end
 % Fast triage uses only the first QC and first SCM instance.
@@ -1157,7 +1175,7 @@ if key=='E'
     for k=1:numel(steps), steps(k).order=k; end
 end
 
-if key=='H'
+if any(key=='HJ')
     chosen=zeros(1,numel(names));
     for k=1:numel(names),chosen(k)=find(strcmp({steps.name},names{k}),1,'first');end
     for k=1:numel(steps),steps(k).run=ismember(k,chosen);end
@@ -1165,11 +1183,33 @@ if key=='H'
     steps(p).desc='Reject global-signal outlier frames at 3 sigma (both directions), interpolate on the original time grid; save QC without opening plots.';
     p=chosen(2);steps(p).pcaicaMethod=1;steps(p).pcaNcomp=1;steps(p).pcaDropPC=1;steps(p).pcaAutoApply=1;
     steps(p).desc='Automatically remove PC1 across all slices; compute only the required component and restore voxel means.';
+    if key=='J'
+        steps(p).pcaNcomp=5;steps(p).pcaDropPC=1:5;
+        steps(p).desc='Automatically remove PCs 1-5 across all slices; compute the five requested components and restore voxel means.';
+    end
     p=chosen(3);steps(p).nsub=50;steps(p).imregMode='auto';
     steps(p).desc='Median blocks of 50 frames, then Imregdemons; auto-select 2D, motor or true 3D registration. Output TR = input TR x 50.';
     p=chosen(4);steps(p).base1=30;steps(p).base2=60;steps(p).sig1=700;steps(p).sig2=900;
     steps(p).cmin=0;steps(p).cmax=50;steps(p).amin=5;steps(p).amax=10;
     steps(p).desc='Open SCM: positive only, 0-50%, alpha modulation 5-10%; baseline 30-60 s and signal 700-900 s. No automatic ROI search.';
+    if key=='J'
+        steps(p).sig1=420;steps(p).sig2=840;
+        steps(p).desc='Open SCM: positive only, 0-50%, alpha modulation 5-10%; baseline 30-60 s and signal 7-14 min. Edit timing for this acquisition.';
+    end
+    steps=steps([chosen setdiff(1:numel(steps),chosen,'stable')]);
+    for k=1:numel(steps),steps(k).order=k;end
+end
+
+if key=='I'
+    chosen=zeros(1,numel(names));
+    for k=1:numel(names),chosen(k)=find(strcmp({steps.name},names{k}),1,'first');end
+    p=chosen(1);steps(p).filterType=2;steps(p).filterMethod=1;
+    steps(p).fcLow=0;steps(p).fcHigh=.01;steps(p).filterOrder=2;steps(p).filterPreserveMean=1;
+    steps(p).desc='Low-pass 0.01 Hz, Butterworth order 2, zero-phase filtering; preserve voxel baseline means.';
+    p=chosen(2);steps(p).frameSigma=3;steps(p).frameShowQC=0;
+    steps(p).desc='Reject global-signal outlier frames at 3 sigma (both directions), interpolate on the original time grid; save QC without opening plots.';
+    p=chosen(3);steps(p).nsub=50;steps(p).imregMode='auto';
+    steps(p).desc='Median blocks of 50 frames, then Imregdemons; auto-select 2D, motor or true 3D registration. Output TR = input TR x 50.';
     steps=steps([chosen setdiff(1:numel(steps),chosen,'stable')]);
     for k=1:numel(steps),steps(k).order=k;end
 end
@@ -1185,19 +1225,29 @@ try
     D=studio.datasets.(studio.activeDataset);
     key=S.presetKey;
     hasArray=isfield(D,'I')&&~isempty(D.I);
-    if ~hasArray&&key~='H',return;end
-    if key=='H'
+    if ~hasArray&&~any(key=='HIJ'),return;end
+    if any(key=='HIJ')
         assert(isfield(D,'TR')&&isscalar(D.TR)&&isfinite(D.TR)&&D.TR>0, ...
             'The active dataset needs a positive TR in seconds.');
         projectedTR=D.TR;
         if hasArray,projectedFrames=size(D.I,ndims(D.I));
         else
             assert(isfield(D,'nVols')&&isscalar(D.nVols)&&isfinite(D.nVols)&&D.nVols>=2, ...
-                'Load the selected dataset metadata before checking the injection preset timing.');
+                'Load the selected dataset metadata before checking the workflow timing.');
             projectedFrames=D.nVols;
         end
         for step=S.steps([S.steps.run])
-            if strcmp(step.name,'Imregdemons')
+            if strcmp(step.name,'Filtering')&&isequal(step.filterType,2)
+                nyquist=.5/projectedTR;
+                assert(isscalar(step.fcHigh)&&isfinite(step.fcHigh)&&step.fcHigh>0&&step.fcHigh<nyquist, ...
+                    'Low-pass cutoff must be positive and below the input Nyquist frequency (%.6g Hz at TR %.6g s).',nyquist,projectedTR);
+            elseif strcmp(step.name,'PCA / ICA')&&isequal(step.pcaicaMethod,1)&&isequal(step.pcaAutoApply,1)
+                requested=double(step.pcaDropPC(:));
+                available=min([step.pcaNcomp projectedFrames-1 200]);
+                if hasArray,available=min(available,numel(D.I)/size(D.I,ndims(D.I)));end
+                assert(~isempty(requested)&&all(isfinite(requested)&requested>=1&requested==round(requested)&requested<=available), ...
+                    'Requested PCA components exceed the available decomposition (at most %d components).',available);
+            elseif strcmp(step.name,'Imregdemons')
                 block=max(2,round(step.nsub));projectedFrames=floor(projectedFrames/block);projectedTR=projectedTR*block;
                 assert(projectedFrames>=2,'Not enough frames for the selected Imregdemons block size.');
             elseif strcmp(step.name,'SCM GUI')
