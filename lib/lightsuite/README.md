@@ -1,6 +1,6 @@
 # Optional LightSuite registration
 
-Open **Registration to atlas → LightSuite (experimental)** or run:
+Open **Registration to Atlas → LightSuite (beta)** or run:
 
 ```matlab
 deConfUSIon_LightSuite
