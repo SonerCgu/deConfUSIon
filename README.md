@@ -19,6 +19,22 @@ Start with the practical manual for installation and everyday use. The full
 handbook adds mathematical explanations, detailed GUI examples, QC plots,
 literature and the script/function reference.
 
+The guides were updated on **29 October 2026**. Both editions are available
+in the following languages; the English edition is the reference for GUI
+labels and technical interpretation.
+
+| Language | Practical manual | Complete handbook |
+|---|---|---|
+| English | [PDF](docs/deConfUSIon_User_Manual.pdf) / [Word](docs/deConfUSIon_User_Manual.docx) | [PDF](docs/deConfUSIon_User_Handbook.pdf) / [Word](docs/deConfUSIon_User_Handbook.docx) |
+| Deutsch | [PDF](docs/deConfUSIon_User_Manual_de.pdf) / [Word](docs/deConfUSIon_User_Manual_de.docx) | [PDF](docs/deConfUSIon_User_Handbook_de.pdf) / [Word](docs/deConfUSIon_User_Handbook_de.docx) |
+| Español | [PDF](docs/deConfUSIon_User_Manual_es.pdf) / [Word](docs/deConfUSIon_User_Manual_es.docx) | [PDF](docs/deConfUSIon_User_Handbook_es.pdf) / [Word](docs/deConfUSIon_User_Handbook_es.docx) |
+| Français | [PDF](docs/deConfUSIon_User_Manual_fr.pdf) / [Word](docs/deConfUSIon_User_Manual_fr.docx) | [PDF](docs/deConfUSIon_User_Handbook_fr.pdf) / [Word](docs/deConfUSIon_User_Handbook_fr.docx) |
+| Русский | [PDF](docs/deConfUSIon_User_Manual_ru.pdf) / [Word](docs/deConfUSIon_User_Manual_ru.docx) | [PDF](docs/deConfUSIon_User_Handbook_ru.pdf) / [Word](docs/deConfUSIon_User_Handbook_ru.docx) |
+| 简体中文 | [PDF](docs/deConfUSIon_User_Manual_zh.pdf) / [Word](docs/deConfUSIon_User_Manual_zh.docx) | [PDF](docs/deConfUSIon_User_Handbook_zh.pdf) / [Word](docs/deConfUSIon_User_Handbook_zh.docx) |
+
+The [deConfUSIon website](https://deconfusion.bloomyhake8.chatgpt.site)
+provides searchable guides and the same downloads.
+
 ## Installation
 
 1. Download or clone the complete repository and keep its directory structure.
@@ -128,7 +144,7 @@ are skipped without shortening the requested interval.
 Coverage refers to labelled voxels in the selected **acquired** slices, not
 the complete reference atlas. Voxels need a valid baseline and finite samples
 throughout the signal interval; their membership stays fixed for the curve.
-The default minimum coverage is 75%, adjustable in the dialog. Local PSC is
+The default minimum coverage is 75%, adjustable from 75% to 100% in the dialog. Local PSC is
 rebased exactly per voxel; an external baseline retains its existing reference.
 Display masks, smoothing and color limits do not affect the measurements.
 ROI-size, brush and search-rectangle restrictions are disabled for volume ranking.
@@ -138,6 +154,77 @@ settings, atlas/source provenance, omitted regions and fixed voxel indices.
 The normal checked-ROI TXT and bundle exports also support ranked regions and
 retain edited roles; ranked table exports record assigned roles separately
 from the original image-side assignment and identify rows marked for export.
+
+### Titration plots in Group Analysis
+
+In **Group Analysis → ROI Preview**, choose **Titration** in the **Bottom**
+dropdown and click **Assign doses...**. Select the animal/scan rows belonging
+to a concentration, choose a preset from **1 pM to 10 µM**, and use
+**Assign selected**. Individual Concentration cells also use dropdowns.
+The fixed 1/2/5 series prevents custom typed doses. Older off-list assignments
+are retained until replaced or cleared, rather than silently changed.
+Choose the source Group for **aCSF** (Auto recognizes aCSF, Vehicle or Control).
+Control rows need no concentration. Source Group and Condition labels remain
+in the data; the plotted control category is labelled **aCSF**.
+
+The lower graph shows **aCSF first**, followed by ascending concentrations.
+**Equal spacing is the default**. Error bars default to **None**; choose SEM
+or SD in **Assign doses...** to enable them. Its **Legend** checkbox shows or
+hides the legend, which sits in the top-right corner. Log spacing remains
+available. Each dot averages unique source scans within an animal and
+category, with equal animal weights for group means. All selected aCSF scans
+are pooled within animal, irrespective of their old concentration assignments.
+Treatment Group and Condition combinations remain separate. When a control
+Group contains multiple Conditions, explicitly select one; the software does
+not pool them automatically. Unassigned treatment rows are reported and omitted.
+
+Click **Comparisons...** to choose dose-versus-aCSF tests, adjacent dose pairs
+or any other pair of displayed categories. The default is an **unpaired,
+equal-variance Student t-test**, **one-tailed dose > aCSF**, for each dose.
+The **Test** and **Tail** controls update checked rows; individual rows can
+also use Welch, paired or two-sided tests. **Student vs aCSF** restores the
+requested defaults when an older list contains paired settings. Paired tests
+are used only when explicitly selected and match Animal IDs. Independent
+tests retain the independent-sample assumption and report any overlapping
+animal IDs instead of silently changing the test. Tests use the animal means represented
+by the plotted dots. The comparison table reports sample counts and explains
+unavailable tests. On first use, every dose-versus-aCSF comparison is selected
+and valid p-values are drawn automatically. Saved selections, including
+explicitly clearing every comparison, are preserved. Opening the dialog reuses
+the current plotted measurements when the source table and metric settings match.
+
+Annotations show **stars and p-values together** by default, using the same
+rounding as the standard group plot (for example, `**   p = 0.008` for
+0.00776). Full precision is retained in calculations and exports. Stars-only
+labels remain available. Dot edges match their fill colors. **Unadjusted p-values**
+are the default. Holm or Bonferroni correction across the selected family
+remains available. Adjusted values are identified as `p_adj`. Hiding
+annotations does not change the selected test family. Generic pooled ROI
+tests and Group-by-Condition outlier screening are disabled in titration mode.
+
+**Save List / Load List** retains dose assignments, comparisons and display choices.
+**Export Top...**, **Export Bottom...** and **Export Both...** open publication
+previews for time courses, regular group comparisons and titrations. Compare
+Compact (85 × 75 mm), Square (90 × 90 mm), and Wide (140 × 90 mm) layouts,
+choose a light or dark background, then continue to choose the export folder.
+Click and drag a p-value label or its bracket to reposition both together.
+Use **Show legend** to hide or show the legend and **Legend position** to
+place it above the plot or in an inside corner. These choices apply to the
+preview and saved file. The initial export scheme follows the visible ROI
+Preview scheme; Light and Dark remain selectable before exporting.
+**Reset p-value positions** restores automatic placement. Positions are kept
+when switching layouts and used in the saved figure. PNG exports use 600 dpi;
+vector PDF or both formats are also available.
+The preview and output share the same renderer. Comparison brackets occupy
+separate space above the data. The default legend position is also above
+the plot; the inside-corner options place it within the data area. Your
+manually selected y minimum and maximum remain exact. The live bottom plot is centered with
+more balanced proportions and no redundant mean/animal title.
+Excel export includes
+source-row assignments, animal means, dose summaries, comparison results,
+raw/adjusted p-values and the included animal IDs. Confidence intervals in
+the comparison export are pointwise, rather than simultaneous family intervals.
+Titration does not fit a dose-response model or pool doses into one generic test.
 
 ### Optional LightSuite atlas registration
 

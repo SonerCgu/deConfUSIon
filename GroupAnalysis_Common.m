@@ -682,6 +682,25 @@ writeExcelSheetCompat(outFile, 'Outlier_Audit', auditSheet);
 if isfield(S,'lastROI')&&isstruct(S.lastROI)&&isfield(S.lastROI,'stats')
     writeExcelSheetCompat(outFile,'ROI_Statistics',buildROIStatisticsSheetForExcel(S.lastROI));
 end
+if strcmpi(gaPrevField(S,'previewBottomView','Groups'),'Titration') || ...
+        (isfield(S,'titrationAssignments')&&~isempty(S.titrationAssignments))
+    rows=find(logicalCol(S.subj,1)&cellfun(@(p)exist(strtrimSafe(p),'file')==2,S.subj(:,7)));
+    if ~isempty(rows)
+        doseSettings=S;doseSettings.previewBottomView='Titration';
+        [doseROI,~]=runROITimecourseAnalysis(doseSettings,S.subj(rows,:),S.cache);
+        [doseRows,doseAnimals,doseSummary]=gaTitration('sheets',doseROI,S);
+        writeExcelSheetCompat(outFile,'Titration_Rows',doseRows);
+        writeExcelSheetCompat(outFile,'Titration_Animals',doseAnimals);
+        writeExcelSheetCompat(outFile,'Titration_Summary',doseSummary);
+        writeExcelSheetCompat(outFile,'Titration_Comparisons',gaTitration('comparisonsheet',doseROI.titration));
+        writeExcelSheetCompat(outFile,'Titration_Definitions', ...
+            {'Item','Definition';'aCSF source Group',doseROI.titration.controlGroup; ...
+             'aCSF Condition',doseROI.titration.controlCondition; ...
+             'Animal aggregation',doseROI.titration.aggregation; ...
+             'Control pooling','All selected aCSF source scans per animal, independent of concentration assignments.'; ...
+             'Testing','Exact displayed category animal means; no pooled test across doses.'});
+    end
+end
 if isfield(S,'outlierHistory')&&~isempty(S.outlierHistory)
     writeExcelSheetCompat(outFile,'Exclusion_History',buildExclusionHistorySheetForExcel(S.outlierHistory));
 end
@@ -2589,7 +2608,14 @@ if ~any(isfinite(metricVals))
     reportROIMetricCoverage(S,subjActive,tAll,plateauCoverage,peakCoverage);
 end
 
-stats = computeStats(metricVals, grpCol, S, subjActive);
+statsSettings=S;
+if strcmpi(gaPrevField(S,'previewBottomView','Groups'),'Titration')
+    statsSettings.testType='None';
+end
+stats = computeStats(metricVals, grpCol, statsSettings, subjActive);
+if strcmpi(gaPrevField(S,'previewBottomView','Groups'),'Titration')
+    stats.desc='Descriptive titration; no pooled test across concentrations.';
+end
 stats.pReport = gaFormatPValue(stats.p);
 
 Tcell = cell(N+1,6);
@@ -2631,6 +2657,14 @@ R.outlierScreen=gaPrevField(S,'outlierScreen',struct());
 R.outlierHistory=gaPrevField(S,'outlierHistory',{});
 R.metrics = struct('table',{Tcell});
 R.subjTable = subjActive;
+if strcmpi(gaPrevField(S,'previewBottomView','Groups'),'Titration') || ...
+        (isfield(S,'titrationAssignments')&&~isempty(S.titrationAssignments))
+    R.titration=gaTitration('summarize',R,S);
+    if strcmpi(gaPrevField(S,'previewBottomView','Groups'),'Titration')
+        c=find(strcmpi(R.groupNames,R.titration.controlGroup));
+        for g=c(:)',R.groupDisplayNames{g}='aCSF';end
+    end
+end
 R.subjectTimeMin=tAll;
 R.subjectTimecourses=nativeX;
 R.subjectCommonTimecourses=X;
@@ -3295,6 +3329,9 @@ end
 
 function gaPrevBottom(ax,R,S,styleName)
 [~,fg] = gaPrevColors(styleName);
+if strcmpi(gaPrevField(S,'previewBottomView','Groups'),'Titration')
+    gaTitration('plot',ax,R,S,fg,[.15 .55 .9],[.6 .6 .6],false);return;
+end
 hold(ax,'on');
 vals = double(R.metricVals(:));
 grp = R.subjTable(:,3);

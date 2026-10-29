@@ -3679,6 +3679,7 @@ function automaticPeakROI(useAwakePreset,searchOverride,searchCache,startRanking
             candidate=candidates{ci}; bounds=candidate.boundsXY; id=roi.nextId; zz=candidate.slice;
             color=[1 .55 .05]; if strcmp(candidate.role,'Control'), color=[.05 .65 1]; end
             if ismember(zz,highSlices), color=[1 .15 .15]; end
+            ROI_byZ{zz}(end+1)=struct('id',id,'x1',bounds(1),'x2',bounds(2),'y1',bounds(3),'y2',bounds(4),'color',color);
             roi.nextId=id+1; candidate.roiId=id; candidate.source=fileLabel;
             candidate.color=color;
             if isfield(candidate,'searchScanLabel'),candidate.source=candidate.searchScanLabel;end
@@ -3725,6 +3726,9 @@ function showCandidateReview(candidates,skipped,searchOptions,searchCache)
     setappdata(review,'deConfUSIonNoMaximize',true); setappdata(review,'SCMOwner',fig);
     setappdata(review,'AutomaticCandidates',candidates);
     order=[];selected=[];exportIds=[];manualExportIds=[];autoPairLinks=zeros(0,2);previewIds=[];pairNote='';suppressedControls=[];
+    if ~ranking&&any(cellfun(@(c)isfield(c,'requestedTopN')&&c.requestedTopN>0,candidates))
+        manualExportIds=cellfun(@(c)c.roiId,candidates);exportIds=manualExportIds;
+    end
     traceCache=cell(size(candidates));averageSelection=[];averageUnit=[];
     description=sprintf('%d candidates. Green = marked for export; red text = slice with mean PSC >200%%.\nThe scan selector controls search, ranking and export independently of the overlay. Source scan is shown in the table.',numel(candidates));
     if ~isempty(skipped), description=sprintf('%s\nNo valid ROI: %s',description,strjoin(skipped,', ')); end
@@ -4053,6 +4057,7 @@ function showCandidateReview(candidates,skipped,searchOptions,searchCache)
         exportIds=unique([manualExportIds autoPairLinks(:,2)'],'stable');
     end
     function previewCandidate(index)
+        if ~ranking,displayCandidate(candidates{index});return;end
         c=candidates{index};previewIds=c.roiId;pairNote='';
         if ranking&&get(pairCheckbox,'Value')&&any(strcmp(c.role,{'Target','Control'}))
             [opposite,note]=scmAtlasCounterpart(candidates,index);pairNote=note;
@@ -4065,10 +4070,13 @@ function showCandidateReview(candidates,skipped,searchOptions,searchCache)
     end
     function syncCandidateMarks()
         ids=cellfun(@(c)c.roiId,candidates);shown=unique([exportIds previewIds]);
+        % Peak searches mark every retained slice maximum. Atlas rankings
+        % show only checked regions and the current temporary preview.
+        if ~ranking,shown=ids;end
         for zz=1:nZ,marks=ROI_byZ{zz};ROI_byZ{zz}=marks(~ismember([marks.id],ids));end
         audit=scmAutomaticROISelections(fig);
         for ci=1:numel(candidates)
-            c=candidates{ci};c.previewOnly=ismember(c.roiId,previewIds)&&~ismember(c.roiId,exportIds);
+            c=candidates{ci};c.previewOnly=ranking&&ismember(c.roiId,previewIds)&&~ismember(c.roiId,exportIds);
             links=autoPairLinks(any(autoPairLinks==c.roiId,2),:);c.pairedROIIds=setdiff(links(:)',c.roiId);
             candidates{ci}=c;
             ai=find(cellfun(@(a)a.roiId==c.roiId,audit),1);if ~isempty(ai),audit{ai}=c;end

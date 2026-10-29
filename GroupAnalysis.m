@@ -200,7 +200,7 @@ S.lastMapDisplay = struct();
 S.activeTab = 'ROI';
 S.mode = 'ROI Timecourse';
 
-S.groupList = {'PACAP','Control','Vehicle','GroupA','GroupB'};
+S.groupList = {'PACAP','aCSF','Control','Vehicle','GroupA','GroupB'};
 S.condList  = {'CondA','CondB','Baseline','Post'};
 S.defaultGroup = 'PACAP';
 S.defaultCond  = 'CondA';
@@ -214,6 +214,7 @@ try
     S.groupToCondMap('PACAP')   = 'CondA';
     S.groupToCondMap('VEHICLE') = 'CondB';
     S.groupToCondMap('CONTROL') = 'CondB';
+    S.groupToCondMap('ACSF')    = 'CondB';
     S.groupToCondMap('GROUPA')  = 'CondA';
     S.groupToCondMap('GROUPB')  = 'CondB';
 catch
@@ -313,6 +314,19 @@ S.previewPairColorChoice = 1;
 S.previewPairCustomColor = [.55 .55 .55];
 S.previewPairLineWidth = 1.2;
 S.previewPairOpacity = 1;
+S.previewBottomView = 'Groups';
+S.titrationAssignments = cell(0,2);
+S.titrationXScale = 'Equal spacing';
+S.titrationErrorBand = 'None';
+S.titrationShowLegend = true;
+S.titrationControlGroup = 'Auto';
+S.titrationControlCondition = 'Auto';
+S.titrationComparisons = struct([]);
+S.titrationCorrection = 'None';
+S.titrationAlpha = .05;
+S.titrationPDisplay = 'Both';
+S.titrationShowP = true;
+S.titrationExportOptions = struct('preset',1,'theme','Light','format','PNG');
 
 S.previewStyle    = 'Dark';
 S.previewShowGrid = false;
@@ -1159,9 +1173,9 @@ S.hPrevBG = uipanel(S.tabPREV,'Units','normalized','Position',[0 0 1 1], ...
 S.hPrevTop = uipanel(S.hPrevBG,'Units','normalized','Position',[0.02 0.895 0.96 0.095], ...
     'BackgroundColor',bg2,'ForegroundColor','w','FontWeight','bold');
 
-S.hPrevExportTop  = mkBtn(S.hPrevTop,'Export Top PNG',    [0.015 0.16 0.140 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(1));
-S.hPrevExportBot  = mkBtn(S.hPrevTop,'Export Bottom PNG', [0.165 0.16 0.155 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(2));
-S.hPrevExportBoth = mkBtn(S.hPrevTop,'Export Both PNGs',  [0.330 0.16 0.155 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(3));
+S.hPrevExportTop  = mkBtn(S.hPrevTop,'Export Top...',     [0.015 0.16 0.140 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(1));
+S.hPrevExportBot  = mkBtn(S.hPrevTop,'Export Bottom...', [0.165 0.16 0.155 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(2));
+S.hPrevExportBoth = mkBtn(S.hPrevTop,'Export Both...',    [0.330 0.16 0.155 0.68],C.btnSecondary,@(~,~) onExportPreviewPNG(3));
 
 S.hPrevLblView = uicontrol(S.hPrevTop,'Style','text','String','View:','Units','normalized','Position',[0.510 0.18 0.055 0.64],'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontWeight','bold','FontSize',12);
 S.hPrevStyle = uicontrol(S.hPrevTop,'Style','popupmenu','String',{'Dark','Light'},'Units','normalized','Position',[0.565 0.18 0.090 0.64],'BackgroundColor',C.editBg,'ForegroundColor','w','FontSize',12,'Callback',@onPreviewStyleChanged);
@@ -1336,10 +1350,21 @@ S.hPrevPairOpacity=uicontrol(S.hPrevPairControls,'Style','slider','Min',0,'Max',
     'TooltipString','Connecting-line opacity, from invisible to full color. Applies to preview and PNG exports.');
 S.hPrevPairOpacityValue=uicontrol(S.hPrevPairControls,'Style','text','String','100%', ...
     'Units','normalized','Position',[.90 .14 .075 .72],'BackgroundColor',bg2,'ForegroundColor','w','FontSize',10);
-set(findobj(S.hPrevTop,'Style','text','String','X tick step (min)'),'Position',[.02 .330 .145 .110]);
-set(S.hPrevXStep,'Position',[.17 .325 .06 .12]);
-set(S.hPrevXAll,'Position',[.24 .325 .14 .12]);
-set(S.hPrevAnimalLabels,'Position',[.40 .330 .13 .11]);
+set(findobj(S.hPrevTop,'Style','text','String','X tick step (min)'),'String','Step (min)','Position',[.015 .330 .095 .110]);
+set(S.hPrevXStep,'Position',[.11 .325 .055 .12]);
+set(S.hPrevXAll,'String','Full time','Position',[.18 .325 .115 .12]);
+set(S.hPrevAnimalLabels,'Position',[.31 .330 .13 .11]);
+uicontrol(S.hPrevTop,'Style','text','String','Bottom:', ...
+    'Units','normalized','Position',[.445 .330 .075 .11], ...
+    'BackgroundColor',bg2,'ForegroundColor','w','HorizontalAlignment','left','FontSize',10);
+S.hPrevBottomView=uicontrol(S.hPrevTop,'Style','popupmenu','String',{'Groups','Titration'}, ...
+    'Units','normalized','Position',[.52 .325 .12 .12],'BackgroundColor',C.editBg, ...
+    'ForegroundColor','w','FontSize',10,'Callback',@onBottomViewChanged,'Tag','GA_TitrationView', ...
+    'TooltipString','Choose group dots or aCSF followed by assigned concentrations. Comparisons selects animal-level tests and displayed p-values.');
+S.hAssignDoses=mkBtn(S.hPrevTop,'Assign doses...',[.65 .325 .16 .12],C.btnAction,@onAssignDoses);
+set(S.hAssignDoses,'Tag','GA_TitrationAssign');
+S.hTitrationComparisons=mkBtn(S.hPrevTop,'Comparisons...',[.82 .325 .165 .12],C.btnAction,@onTitrationComparisons);
+set(S.hTitrationComparisons,'Tag','GA_TitrationComparisons','FontSize',11);
 set(S.ax1,'Position',[.095 .365 .850 .220]);
 
 %%% =====================================================================
@@ -1746,7 +1771,16 @@ gaInstallEditSelection(hFig);
         groupList = S0.groupList;
         condList = S0.condList;
         rowPacapSide = S0.rowPacapSide;
-        save(fullfile(p,f),'subj','groupList','condList','rowPacapSide','-v7');
+        titrationAssignments=S0.titrationAssignments;
+        titrationXScale=S0.titrationXScale;titrationErrorBand=S0.titrationErrorBand;
+        previewBottomView=S0.previewBottomView;
+        titrationSettings=struct();
+        for name={'titrationControlGroup','titrationControlCondition','titrationComparisons','titrationCorrection', ...
+                'titrationAlpha','titrationPDisplay','titrationShowP','titrationShowLegend','titrationExportOptions'}
+            titrationSettings.(name{1})=S0.(name{1});
+        end
+        save(fullfile(p,f),'subj','groupList','condList','rowPacapSide', ...
+            'titrationAssignments','titrationXScale','titrationErrorBand','previewBottomView','titrationSettings','-v7');
         S0.opt.startDir = p;
         guidata(hFig,S0);
         setStatusText('Saved list.');
@@ -1758,6 +1792,22 @@ gaInstallEditSelection(hFig);
         [f,p] = uigetfile({'*.mat','MAT list (*.mat)'},'Load subject list',startPath);
         if isequal(f,0), return; end
         L = load(fullfile(p,f));
+        S0.titrationAssignments=cell(0,2);S0.titrationXScale='Equal spacing';
+        S0.titrationErrorBand='None';S0.titrationShowLegend=true;S0.previewBottomView='Groups';
+        S0.titrationControlGroup='Auto';S0.titrationControlCondition='Auto';S0.titrationComparisons=struct([]);
+        S0.titrationCorrection='None';S0.titrationAlpha=.05;S0.titrationPDisplay='Both';S0.titrationShowP=true;
+        S0.titrationExportOptions=struct('preset',1,'theme','Light','format','PNG');
+        if isfield(L,'titrationSettings')&&isstruct(L.titrationSettings)
+            for name={'titrationControlGroup','titrationControlCondition','titrationComparisons','titrationCorrection', ...
+                    'titrationAlpha','titrationPDisplay','titrationShowP','titrationShowLegend','titrationExportOptions'}
+                if isfield(L.titrationSettings,name{1}),S0.(name{1})=L.titrationSettings.(name{1});end
+            end
+        end
+        for name={'titrationAssignments','titrationXScale','titrationErrorBand','previewBottomView'}
+            if isfield(L,name{1}),S0.(name{1})=L.(name{1});end
+        end
+        if strcmpi(S0.titrationPDisplay,'p-values'),S0.titrationPDisplay='Both';end
+        set(S0.hPrevBottomView,'Value',1+double(strcmpi(S0.previewBottomView,'Titration')));
         if isfield(L,'subj'), S0.subj = L.subj; end
         if isfield(L,'groupList'), S0.groupList = L.groupList; end
         if isfield(L,'condList'), S0.condList = L.condList; end
@@ -1895,6 +1945,52 @@ gaInstallEditSelection(hFig);
         set(S0.hPrevAnimalSelection,'String',label);
         if get(S0.hPrevTCView,'Value')==1, set(S0.hPrevTCView,'Value',2); end
         guidata(hFig,S0); onROIPlotDisplayChanged([],[]);
+    end
+
+    function onBottomViewChanged(src,~)
+        S0=guidata(hFig);items=get(src,'String');S0.previewBottomView=items{get(src,'Value')};
+        S0.lastROI=struct();guidata(hFig,S0);updatePreview();
+    end
+
+    function onAssignDoses(~,~)
+        syncSubjFromTable();S0=guidata(hFig);
+        [S0,applied]=gaTitrationDialog(S0,hFig);
+        if ~applied,return;end
+        S0.lastROI=struct();set(S0.hPrevBottomView,'Value',2);guidata(hFig,S0);updatePreview();
+    end
+
+    function onTitrationComparisons(~,~)
+        oldPointer=get(hFig,'Pointer');
+        set(hFig,'Pointer','watch');
+        setStatusText('Opening titration comparisons...');
+        try
+            syncSubjFromTable();S0=readROISettingsFromUI(guidata(hFig));
+            S0.previewBottomView='Titration';R=[];
+            % Opening a settings dialog should not reread every network file
+            % or recompute an unchanged analysis that is already on screen.
+            request=ga_roi_metric_request(S0);
+            if isappdata(S0.ax2,'GA_ROIMetricRequest')&& ...
+                    isequaln(request,getappdata(S0.ax2,'GA_ROIMetricRequest'))
+                R=getappdata(S0.ax2,'GroupROIResult');
+            end
+            if isempty(R)
+                setStatusText('Preparing titration comparisons: reading enabled ROI time courses...');
+                R=ga_get_roi_preview_data(S0);
+            end
+            if isempty(R)
+                error('GroupAnalysis:TitrationNoData','Add and enable existing ROI time-course files before selecting comparisons.');
+            end
+            D=gaTitration('summarize',R,S0);
+            set(hFig,'Pointer',oldPointer);
+            [S0,applied]=gaTitrationComparisonDialog(D,S0,hFig);
+            if ~applied,setStatusText('Titration comparison selection cancelled.');return;end
+            S0.lastROI=struct();set(S0.hPrevBottomView,'Value',2);guidata(hFig,S0);updatePreview();
+        catch ME
+            if isgraphics(hFig),set(hFig,'Pointer',oldPointer);end
+            setStatusText(['Titration comparisons: ' ME.message]);
+            notice=errordlg(ME.message,'Titration comparisons');
+            if isgraphics(notice),set(notice,'Visible',get(hFig,'Visible'));end
+        end
     end
 
     function onStyleChanged(~,~)
@@ -2535,6 +2631,10 @@ drawnow;
         ok=false;
         syncSubjFromTable(); onOutlierChanged([],[]);
         S0 = readStatsSettingsFromUI(readROISettingsFromUI(guidata(hFig)));
+        if strcmpi(S0.previewBottomView,'Titration')
+            S0.outlierKeys={};S0.outlierInfo={'Titration: review QC per dose. Generic Group x Condition screening is disabled because it pools different concentrations.'};
+            guidata(hFig,S0);updateOutlierBox();setStatusText(S0.outlierInfo{1});return;
+        end
         try
             rows=findActiveROIRowsLocal(S0.subj);
             if isempty(rows), error('No active ROI rows.'); end
@@ -2632,7 +2732,11 @@ S0.activeTab = 'PREV';
             guidata(hFig,S0);
             updateManualTabs();
             updatePreview();
-            if isempty(R.missingMetricSubjects)
+            if strcmpi(S0.previewBottomView,'Titration')&&isfield(R,'titration')
+                tests=R.titration.comparisonResults;
+                setStatusText(sprintf('Titration complete: %d/%d selected comparisons computed (%s). Open Comparisons for sample counts and details.', ...
+                    tests.nComputed,tests.familySize,tests.correction));
+            elseif isempty(R.missingMetricSubjects)
                 message=['ROI analysis complete. ' R.stats.type ' | ' R.stats.tailLabel ' | ' R.stats.pReport];
                 if all(~isnan(R.stats.ci))
                     message=[message sprintf(' | %s: %.3g (%.0f%% CI %.3g to %.3g)', ...
@@ -2694,11 +2798,57 @@ S0.activeTab = 'PREV';
     end
     function onExportPreviewPNG(which)
         S0 = guidata(hFig);
+        % Read the visible scheme directly, including a last selector change
+        % whose callback has not yet refreshed the stored preview state.
+        schemes=get(S0.hPrevStyle,'String');S0.previewStyle=schemes{get(S0.hPrevStyle,'Value')};
+        S0 = readROISettingsFromUI(S0);
         S0 = readPreviewAxisControlsLocal(S0);
         S0 = readPlotScaleSettingsFromUI(S0);
         guidata(hFig,S0);
 
-        outDir = uigetdir(getSmartBrowseDir(S0),'Choose folder to save preview PNG(s)');
+        titrationBottom=any(which==[2 3])&&strcmpi(S0.previewBottomView,'Titration');
+        try
+            % Freeze one analysis result for all layouts and the final export.
+            % Dragging or resizing the preview must not reload/reanalyse scans.
+            % Recompute once with the current test/tail settings, then reuse
+            % that snapshot rather than a possibly stale preview statistic.
+            exportR=ga_get_roi_preview_data(S0);
+            if isempty(exportR),error('Add and enable ROI time courses before exporting.');end
+            exportS=S0;exportS.roiExportData=exportR;
+            if which==1||which==3
+                topRenderer=@(parent,current)gaGroupPublication('render',parent, ...
+                    @(ax,theme)exportOnePreview(ax,1,exportS,theme),current);
+                topOptions=gaPrevField(S0,'roiExportTopOptions',struct('preset',3,'theme',S0.previewStyle));
+                topOptions.theme=S0.previewStyle;
+                topOptions.title='Time-course export preview';
+                [topOptions,accepted]=gaTitrationExportDialog([],[],topOptions,hFig,topRenderer);
+                if ~accepted,return;end
+                S0.roiExportTopOptions=topOptions;guidata(hFig,S0);
+            end
+            if titrationBottom
+                [~,~,colA,colB,showLabels]=ga_preview_style_from_gui(hFig);
+                options=gaPrevField(S0,'titrationExportOptions',struct());
+                options.theme=S0.previewStyle;
+                options.colA=colA;options.colB=colB;options.showAnimalLabels=showLabels;
+                [options,accepted]=gaTitrationExportDialog(exportR,S0,options,hFig);
+                if ~accepted,return;end
+                S0.titrationExportOptions=options;guidata(hFig,S0);
+            elseif which==2||which==3
+                bottomRenderer=@(parent,current)gaGroupPublication('render',parent, ...
+                    @(ax,theme)exportOnePreview(ax,2,exportS,theme),current);
+                bottomOptions=gaPrevField(S0,'roiExportBottomOptions',struct('preset',1,'theme',S0.previewStyle));
+                bottomOptions.theme=S0.previewStyle;
+                bottomOptions.title='Group comparison export preview';
+                [bottomOptions,accepted]=gaTitrationExportDialog([],[],bottomOptions,hFig,bottomRenderer);
+                if ~accepted,return;end
+                S0.roiExportBottomOptions=bottomOptions;guidata(hFig,S0);
+            end
+        catch ME
+            setStatusText(['Figure export preview: ' ME.message]);
+            errordlg(ME.message,'Figure export preview');return;
+        end
+
+        outDir = uigetdir(getSmartBrowseDir(S0),'Choose folder to save figures');
         if isequal(outDir,0)
             return;
         end
@@ -2708,15 +2858,19 @@ S0.activeTab = 'PREV';
 
             if which == 1 || which == 3
                 outTop = fullfile(outDir,['ROIPreview_Top_' ts '.png']);
-                savePreviewPNGLocal(outTop, 1, S0);
+                gaPublicationExport(outTop,topRenderer,topOptions);
             end
 
             if which == 2 || which == 3
                 outBot = fullfile(outDir,['ROIPreview_Bottom_' ts '.png']);
-                savePreviewPNGLocal(outBot, 2, S0);
+                if titrationBottom
+                    gaTitrationExport(outBot,exportR,S0,S0.titrationExportOptions);
+                else
+                    gaPublicationExport(outBot,bottomRenderer,bottomOptions);
+                end
             end
 
-            setStatusText(['Preview PNG saved to: ' outDir]);
+            setStatusText(['Figure export saved to: ' outDir]);
 
         catch ME
             try
@@ -2921,6 +3075,15 @@ try, S0 = readPlotScaleSettingsFromUI(S0); catch, end
 
             try
                 message='ROI preview plotted.';
+                if strcmpi(S0.previewBottomView,'Titration')&&isappdata(S0.ax2,'GA_TitrationResult')
+                    doseResult=getappdata(S0.ax2,'GA_TitrationResult');
+                    result=doseResult.comparisonResults;
+                    message=sprintf('Titration: %d category/animal points; %d unassigned treatment row(s). %d/%d comparisons computed (%s).', ...
+                        numel(doseResult.categoryPoints),numel(doseResult.unassignedRows),result.nComputed,result.familySize,result.correction);
+                    if ~isempty(doseResult.missingAnimalRows),message=[message ' Missing animal IDs in rows: ' num2str(doseResult.missingAnimalRows) '.'];end
+                    if ~isempty(doseResult.categoryWarnings),message=[message ' ' strjoin(doseResult.categoryWarnings,' ')];end
+                    if result.nComputed<result.familySize,message=[message ' Open Comparisons for unavailable-test details.'];end
+                end
                 if S0.previewConnectAnimals && isappdata(S0.ax2,'GA_ROI_PairingReport')
                     pairing=getappdata(S0.ax2,'GA_ROI_PairingReport');
                     message=sprintf('ROI preview: %d recording pairs, %d animal(s).',numel(pairing.pairedIDs),numel(unique(pairing.pairedIDs)));
@@ -4718,15 +4881,7 @@ function exportOnePreview(ax, whichPlot, S, styleName)
 % - Removes lower-plot errorbars/legend.
 % - Supports line/shade/color/animal-label controls when visible.
 
-if nargin < 4 || isempty(styleName)
-    styleName = 'Dark';
-end
-try
-    if isfield(S,'previewStyle') && ~isempty(S.previewStyle)
-        styleName = char(S.previewStyle);
-    end
-catch
-end
+if nargin < 4 || isempty(styleName),styleName=gaPrevField(S,'previewStyle','Dark');end
 
 if isempty(ax) || ~ishandle(ax)
     return;
@@ -4754,8 +4909,9 @@ try, set(get(ax,'Title'),'Color',fgCol,'FontName','Arial','FontWeight','bold'); 
 try, set(get(ax,'XLabel'),'Color',fgCol,'FontName','Arial','FontWeight','bold'); catch, end
 try, set(get(ax,'YLabel'),'Color',fgCol,'FontName','Arial','FontWeight','bold'); catch, end
 
-R = ga_get_roi_preview_data(S);
+if isfield(S,'roiExportData'),R=S.roiExportData;else,R=ga_get_roi_preview_data(S);end
 setappdata(ax,'GroupROIResult',R);
+setappdata(ax,'GA_ROIMetricRequest',ga_roi_metric_request(S));
 
 if isempty(R) || ~isstruct(R)
     text(ax,0.5,0.5,{'No ROI data found.','Check that active rows have ROI TXT files in the ROI File column.'}, ...
@@ -4769,6 +4925,13 @@ if whichPlot == 1
     ga_plot_roi_top(ax,R,S,fgCol,bgCol,lineW,shadeA,colA,colB);
 else
     ga_plot_roi_bottom(ax,R,S,fgCol,bgCol,colA,colB,showAnimalLabels);
+    if isfield(S,'ax2')&&isequal(ax,S.ax2)
+        if strcmpi(gaPrevField(S,'previewBottomView','Groups'),'Titration')
+            gaTitrationPreviewLayout(ax);
+        else
+            set(ax,'Units','normalized','Position',[.095 .06 .85 .245]);
+        end
+    end
 end
 
 try, drawnow limitrate; catch, end
@@ -4780,6 +4943,18 @@ R=[];
 rows=findActiveROIRowsLocal(S.subj);
 if isempty(rows), return; end
 [R,~]=GroupAnalysis_Common('runROITimecourseAnalysis',S,S.subj(rows,:),S.cache);
+end
+
+function request=ga_roi_metric_request(S)
+% Only reuse comparison inputs when the source table and every endpoint /
+% normalization setting match the analysis currently plotted on the axes.
+request=struct('subj',{S.subj});
+names={'tc_computePSC','tc_baseMin0','tc_baseMin1','tc_injMin0','tc_injMin1', ...
+    'tc_plateauMin0','tc_plateauMin1','tc_plateauWinMin','tc_peakSearchMin0', ...
+    'tc_peakSearchMin1','tc_peakWinMin','tc_trimPct','tc_metric'};
+for i=1:numel(names)
+    if isfield(S,names{i}),request.(names{i})=S.(names{i});end
+end
 end
 
 function ga_plot_roi_top(ax,R,S,fgCol,bgCol,lineW,shadeA,colA,colB)
@@ -4820,6 +4995,11 @@ ga_apply_preview_grid(ax,S,fgCol);
 end
 
 function ga_plot_roi_bottom(ax,R,S,fgCol,bgCol,colA,colB,showAnimalLabels)
+if strcmpi(gaPrevField(S,'previewBottomView','Groups'),'Titration')
+    gaTitration('plot',ax,R,S,fgCol,colA,colB,showAnimalLabels);
+    ga_apply_preview_grid(ax,S,fgCol);return;
+end
+if isappdata(ax,'GA_TitrationResult'),rmappdata(ax,'GA_TitrationResult');end
 if ~isfield(R,'metricVals') || isempty(R.metricVals)
     text(ax,0.5,0.5,'No lower-plot metric data','Units','normalized','HorizontalAlignment','center','Color',fgCol);
     return;
@@ -4887,7 +5067,7 @@ for g = 1:numel(gNames)
             'MarkerFaceColor',cc, ...
             'MarkerEdgeColor',cc, ...
             'LineWidth',1.3, ...
-            'HandleVisibility','off');
+            'HandleVisibility','off','Tag','GA_ROI_Animals');
         allY(end+1) = y; %#ok<AGROW>
 
         if showAnimalLabels
@@ -4904,7 +5084,7 @@ for g = 1:numel(gNames)
                 'FontSize',9, ...
                 'FontWeight','bold', ...
                 'Interpreter','none', ...
-                'Clipping','on');
+                'Clipping','on','Tag','GA_ROI_AnimalLabel');
         end
     end
 
@@ -4913,7 +5093,7 @@ for g = 1:numel(gNames)
         '-', ...
         'Color',cc, ...
         'LineWidth',3.8, ...
-        'HandleVisibility','off');
+        'HandleVisibility','off','Tag','GA_ROI_Mean');
     allY(end+1) = mu; %#ok<AGROW>
 end
 
@@ -5158,7 +5338,7 @@ try
     text(ax,(x0+x1)/2,yl(2)-0.035*(yl(2)-yl(1)),'Injection', ...
         'Color',fgCol,'FontName','Arial','FontSize',8,'FontWeight','bold', ...
         'HorizontalAlignment','center','VerticalAlignment','top', ...
-        'Clipping','on','HandleVisibility','off');
+        'Clipping','on','HandleVisibility','off','Tag','GA_InjectionLabel');
 catch
 end
 end
@@ -5460,83 +5640,6 @@ function s = gaPrevStars(p)
 s=gaSignificanceStars(p);
 end
 % GA_ROI_PREVIEW_STANDALONE_END
-
-
-function savePreviewPNGLocal(outFile, whichPlot, S)
-% Save ROI preview as PNG using the same renderer as the GUI preview.
-
-if nargin < 3 || isempty(S)
-    error('Missing GroupAnalysis state.');
-end
-
-styleName = 'Dark';
-try
-    if isfield(S,'previewStyle') && ~isempty(S.previewStyle)
-        styleName = S.previewStyle;
-    end
-catch
-end
-
-if strcmpi(styleName,'Light')
-    figBg = [1 1 1];
-else
-    figBg = [0 0 0];
-end
-
-f = figure( ...
-    'Visible','off', ...
-    'Color',figBg, ...
-    'InvertHardcopy','off', ...
-    'MenuBar','none', ...
-    'ToolBar','none', ...
-    'NumberTitle','off');
-
-figureGuard = onCleanup(@()close(f)); %#ok<NASGU>
-if whichPlot == 1
-    set(f,'Position',[100 100 1400 650]);
-    ax = axes('Parent',f,'Units','normalized','Position',[0.09 0.16 0.86 0.74]);
-else
-    set(f,'Position',[100 100 950 700]);
-    ax = axes('Parent',f,'Units','normalized','Position',[0.14 0.16 0.78 0.74]);
-end
-
-exportOnePreview(ax,whichPlot,S,styleName);
-stylePreviewPNGForSlides(ax,whichPlot);
-
-set(f,'PaperPositionMode','auto');
-print(f, outFile, '-dpng', '-r300');
-end
-
-function stylePreviewPNGForSlides(ax,whichPlot)
-% PNGs are usually reduced to a half-slide panel. Increase the typography
-% before rasterizing; extra DPI alone does not make labels larger on slides.
-set(ax,'FontUnits','points','FontSize',24,'FontWeight','bold','LineWidth',2);
-labels = [get(ax,'XLabel') get(ax,'YLabel')];
-set(labels,'FontUnits','points','FontSize',28,'FontWeight','bold');
-annotations = setdiff(findall(ax,'Type','text'),[labels get(ax,'Title')]);
-set(annotations,'FontUnits','points','FontSize',18,'FontWeight','bold');
-legends = findall(ancestor(ax,'figure'),'Type','legend');
-set(legends,'FontUnits','points','FontSize',20,'FontWeight','bold');
-
-% PACAP/Vehicle read best horizontally. Keep angled labels for many groups.
-if whichPlot == 2 && numel(get(ax,'XTick')) <= 2
-    try, set(ax,'XTickLabelRotation',0); catch, end
-end
-
-% Measure the enlarged labels so tick numbers and PSC (%) remain inside the
-% PNG, including negative/large values and longer group names.
-drawnow;
-set(ax,'Units','normalized');
-margin = get(ax,'TightInset') + [0.02 0.02 0.02 0.03];
-if whichPlot == 1
-    margin = max(margin,[0.10 0.20 0.035 0.05]);
-else
-    margin = max(margin,[0.12 0.12 0.035 0.06]);
-end
-set(ax,'Position',[margin(1) margin(2) ...
-    max(0.2,1-margin(1)-margin(3)) max(0.2,1-margin(2)-margin(4))]);
-drawnow;
-end
 
 
 function groupColors = assignGroupColorsWithMode(gNames, varargin)
