@@ -28,11 +28,11 @@ nameOut = local_compact(nameOut);
 if isstruct(dataStruct)
     if isfield(dataStruct,'pcaStats') && isempty(regexpi(nameOut,'(^|_)pca(_|$)'))
         tag = local_pca_tag(dataStruct.pcaStats);
-        nameOut = local_insert_before_late_ops(nameOut, tag);
+        nameOut = local_append_missing_op(nameOut, tag);
     end
     if isfield(dataStruct,'icaStats') && isempty(regexpi(nameOut,'(^|_)ica(_|$)'))
         tag = local_ica_tag(dataStruct.icaStats);
-        nameOut = local_insert_before_late_ops(nameOut, tag);
+        nameOut = local_append_missing_op(nameOut, tag);
     end
 end
 
@@ -95,8 +95,8 @@ end
 s = strjoin(ranges,'-');
 end
 
-function out = local_insert_before_late_ops(nameIn, tag)
-% If imreg/filter/etc happened after PCA/ICA but PCA was missing, insert before later ops.
+function out = local_append_missing_op(nameIn, tag)
+% Preserve the explicit sequence. Missing legacy tags have no known order.
 out = nameIn;
 if isempty(tag), return; end
 
@@ -112,23 +112,7 @@ if ~isempty(strfind(lower(out), lower(tag)))
     return;
 end
 
-% Insert before first later operation if present.
-latePats = {'_imregdemons','_imreg','_BPF','_LPF','_HPF','_filter','_tsmooth','_submean','_submed','_subsample'};
-idx = [];
-low = lower(out);
-for k = 1:numel(latePats)
-    p = strfind(low, lower(latePats{k}));
-    if ~isempty(p)
-        idx(end+1) = p(1); %#ok<AGROW>
-    end
-end
-
-if isempty(idx)
-    out = [out '_' tag];
-else
-    p = min(idx);
-    out = [out(1:p-1) '_' tag out(p:end)];
-end
+out = [out '_' tag];
 
 if ~isempty(ts), out = [out '_' ts]; end
 end

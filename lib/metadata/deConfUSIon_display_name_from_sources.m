@@ -15,6 +15,7 @@ try, matFile  = char(matFile);  catch, matFile = ''; end
 
 [~,fileStem]=fileparts(matFile);
 pieces = {seedName, fileStem};
+orderedNames = {};
 
 try
     if isstruct(dataStruct)
@@ -30,6 +31,9 @@ try
                         [~,piece]=fileparts(piece);
                     end
                     pieces{end+1}=piece; %#ok<AGROW>
+                    if any(strcmp(f,{'HUMOR_fullDisplayName','displayNameFull','preprocDisplayName','fullDisplayName'}))
+                        orderedNames{end+1}=piece; %#ok<AGROW>
+                    end
                 catch
                 end
             end
@@ -155,7 +159,9 @@ if isempty(ops)
     processed=processed || ~isempty(regexpi(matFile,'[\\/]Preprocessing[\\/]|[\\/]P[\\/]','once'));
     if processed, ops={'processed'}; else, ops={'raw'}; end
 end
-ops = local_dedupe_ops(ops);
+% Names are chronological records, not a fixed menu of operation classes.
+% Use the fullest saved chain and retain repeated operations in that order.
+ops = deConfUSIon_order_processing_steps(ops,[orderedNames pieces]);
 
 parts = {animal};
 if ~isempty(scanTag)
@@ -461,7 +467,7 @@ out = regexprep(out,'^preproc_','','ignorecase');
 out = regexprep(out,'T0+\d+','','ignorecase');
 out = regexprep(out,'too1','','ignorecase');
 out = regexprep(out,'_0000[0-9a-fA-F]{4,}','');
-out = regexprep(out,'_[0-9a-fA-F]{8}(?=_|$)','');
+out = regexprep(out,'_[0-9a-fA-F]{8}(?=_|$)(?!_\d{6}(?:_|$))','');
 out = regexprep(out,'raw_(?=.*(?:frameRej|framerej|scrub|despike|motor|pca|ica|imreg|BPF|LPF|HPF|tsmooth|sub))','','ignorecase');
 out = regexprep(out,'frame_rej','frameRej','ignorecase');
 out = regexprep(out,'framerej','frameRej','ignorecase');

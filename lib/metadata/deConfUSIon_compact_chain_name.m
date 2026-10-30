@@ -8,7 +8,7 @@ out = regexprep(out,'\.nii\.gz$','','ignorecase');
 out = regexprep(out,'\.nii$','','ignorecase');
 out = regexprep(out,'\.mat$','','ignorecase');
 out = regexprep(out,'_0000[0-9a-fA-F]{4,}(?=_)','');
-out = regexprep(out,'_[0-9a-fA-F]{8}(?=\.?$|_)','');
+out = regexprep(out,'_[0-9a-fA-F]{8}(?=\.?$|_)(?!_\d{6}(?:_|$))','');
 out = regexprep(out,'^preproc_preproc_','','ignorecase');
 out = regexprep(out,'^preproc_','','ignorecase');
 

@@ -8,6 +8,7 @@
 %   fusiBaselineProgress
 %   fusiBaselineSourceDialog
 %   fusiCopyVideoMask
+%   fusiDatasetPickerDialog
 %   fusiDrawRegionBoundaries
 %   fusiDrawScaleBar
 %   fusiFiniteDisplayLimits

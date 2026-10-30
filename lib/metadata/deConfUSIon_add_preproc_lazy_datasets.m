@@ -40,7 +40,7 @@ for ff = 1:numel(folders)
     if exist(cacheFile,'file') == 2
         try
             C = load(cacheFile,'-mat'); % Older indexes have no cacheVersion.
-            if isfield(C,'cache') && isstruct(C.cache) && isfield(C,'cacheVersion') && C.cacheVersion==2
+            if isfield(C,'cache') && isstruct(C.cache) && isfield(C,'cacheVersion') && C.cacheVersion==3
                 cache = C.cache;
             end
         catch
@@ -166,7 +166,7 @@ for ff = 1:numel(folders)
 
     if cacheDirty
         try
-            cacheVersion=2; %#ok<NASGU>
+            cacheVersion=3; %#ok<NASGU>
             save(cacheFile,'cache','cacheVersion','-mat');
         catch
             % Cache failure must never prevent loading the dataset.
