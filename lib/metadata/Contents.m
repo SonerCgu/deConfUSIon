@@ -10,5 +10,6 @@
 %   deConfUSIon_display_short_name
 %   deConfUSIon_fix_processing_name
 %   deConfUSIon_fix_studio_dataset_names
+%   deConfUSIon_order_processing_steps
 %   deConfUSIon_read_processing_metadata
 %   deConfUSIon_write_full_display_metadata

@@ -1,6 +1,6 @@
 function savePath = deConfUSIon_safe_preproc_save_path(preFolder, fullName, keyName, opTag)
-% Short physical filename to avoid Windows/network path errors.
-% The readable chain is stored in displayNameFull/preprocDisplayName.
+% Keep the ordered processing chain in filenames, with a short-path fallback.
+% The complete name is also stored in displayNameFull/preprocDisplayName.
 
 if nargin < 1 || isempty(preFolder), preFolder = pwd; end
 if nargin < 2 || isempty(fullName),  fullName  = 'dataset'; end
@@ -66,20 +66,34 @@ tokTS = regexp(fullName,'\d{8}_\d{6}','match');
 if isempty(tokTS), ts = datestr(now,'yyyymmdd_HHMMSS'); else, ts = tokTS{end}; end
 
 h = local_hash([fullName '_' keyName]);
-base = sprintf('%s_%s_%s_%s', opTag, tag, ts, h);
+readable = deConfUSIon_display_name_from_sources(fullName,[], '');
+readable = deConfUSIon_compact_chain_name(readable);
+base = [readable '_' h];
 base = regexprep(base,'[^A-Za-z0-9_\-]','_');
 base = regexprep(base,'_+','_');
 base = regexprep(base,'^_+|_+$','');
-if numel(base) > 90, base = [base(1:78) '_' h]; end
 
 savePath = fullfile(preFolder,[base '.mat']);
 
 if numel(savePath) > 240
     [parentFolder,thisFolder] = fileparts(preFolder);
     if strcmpi(thisFolder,'Preprocessing'), shortFolder = fullfile(parentFolder,'P'); else, shortFolder = fullfile(preFolder,'P'); end
-    base = sprintf('%s_%s_%s', opTag, tag, h);
-    if numel(base) > 75, base = [base(1:64) '_' h]; end
+    % Shorten parameters/identity before giving up the step sequence.
+    steps = deConfUSIon_order_processing_steps({}, {readable});
+    for k=1:numel(steps)
+        steps{k}=regexprep(steps{k},'pca_dropPC','PC','ignorecase');
+        steps{k}=regexprep(steps{k},'ica_dropIC','IC','ignorecase');
+        steps{k}=regexprep(steps{k},'imreg_(med|mean)_n','imreg','ignorecase');
+    end
+    if isempty(steps), steps={opTag,tag}; end
+    base = sprintf('%s_%s_%s',strjoin(steps,'_'),ts,h);
     savePath = fullfile(shortFolder,[base '.mat']);
+    if numel(savePath)>240
+        % Very deep project roots still retain the full name in MAT metadata.
+        base = sprintf('%s_%s_%s', opTag, tag, h);
+        if numel(base)>75, base=[base(1:64) '_' h]; end
+        savePath = fullfile(shortFolder,[base '.mat']);
+    end
 end
 
 if exist(savePath,'file') == 2

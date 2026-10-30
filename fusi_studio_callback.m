@@ -999,6 +999,39 @@ end
 %% =========================================================
 %  REFRESH DATASET DROPDOWN
 % =========================================================
+function browseDatasetsCallback(~,~)
+    if isequal(getappdata(fig,'DatasetReadInProgress'),true)||isequal(getappdata(fig,'LoadInProgress'),true),return;end
+    studio = guidata(fig);
+    if ~studio.isLoaded, return; end
+    % Rescan this animal's folders, including saves completed since loading.
+    % The full list stays lazy: browsing never loads the image arrays.
+    studio = deConfUSIon_add_preproc_lazy_datasets(studio);
+    guidata(fig,studio);
+    refreshDatasetDropdown();
+    dd = findobj(fig,'Tag','datasetDropdown');
+    keys = get(dd,'UserData');
+    labels = get(dd,'String');
+    studio = guidata(fig);
+    files = repmat({''},size(keys));
+    for k = 1:numel(keys)
+        d = studio.datasets.(keys{k});
+        for name = {'savedFile','lazyFile'}
+            if isfield(d,name{1}) && ~isempty(d.(name{1}))
+                files{k} = char(d.(name{1})); break;
+            end
+        end
+        if isempty(files{k}) && strcmp(keys{k},'raw')
+            files{k} = fullfile(studio.loadedPath,studio.loadedFile);
+        end
+    end
+    selected = fusiDatasetPickerDialog(keys,labels,files,studio.activeDataset);
+    if isempty(selected) || ~isgraphics(fig), return; end
+    studio = guidata(fig);
+    studio.activeDataset = selected;
+    guidata(fig,studio);
+    refreshDatasetDropdown();
+end
+
 function file=sequencePowerFile(data,studio,par)
     file='';
     for name={'lazyFile','savedFile'}
@@ -1041,7 +1074,8 @@ function refreshDatasetDropdown()
         end
     end
 
-    [~,ord] = sort(sortVals,'ascend');
+    % Show recent results first, with no limit on the number of choices.
+    [~,ord] = sort(sortVals,'descend');
     keys = keys(ord);
     sortVals = sortVals(ord);
 
