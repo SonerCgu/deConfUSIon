@@ -7,10 +7,13 @@
 %   fusiBaselineFileInfo
 %   fusiBaselineRawStart
 %   fusiBaselineReadWindow
+%   fusiBModeMontageLayout
+%   fusiBModeRawStart
 %   fusiDesktopFolderCommand
 %   fusiExportSavedDialog
 %   fusiFindMovedDataPath
 %   fusiLoadMatVariables
+%   fusiMapBModeSlices
 %   fusiLocalMatReadSource
 %   fusiModelAnalysisFolder
 %   fusiModelExportPath
@@ -23,6 +26,7 @@
 %   fusiPowerSlabCache
 %   fusiRebaseMovedStudioFiles
 %   fusiRememberDataRoot
+%   fusiReadBModeUnderlay
 %   fusiResolveAnalysisFolder
 %   fusiSCMEnsembleHeader
 %   fusiUniqueOutputFolder

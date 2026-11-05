@@ -7,6 +7,8 @@
 %   fusiAutoMaskVolume3D
 %   fusiBaselineProgress
 %   fusiBaselineSourceDialog
+%   fusiBModeMappingDialog
+%   fusiBModeAppearance
 %   fusiCopyVideoMask
 %   fusiDatasetPickerDialog
 %   fusiDrawRegionBoundaries
