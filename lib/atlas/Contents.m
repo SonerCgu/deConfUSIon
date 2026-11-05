@@ -31,6 +31,7 @@
 %   fusiFindRegistrationExecutable
 %   fusiFitCoronalAnchors
 %   fusiImportSnapAdjustment
+%   fusiNativeRegionOverlay
 %   fusiOpenSnapWorkspace
 %   fusiReadAtlasUnderlay3D
 %   fusiReadStepMotorUnderlays2D

@@ -275,6 +275,8 @@ state.referenceTraceError='';
 state.tcSmoothOn=false;state.tcSmoothSeconds=60;state.pendingSlice=[];state.tcLiveAllScans=false;
 state.scanSequence=[];
 state.retainedUnderlay=[];
+state.bmode=struct('rgb',[],'file','','context','','mode',1,'opacity',.5,'info',struct(),'appearance',fusiBModeAppearance());
+state.nativeRegionAnnotations=[];
 state.originalScanKey='';
 if ~isempty(baselineRaw)
     state.scanSequence=fusiScanSequence('init',par,baselineRaw,TR,fileLabel);
@@ -708,6 +710,19 @@ btnUnfreeze    = mkBtn(pOverlay, 'HOVER ACTIVE', @unfreezeHover, [.10 .48 .20], 
 set(btnUnfreeze,'Tag','SCM_HoverToggle');
 
 %% ---------------- Underlay controls ----------------
+lblBackground=mkLbl(pUnderlay,'Background source');
+popBackground=mkPopup(pUnderlay,{'Doppler / current','B-mode','Blend'},1,@backgroundSourceChanged);
+set(popBackground,'Tag','SCM_BackgroundSource');
+btnBMode=mkBtn(pUnderlay,'Load / map B-mode...',@loadBModeCB,colBtnNeutral,11);
+set(btnBMode,'Tag','SCM_LoadBMode','TooltipString','Choose B-mode anatomy from this animal''s raw recording folder.');
+lblBModeBlend=mkLbl(pUnderlay,'B-mode blend');
+slBModeBlend=mkSlider(pUnderlay,0,1,.5,@bmodeBlendChanged);
+set(slBModeBlend,'Tag','SCM_BModeBlend','Enable','off','TooltipString','0%: current Doppler/underlay. 100%: B-mode. Signal maps and ROI measurements are unchanged.');
+txtBModeBlend=mkValBox(pUnderlay,'50%');
+cbBModeAuto=mkChk(pUnderlay,'Auto contrast B-mode (1-99%)',1,@bmodeAutoContrastChanged);
+set(cbBModeAuto,'Tag','SCM_BModeAutoContrast','Enable','off','TooltipString', ...
+    'Display-only contrast stretch for each mapped B-mode panel. Gamma, contrast and brightness affect B-mode independently of Doppler.');
+setappdata(fig,'FUSILoadBMode',@(varargin)loadBModeCB([],[],varargin{:}));
 lblUnderMode = mkLbl(pUnderlay, 'Underlay view');
 popUnder = mkPopup(pUnderlay, { ...
     '1) Legacy (mat2gray)', ...
@@ -751,12 +766,15 @@ cbPhysicalScale=mkChk(pUnderlay,'Physical X/Y scale',1,@imageAppearanceChanged);
 cbSharpPixels=mkChk(pUnderlay,'Sharp pixels (underlay)',1,@imageAppearanceChanged);set(cbSharpPixels,'Tag','SCM_SharpPixels');
 set(cbSharpPixels,'TooltipString','Changes only the underlay: checked shows individual pixels; unchecked uses linear display sampling. The signal overlay and region IDs always retain sharp pixels.');
 slBri = mkSlider(pUnderlay, -0.80, 0.80, uState.brightness, @underlaySliderChanged);
+set(slBri,'Tag','SCM_UnderlayBrightness');
 txtBri = mkValBox(pUnderlay, sprintf('%.2f', uState.brightness));
 lblCon = mkLbl(pUnderlay, 'Underlay contrast');
 slCon = mkSlider(pUnderlay, 0.10, 5.00, uState.contrast, @underlaySliderChanged);
+set(slCon,'Tag','SCM_UnderlayContrast');
 txtCon = mkValBox(pUnderlay, sprintf('%.2f', uState.contrast));
 lblGam = mkLbl(pUnderlay, 'Underlay gamma');
 slGam = mkSlider(pUnderlay, 0.20, 4.00, uState.gamma, @underlaySliderChanged);
+set(slGam,'Tag','SCM_UnderlayGamma');
 txtGam = mkValBox(pUnderlay, sprintf('%.2f', uState.gamma));
 lblVsz = mkLbl(pUnderlay, 'Vessel conectSize (px)');
 slVsz = mkSlider(pUnderlay, 0, MAX_CONSIZE, uState.conectSize, @underlaySliderChanged);
@@ -783,6 +801,7 @@ setappdata(fig,'FUSISetSlice',@browseSlice);
 setappdata(fig,'FUSIExportRegisteredAtlas',@(folder)exportRegisteredAtlasCB([],[],folder));
 btnWarpAtlas = mkBtn(pUnderlay, 'WARP FUNCTIONAL TO ATLAS', @warpFunctionalToAtlasCB, colBtnExport, 12);
 btnResetWarp = mkBtn(pUnderlay, 'RESET TO NATIVE', @resetWarpToNativeCB, colBtnNeutral, 12);
+set(btnResetWarp,'Tag','SCM_ResetNative');
 btnSigUnder  = mkBtn(pUnderlay, 'SIGNAL UNDERLAY (sharp)', @signalUnderlayCB, colBtnNeutral, 12);
 
 %% ---------------- Time-course axis controls ----------------
@@ -1125,7 +1144,7 @@ function layoutUnder(w, h)
     else
         rowHLoc = rowH; gapLoc = gap; groupGapLoc = groupGap; sliderHLoc = sliderH; wideBtnHLoc = wideBtnH;
     end
-    required=14*(rowHLoc+gapLoc)+4*(wideBtnHLoc+gapLoc)+groupGapLoc+8;
+    required=17*(rowHLoc+gapLoc)+4*(wideBtnHLoc+gapLoc)+groupGapLoc+8;
     if required>h
         factor=(h-8)/required;rowHLoc=max(24,floor(rowHLoc*factor));
         gapLoc=max(2,floor(gapLoc*factor));groupGapLoc=max(4,floor(groupGapLoc*factor));
@@ -1134,6 +1153,17 @@ function layoutUnder(w, h)
     xLabel = pad; wLabel = min(220,round(w*0.42)); wVal = 95; xVal = w - pad - wVal;
     xCtrl = xLabel + wLabel + 16; wCtrl = max(90, xVal - xCtrl - 12);
     y = h - rowHLoc;
+    set(lblBackground,'Position',[xLabel y wLabel rowHLoc]);
+    sourceWidth=max(90,round((w-xCtrl-pad)*.48));
+    set(popBackground,'Position',[xCtrl y sourceWidth rowHLoc]);
+    set(btnBMode,'Position',[xCtrl+sourceWidth+6 y w-xCtrl-sourceWidth-pad-6 rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(lblBModeBlend,'Position',[xLabel y wLabel rowHLoc]);
+    set(slBModeBlend,'Position',[xCtrl y+round((rowHLoc-sliderHLoc)/2) wCtrl sliderHLoc]);
+    set(txtBModeBlend,'Position',[xVal y wVal rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
+    set(cbBModeAuto,'Position',[xLabel y w-2*pad rowHLoc]);
+    y=y-(rowHLoc+gapLoc);
     set(lblUnderMode, 'Position', [xLabel y wLabel rowHLoc]);
     set(popUnder, 'Position', [xCtrl y (w-xCtrl-pad) rowHLoc]);
     y=y-(rowHLoc+gapLoc);
@@ -2051,6 +2081,137 @@ end
 %% ==========================================================
 % UNDERLAY CONTROLS
 %% ==========================================================
+function key=bmodeContextKey()
+    key='';
+    if ~isempty(state.scanSequence),key=state.scanSequence.scans{state.scanSequence.active}.key;end
+    if isempty(key)
+        for field={'rawFile','loadedFile','sourceFile'}
+            if isfield(par,field{1})&&~isempty(par.(field{1})),key=char(par.(field{1}));break;end
+        end
+    end
+end
+
+function yes=bmodeNativeView()
+    yes=~state.isAtlasWarped&&~state.isStepMotorAtlasWarped&&isempty(state.atlasDisplay3D);
+end
+
+function yes=hasCurrentBMode()
+    yes=~isempty(state.bmode.rgb)&&strcmp(state.bmode.context,bmodeContextKey())&& ...
+        isequal(state.bmode.info.recordingSize,[nY nX nZ]);
+end
+
+function yes=hasBModeSlice(z)
+    yes=bmodeNativeView()&&hasCurrentBMode()&&state.bmode.info.validSlices(z);
+end
+
+function folder=bmodeStartFolder()
+    context=par;
+    if ~isempty(state.scanSequence),context.rawFile=state.scanSequence.scans{state.scanSequence.active}.rawFile;end
+    folder=fusiBModeRawStart(context,getDatasetRootForSelectors());
+end
+
+function loaded=loadBModeCB(~,~,selectedFile,selection)
+    loaded=false;interactive=nargin<3;
+    if nargin<4,selection=[];end
+    previous=state.bmode;previousCache=state.renderedAtlasCache;previousDisplay=get(hBG,'CData');
+    try
+        assert(bmodeNativeView(),'deConfUSIon:BModeView','Use the native recording view before loading B-mode anatomy.');
+        if interactive
+            folder=bmodeStartFolder();setappdata(fig,'FUSIBModePickerStart',folder);
+            [name,path]=uigetfile({'*.mat;*.png;*.tif;*.tiff;*.jpg;*.jpeg;*.bmp','B-mode anatomy'}, ...
+                'Select B-mode anatomy from this animal',folder);
+            if isequal(name,0),refreshBModeControls();return;end
+            selectedFile=fullfile(path,name);
+        end
+        if isempty(selectedFile),refreshBModeControls();return;end
+        % Commit only after the file is completely read and the grid checked.
+        if interactive,selection=@reviewBModeMapping;end
+        [rgb,meta]=fusiReadBModeUnderlay(selectedFile,[nY nX nZ],selection);
+        if meta.needsSliceMapping
+            if interactive,refreshBModeControls();return;end
+            error('deConfUSIon:BModeSliceMapping','This file needs panel-to-slice mapping. Load it through SCM to review the montage and assign Doppler slices.');
+        end
+        context=bmodeContextKey();
+        if ~strcmp(state.bmode.file,meta.file)||~strcmp(state.bmode.context,context)
+            state.bmode.appearance=fusiBModeAppearance();
+        end
+        state.bmode.rgb=rgb;state.bmode.file=meta.file;state.bmode.context=context;state.bmode.info=meta;
+        if state.bmode.mode==1,state.bmode.mode=2;end
+        state.renderedAtlasCache={};loaded=true;
+        if isappdata(fig,'FUSIBModeLastError'),rmappdata(fig,'FUSIBModeLastError');end
+        updateSCMUnderlayDisplay(state.z);
+        set(info1,'String',[meta.description ': ' shortenPath(meta.file,60)],'TooltipString',meta.file);
+    catch ME
+        state.bmode=previous;state.renderedAtlasCache=previousCache;loaded=false;
+        set(hBG,'CData',previousDisplay);
+        refreshBModeControls();setappdata(fig,'FUSIBModeLastError',ME);
+        if ~interactive,rethrow(ME);end
+        errordlg(ME.message,'B-mode underlay');
+    end
+end
+
+function selection=reviewBModeMapping(rgb,meta)
+    initial=[];
+    if strcmp(meta.file,state.bmode.file)&&isfield(state.bmode.info,'mapping')&& ...
+            isfield(state.bmode.info.mapping,'selection'),initial=state.bmode.info.mapping.selection;end
+    selection=fusiBModeMappingDialog(rgb,[nY nX nZ],meta.metadata, ...
+        @(z)single(renderUnderlayRGB(getBg2DForSlice(z))),initial);
+end
+
+function backgroundSourceChanged(~,~)
+    requested=get(popBackground,'Value');
+    if requested>1&&~hasCurrentBMode()
+        if ~loadBModeCB([],[]),refreshBModeControls();return;end
+    end
+    state.bmode.mode=requested;
+    updateSCMUnderlayDisplay(state.z);updateInfoLines();
+end
+
+function bmodeBlendChanged(~,~)
+    if ~hasBModeSlice(state.z),refreshBModeControls();return;end
+    state.bmode.opacity=get(slBModeBlend,'Value');
+    state.bmode.mode=3; % Dragging from pure B-mode enters the blend directly.
+    updateSCMUnderlayDisplay(state.z);updateInfoLines();
+end
+
+function bmodeAutoContrastChanged(~,~)
+    state.bmode.appearance.autoContrast=logical(get(cbBModeAuto,'Value'));
+    updateSCMUnderlayDisplay(state.z);
+end
+
+function active=editingBModeAppearance()
+    active=state.bmode.mode>1&&hasBModeSlice(state.z);
+end
+
+function refreshUnderlayToneControls()
+    a=uState;prefix='Underlay';
+    if editingBModeAppearance(),a=state.bmode.appearance;prefix='B-mode';end
+    set(lblBri,'String',[prefix ' brightness']);set(lblCon,'String',[prefix ' contrast']);set(lblGam,'String',[prefix ' gamma']);
+    set(slBri,'Value',a.brightness);set(slCon,'Value',a.contrast);set(slGam,'Value',a.gamma);
+    set(txtBri,'String',sprintf('%.2f',a.brightness));set(txtCon,'String',sprintf('%.2f',a.contrast));set(txtGam,'String',sprintf('%.2f',a.gamma));
+end
+
+function refreshBModeControls()
+    native=bmodeNativeView();available=native&&hasCurrentBMode();
+    if ~available,state.bmode.mode=1;end
+    choices={'Doppler / current','B-mode','Blend'};
+    if available&&nZ>1,choices={'Doppler / current','B-mode per slice','Blend per slice'};end
+    set(popBackground,'String',choices,'Value',state.bmode.mode,'Enable',onoff(native));
+    set(btnBMode,'Enable',onoff(native));
+    weight=state.bmode.opacity;if state.bmode.mode==2,weight=1;end
+    set(slBModeBlend,'Value',weight,'Enable',onoff(editingBModeAppearance()));
+    set(txtBModeBlend,'String',sprintf('%.0f%%',100*weight));
+    set(cbBModeAuto,'Value',double(state.bmode.appearance.autoContrast),'Enable',onoff(editingBModeAppearance()));
+    tooltip='Choose B-mode anatomy from this animal''s raw recording folder.';
+    if available,tooltip=sprintf('%s\n%s. Display fit only; no anatomical registration is applied.',state.bmode.file,state.bmode.info.description);
+    elseif ~native,tooltip='Return to the native recording view to use B-mode.';end
+    if available&&~hasBModeSlice(state.z),tooltip=[tooltip sprintf('\nNo B-mode panel is assigned to slice %d; Doppler is shown.',state.z)];end
+    set(popBackground,'TooltipString',tooltip);set(btnBMode,'TooltipString',tooltip);
+    set(popUnder,'Enable',onoff(state.bmode.mode~=2||~hasBModeSlice(state.z)));
+    refreshUnderlayToneControls();
+    updateUnderlayControlsEnable();
+end
+
 function underlayModeChanged(~,~)
     uState.mode = get(popUnder, 'Value');
     updateUnderlayControlsEnable();
@@ -2059,14 +2220,18 @@ function underlayModeChanged(~,~)
 end
 
 function underlaySliderChanged(~,~)
-    uState.brightness = get(slBri, 'Value');
-    uState.contrast   = get(slCon, 'Value');
-    uState.gamma      = get(slGam, 'Value');
+    if editingBModeAppearance()
+        state.bmode.appearance.brightness=get(slBri,'Value');
+        state.bmode.appearance.contrast=get(slCon,'Value');
+        state.bmode.appearance.gamma=get(slGam,'Value');
+    else
+        uState.brightness = get(slBri, 'Value');
+        uState.contrast   = get(slCon, 'Value');
+        uState.gamma      = get(slGam, 'Value');
+    end
     uState.conectSize = clamp(round(get(slVsz, 'Value')), 0, MAX_CONSIZE);
     uState.conectLev  = clamp(round(get(slVlv, 'Value')), 0, MAX_CONLEV);
-    set(txtBri, 'String', sprintf('%.2f', uState.brightness));
-    set(txtCon, 'String', sprintf('%.2f', uState.contrast));
-    set(txtGam, 'String', sprintf('%.2f', uState.gamma));
+    refreshUnderlayToneControls();
     set(txtVsz, 'String', sprintf('%d', uState.conectSize));
     set(txtVlv, 'String', sprintf('%d', uState.conectLev));
     updateSCMUnderlayDisplay(state.z);
@@ -2074,7 +2239,7 @@ function underlaySliderChanged(~,~)
 end
 
 function updateUnderlayControlsEnable()
-    isVessel = (uState.mode == 4);
+    isVessel = (uState.mode == 4)&&~(state.bmode.mode==2&&hasBModeSlice(state.z));
     set(slVsz, 'Enable', onoff(isVessel)); set(txtVsz, 'Enable', onoff(isVessel));
     set(slVlv, 'Enable', onoff(isVessel)); set(txtVlv, 'Enable', onoff(isVessel));
 end
@@ -2095,9 +2260,15 @@ end
 function updateInfoLines()
     modeNames = {'Legacy','Robust(1..99)','VideoGUI(0.5..99.5)','Vessel enhance','Saved appearance'};
     m = uState.mode; if m < 1 || m > numel(modeNames), m = 3; end
+    underlayName=modeNames{m};
+    if bmodeNativeView()&&hasCurrentBMode()&&state.bmode.mode>1
+        underlayName=state.bmode.info.description;
+        if state.bmode.mode==3,underlayName=['Blend: ' underlayName];end
+        if ~hasBModeSlice(state.z),underlayName='Doppler (no B-mode panel assigned to this slice)';end
+    end
     atlasTxt = '';
     if state.isAtlasWarped, atlasTxt = ' | ATLAS'; end
-    message=sprintf('TR = %.4gs | Slice %d/%d | Underlay: %s%s', TR, state.z, nZ, modeNames{m}, atlasTxt);
+    message=sprintf('TR = %.4gs | Slice %d/%d | Underlay: %s%s', TR, state.z, nZ, underlayName, atlasTxt);
     if state.isAtlasWarped && ~isempty(state.atlasTransformFile)
         [folder,name,ext]=fileparts(state.atlasTransformFile);[~,version]=fileparts(folder);
         message={message,['Transform: ' version '/' name ext]};
@@ -2278,8 +2449,39 @@ function showRegionList(~,~)
         ctx=getappdata(popAtlasChoice,'AtlasRegionContext2D');
         if ~isempty(ctx),labels=ctx.labels;info=ctx.info;end
     end
+    if isempty(labels)
+        ctx=currentNativeRegionAnnotations();
+        if ~isempty(ctx),labels=ctx.labels;info=ctx.info;end
+    end
     fusiRegionListDialog(labels,info);
 end
+
+function ctx=currentNativeRegionAnnotations()
+    ctx=state.nativeRegionAnnotations;
+    if isempty(ctx),return;end
+    if ~bmodeNativeView()||~strcmp(ctx.recordingKey,bmodeContextKey())||~isequal(ctx.grid,[nY nX nZ]),ctx=[];end
+end
+
+function ctx=captureNativeRegionAnnotations()
+    ctx=state.atlasRegionSearch;
+    if isempty(ctx)&&~isempty(state.regionLabelUnderlay)
+        ctx=struct('labels',state.regionLabelUnderlay,'info',state.regionInfo);
+    end
+    shape=[size(origPSC,1) size(origPSC,2) 1];if ndims(origPSC)==4,shape(3)=size(origPSC,3);end
+    if isempty(ctx)||isempty(ctx.labels)
+        ctx=state.nativeRegionAnnotations;
+        if ~isempty(ctx)&&(~strcmp(ctx.recordingKey,bmodeContextKey())||~isequal(ctx.grid,shape)),ctx=[];end
+        return;
+    end
+    mapping=[];
+    if state.isAtlasWarped||state.isStepMotorAtlasWarped
+        mapping=state.currentROIMapping;
+        assert(~isempty(mapping),'deConfUSIon:NativeRegionMapping','A saved registration is required to retain atlas annotations in native space.');
+    end
+    ctx=fusiNativeRegionOverlay(ctx,mapping,shape);
+    ctx.recordingKey=bmodeContextKey();ctx.grid=shape;
+end
+
 function updateRegionLabels(varargin)
     labels=[];xData=[];yData=[];
     z=state.z;
@@ -2294,6 +2496,10 @@ function updateRegionLabels(varargin)
         if isfield(ctx,'displayProvider')
             labels=ctx.displayProvider.getLabels(z);xData=ctx.displayProvider.xData;yData=ctx.displayProvider.yData;
         else,labels=ctx.labels(:,:,min(z,size(ctx.labels,3)));end
+    end
+    if isempty(labels)&&(namesShown||linesShown)
+        ctx=currentNativeRegionAnnotations();
+        if ~isempty(ctx),labels=ctx.labels(:,:,z);regionInfoForDisplay=ctx.info;end
     end
     if isempty(xData),xData=[1 size(labels,2)];yData=[1 size(labels,1)];end
     fusiRegionAnnotations(ax,labels,regionInfoForDisplay,namesShown, ...
@@ -2336,7 +2542,7 @@ function result=underlayData()
     result=struct('PSC',PSC,'underlay',bg,'mask',passedMask,'maskIsInclude',passedMaskIsInclude, ...
         'isAtlasWarped',state.isAtlasWarped,'mapping',state.currentROIMapping,'regionLabels',state.regionLabelUnderlay, ...
         'roiDefinitions',{roiDefinitionsForCurrentView()}, ...
-        'regionInfo',state.regionInfo,'atlasRegionSearch',state.atlasRegionSearch,'transformFile',state.atlasTransformFile, ...
+        'regionInfo',state.regionInfo,'atlasRegionSearch',state.atlasRegionSearch,'nativeRegionAnnotations',state.nativeRegionAnnotations,'transformFile',state.atlasTransformFile, ...
         'underlayMode',state.atlasUnderlayChoice,'appearance',uState, ...
         'registrationStage',state.atlasRegistrationStage, ...
         'atlasUpright',state.atlasUpright, ...
@@ -2344,7 +2550,9 @@ function result=underlayData()
         'imageGeometry',struct('xlim',ax.XLim,'ylim',ax.YLim,'aspect',ax.DataAspectRatio, ...
         'cameraUpVector',ax.CameraUpVector, ...
         'underlayX',hBG.XData,'underlayY',hBG.YData,'overlayX',hOV.XData,'overlayY',hOV.YData, ...
-        'underlayTextureSize',size(hBG.CData,[1 2])),'displayRGB',hBG.CData);
+        'underlayTextureSize',size(hBG.CData,[1 2])),'displayRGB',hBG.CData, ...
+        'bmode',struct('file',state.bmode.file,'mode',state.bmode.mode,'opacity',state.bmode.opacity, ...
+        'available',bmodeNativeView()&&hasCurrentBMode(),'info',state.bmode.info,'appearance',state.bmode.appearance));
 end
 function installNativeAtlasStages(library)
     state.lightSuiteAtlasLibrary=library;
@@ -3088,6 +3296,13 @@ end
 
 function resetWarpToNativeCB(~,~)
     try
+        try
+            state.nativeRegionAnnotations=captureNativeRegionAnnotations();
+        catch annotationError
+            state.nativeRegionAnnotations=[];
+            warning('deConfUSIon:NativeRegionMapping','Native reset omitted atlas annotations: %s',annotationError.message);
+        end
+        state.bmode.mode=1;
         PSC = origPSC;
         [bg,nativeReset]=resetNativeUnderlay();origBG=bg;
         applyUnderlayMeta(nativeReset.meta,bg);
@@ -4696,6 +4911,7 @@ drawnow;
         sigStr  = sprintf('Sigma=%g', sigma);
         footerInfo = sprintf('Thr=%s | CAX=%s | Base=%s | %s | %s | %s', ...
             thrStr, caxStr, baseStr, aStr, modStr, sigStr);
+        footerBase=footerInfo;
 
         totalSec = (nT-1) * TR;
         starts = 0:winLen:(floor(totalSec/winLen)*winLen);
@@ -4719,6 +4935,12 @@ drawnow;
 
         % Keep source slice numbers in filenames and labels, even for a subset.
         for zSel = exportSlices
+            footerInfo=footerBase;
+            if bmodeNativeView()&&hasCurrentBMode()&&state.bmode.mode>1
+                if hasBModeSlice(zSel),note=sprintf('B-mode panel %d',state.bmode.info.mapping.sliceMap(zSel));
+                else,note='Doppler only: no B-mode panel assigned';end
+                footerInfo=sprintf('%s | %s',footerBase,note);
+            end
             PSCz = getPSCForSlice(zSel);
             baseMap = cachedBaseline(zSel,b0i,b1i);
             maskLocal = getMaskForSlice(zSel);
@@ -6162,6 +6384,8 @@ function applyScmGroupBundleLocal(G, fullf)
     if fusiBaselineReference('isExternal',baseline),set(ebBase,'Enable','off');set(lblBase,'String','Source baseline (s)');end
     set(btnBaselineSource,'TooltipString',fusiBaselineReference('label',baseline));
     origPSC = PSC;
+    state.bmode=struct('rgb',[],'file','','context','','mode',1,'opacity',.5,'info',struct(),'appearance',fusiBModeAppearance());
+    state.nativeRegionAnnotations=[];
     state.lastUnderlayFile = '';
     state.pendingAtlasUnderlay3D = [];
 
@@ -7475,7 +7699,9 @@ function rgb = renderUnderlayRGB(Uin)
 end
 
 function rgb=currentUnderlayDisplayRGB(z)
-    key=struct('slice',z,'revision',state.underlayRevision,'appearance',uState,'scheme',state.regionScheme);
+    refreshBModeControls();
+    key=struct('slice',z,'revision',state.underlayRevision,'appearance',uState,'scheme',state.regionScheme, ...
+        'bmodeMode',state.bmode.mode,'bmodeOpacity',state.bmode.opacity,'bmodeFile',state.bmode.file,'bmodeAppearance',state.bmode.appearance);
     for k=1:numel(state.renderedAtlasCache)
         entry=state.renderedAtlasCache{k};if isequal(entry.key,key),rgb=entry.rgb;return;end
     end
@@ -7491,6 +7717,15 @@ function rgb=currentUnderlayDisplayRGB(z)
         end
     end
     rgb=single(renderUnderlayRGB(U));
+    if state.bmode.mode>1&&hasBModeSlice(z)
+        B=fusiBModeAppearance(state.bmode.rgb(:,:,:,z),state.bmode.appearance);
+        alpha=1;if state.bmode.mode==3,alpha=state.bmode.opacity;end
+        if alpha==1
+            rgb=B;
+        elseif alpha>0
+            rgb=(1-alpha).*rgb+alpha.*B;
+        end
+    end
     bytes=numel(rgb)*4;
     if bytes<=64*1024^2
         while ~isempty(state.renderedAtlasCache)&&(numel(state.renderedAtlasCache)>=12|| ...

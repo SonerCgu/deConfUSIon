@@ -101,6 +101,40 @@ indexes and can remain with their modules.
 
 ## First analysis
 
+### B-mode and Doppler backgrounds in SCM
+
+In **SCM GUI > Underlay**, select **B-mode** to choose reconstructed anatomy
+from the current animal's raw-data folder. **Load / map B-mode...** replaces that
+image; **Doppler / current** returns to the existing background. Select
+**Blend** and adjust **B-mode blend** to fade between them, as in the reference
+viewer. You can drag **B-mode blend** directly from pure B-mode to enter Blend.
+When B-mode or Blend is selected, the brightness, contrast and gamma controls
+adjust B-mode independently of the Doppler appearance. **Auto contrast B-mode**
+stretches each mapped panel's display range; turn it off to keep its saved scale.
+**RESET TO NATIVE** returns to the original recording background while keeping
+the loaded B-mode and its appearance available for re-selection. Checked atlas
+abbreviations and boundaries stay visible using labels on the native recording
+grid, with the saved registration applied when necessary.
+
+MAT images/volumes, grayscale temporal recordings (displayed as a temporal
+mean), PNG, TIFF and JPEG images are supported. A rendered **montage snapshot**
+opens a mapping preview: check the detected image area, grid, panel count and
+order, then assign each panel to its corresponding Doppler slice. The default
+order is left to right across rows, then top to bottom. The preview shows each
+B-mode panel, its assigned Doppler slice and a blend before **Apply mapping**.
+Axes, labels and panel dividers are cropped away. Only the individual panels
+are fitted to the Doppler grid; the whole montage is never used as an underlay.
+
+Missing or skipped panels leave the Doppler background on those slices.
+A genuine single-plane image can be assigned to one slice, with no time axis
+required. Mapping can be adjusted using explicit slice numbers or ranges;
+0 skips a source panel. Check the correspondence and field of view: this
+display mapping does not estimate anatomical registration from a screenshot.
+Complex IQ arrays require reconstruction before loading. B-mode is available
+on the native recording view; atlas views retain their existing backgrounds.
+Switching backgrounds changes only the display and SCM image exports,
+preserving PSC, masks, ROIs and curves.
+
 ### Brain-wide atlas region ranking in SCM
 
 In the enlarged black **SCM GUI > Automatic analysis** window, choose
